@@ -16,3 +16,5 @@ Cargo.lock
 .env
 
 /user_data
+
+dist
