@@ -1,5 +1,6 @@
 use orion::{
     aead::streaming::{Nonce, StreamOpener, StreamSealer, StreamTag, ABYTES},
+    hash::{digest, Digest},
     kdf::{self, Salt},
 };
 use std::{
@@ -8,6 +9,8 @@ use std::{
     io::{BufReader, Read, Write},
     path::PathBuf,
 };
+
+use base64::{engine::general_purpose::URL_SAFE, prelude::*};
 
 pub const NONCE_SIZE: usize = 24; // Nonce size for the XChaCha20 algorithm
 pub const SALT_SIZE: usize = 32;
@@ -27,7 +30,11 @@ pub struct Encryptor {
 }
 
 impl Encryptor {
-    pub fn new(file_path: &PathBuf, passphrase: &String) -> Result<Self, Box<dyn Error>> {
+    pub fn new(
+        user_path: &PathBuf,
+        file_path: &PathBuf,
+        passphrase: &String,
+    ) -> Result<Self, Box<dyn Error>> {
         let password = kdf::Password::from_slice(passphrase.as_bytes())?;
         let salt = Salt::generate(SALT_SIZE)?;
 
@@ -36,12 +43,16 @@ impl Encryptor {
         let key_length = KEY_LENGTH.try_into()?;
         let key = kdf::derive_key(&password, &salt, key_iterations, key_memory, key_length)?;
 
+        let hashed_file_path: Digest = digest(&file_path.to_string_lossy().as_bytes())?;
+        let base64_encoded_hash = URL_SAFE.encode(hashed_file_path.as_ref().to_vec());
+        let encoded_file_path = user_path.join(base64_encoded_hash);
+
         let (sealer, nonce) = StreamSealer::new(&key)?;
 
         let file = OpenOptions::new()
             .write(true)
             .create(true)
-            .open(file_path)?;
+            .open(&encoded_file_path)?;
 
         Ok(Encryptor {
             sealer,
@@ -80,14 +91,22 @@ impl Encryptor {
 }
 
 pub struct Decryptor {
-    _file: File,
     opener: StreamOpener,
+    pub file_path: PathBuf,
 }
 
 impl Decryptor {
-    pub fn new(file_path: &PathBuf, passphrase: &String) -> Result<Self, Box<dyn Error>> {
-        let _file = File::open(&file_path)?;
-        let mut reader = BufReader::new(&_file);
+    pub fn new(
+        user_path: &PathBuf,
+        file_path: &PathBuf,
+        passphrase: &String,
+    ) -> Result<Self, Box<dyn Error>> {
+        let hashed_file_path: Digest = digest(&file_path.to_string_lossy().as_bytes())?;
+        let base64_encoded_hash = URL_SAFE.encode(hashed_file_path.as_ref().to_vec());
+        let encoded_file_path = user_path.join(base64_encoded_hash);
+
+        let file = File::open(&encoded_file_path)?;
+        let mut reader = BufReader::new(&file);
 
         let password = kdf::Password::from_slice(passphrase.as_bytes())?;
 
@@ -107,7 +126,10 @@ impl Decryptor {
 
         let opener = StreamOpener::new(&key, &nonce)?;
 
-        Ok(Decryptor { _file, opener })
+        Ok(Decryptor {
+            opener,
+            file_path: PathBuf::from(encoded_file_path),
+        })
     }
 
     pub fn decrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {

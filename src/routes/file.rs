@@ -7,15 +7,17 @@ use std::{
 use rocket::{
     data::ByteUnit,
     get,
-    http::Status,
+    http::{CookieJar, Status},
     post,
     request::{self, FromRequest, Outcome},
     response::stream::ByteStream,
     tokio::{self, io::AsyncReadExt, sync::mpsc},
-    Data, Request,
+    Data, Request, State,
 };
 
 use encryption::{Decryptor, Encryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE};
+
+use crate::AppState;
 
 const STREAM_LIMIT: usize = 10 * (1000 * (1000 * (1000))); // 10 Gigabytes
 
@@ -36,20 +38,32 @@ impl<'r> FromRequest<'r> for Passphrase {
     }
 }
 
-#[post("/upload/<file_name>", data = "<data>")]
+#[post("/<file_name..>", data = "<data>")]
 pub async fn upload(
-    file_name: String,
+    file_name: PathBuf,
     data: Data<'_>,
-    passphrase: Passphrase,
+    state: &State<AppState>,
+    cookies: &CookieJar<'_>,
 ) -> std::io::Result<()> {
+    let active_sessions = state.active_sessions.read().await;
+
+    let session = match cookies.get_private("session_id") {
+        Some(cookie) => match active_sessions.get(cookie.value()) {
+            Some(t) => t,
+            None => panic!(),
+        },
+        None => panic!(),
+    };
+
     // Create a channel
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
+    let output_path = session.user_path.join(&file_name);
+    let pass_phrase = session.pass_phrase.clone();
+    let user_path = session.user_path.clone();
 
     // Spawn a separate thread for synchronous processing
     tokio::spawn(async move {
-        let output_path = PathBuf::from("D:\\temp\\").join(&file_name);
-
-        let mut encryptor = match Encryptor::new(&output_path, &passphrase.0) {
+        let mut encryptor = match Encryptor::new(&user_path, &output_path, &pass_phrase) {
             Ok(e) => e,
             Err(e) => panic!("{}", e),
         };
@@ -102,16 +116,30 @@ pub async fn upload(
     Ok(())
 }
 
-#[get("/download/<file_name>")]
-pub async fn download(file_name: String, passphrase: Passphrase) -> ByteStream![Vec<u8>] {
-    let file_path = PathBuf::from("D:\\temp\\").join(&file_name); // Adjust path as needed
+#[get("/<file_name..>")]
+pub async fn download(
+    file_name: PathBuf,
+    state: &State<AppState>,
+    cookies: &CookieJar<'_>,
+) -> ByteStream![Vec<u8>] {
+    let active_sessions = state.active_sessions.read().await;
 
-    let mut decryptor = match Decryptor::new(&file_path, &passphrase.0) {
+    let session = match cookies.get_private("session_id") {
+        Some(cookie) => match active_sessions.get(cookie.value()) {
+            Some(t) => t,
+            None => panic!(),
+        },
+        None => panic!(),
+    };
+
+    let file_path = PathBuf::from(&session.user_path).join(&file_name); // Adjust path as needed
+
+    let mut decryptor = match Decryptor::new(&session.user_path, &file_path, &session.pass_phrase) {
         Ok(d) => d,
         Err(e) => panic!("{}", e),
     };
 
-    let input_file = File::open(&file_path).unwrap();
+    let input_file = File::open(decryptor.file_path.clone()).unwrap();
 
     let mut reader = BufReader::new(input_file);
 

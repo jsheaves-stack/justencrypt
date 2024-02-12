@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 orion = "0.17.6"
+base64 = "0.21.7"
