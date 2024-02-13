@@ -23,7 +23,7 @@ impl AppSession {
         let user_path = PathBuf::from(format!("./user_data/{}", user_name));
 
         if user_path.exists() {
-            let mut manifest_file = File::open(user_path.join("manifest")).await.unwrap();
+            let mut manifest_file = File::open(user_path.join("user.manifest")).await.unwrap();
             let mut reader = BufReader::new(&mut manifest_file);
             let mut contents = String::new();
 
@@ -46,7 +46,7 @@ impl AppSession {
     }
 
     pub async fn update_manifest(self: &mut Self) -> Result<(), Box<dyn Error>> {
-        let manifest_file = File::create(&self.user_path.join("manifest")).await?;
+        let manifest_file = File::create(&self.user_path.join("user.manifest")).await?;
         let mut writer = BufWriter::new(manifest_file);
 
         let json = serde_json::to_string(&self.manifest)?;
