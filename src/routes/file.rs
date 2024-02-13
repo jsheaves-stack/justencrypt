@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::{BufReader, Read, Seek, SeekFrom},
-    path::PathBuf,
-};
+use std::{io::SeekFrom, path::PathBuf};
 
 use rocket::{
     data::ByteUnit,
@@ -11,7 +7,12 @@ use rocket::{
     post,
     request::{self, FromRequest, Outcome},
     response::stream::ByteStream,
-    tokio::{self, io::AsyncReadExt, sync::mpsc},
+    tokio::{
+        self,
+        fs::File,
+        io::{AsyncReadExt, AsyncSeekExt, BufReader},
+        sync::mpsc,
+    },
     Data, Request, State,
 };
 
@@ -68,24 +69,24 @@ pub async fn upload(
     // Spawn a separate thread for synchronous processing
     tokio::spawn(async move {
         let mut encryptor =
-            match Encryptor::new(&user_path, &user_path.join(&file_name), &pass_phrase) {
+            match Encryptor::new(&user_path, &user_path.join(&file_name), &pass_phrase).await {
                 Ok(e) => e,
                 Err(e) => panic!("{}", e),
             };
 
-        match encryptor.write_salt_and_nonce() {
+        match encryptor.write_salt_and_nonce().await {
             Ok(_) => (),
             Err(e) => panic!("{}", e),
         };
 
         // Asynchronously receive and process data chunks
         while let Some(data) = rx.recv().await {
-            let encrypted_chunk = match encryptor.encrypt_chunk(&data) {
+            let encrypted_chunk = match encryptor.encrypt_chunk(&data).await {
                 Ok(c) => c,
                 Err(e) => panic!("{}", e),
             };
 
-            match encryptor.write_chunk(&encrypted_chunk) {
+            match encryptor.write_chunk(&encrypted_chunk).await {
                 Ok(_) => (),
                 Err(e) => panic!("{}", e),
             };
@@ -139,12 +140,13 @@ pub async fn download(
 
     let file_path = PathBuf::from(&session.user_path).join(&file_name); // Adjust path as needed
 
-    let mut decryptor = match Decryptor::new(&session.user_path, &file_path, &session.pass_phrase) {
-        Ok(d) => d,
-        Err(e) => panic!("{}", e),
-    };
+    let mut decryptor =
+        match Decryptor::new(&session.user_path, &file_path, &session.pass_phrase).await {
+            Ok(d) => d,
+            Err(e) => panic!("{}", e),
+        };
 
-    let input_file = File::open(decryptor.file_path.clone()).unwrap();
+    let input_file = File::open(decryptor.file_path.clone()).await.unwrap();
 
     let mut reader = BufReader::new(input_file);
 
@@ -152,6 +154,7 @@ pub async fn download(
         .seek(SeekFrom::Start(
             (SALT_SIZE + NONCE_SIZE).try_into().unwrap(),
         ))
+        .await
         .unwrap();
 
     // Prepare an unbounded channel for streaming chunks
@@ -163,13 +166,13 @@ pub async fn download(
 
         // Decrypt the file in chunks and send them
         loop {
-            let chunk_size = reader.read(&mut buffer).unwrap();
+            let chunk_size = reader.read(&mut buffer).await.unwrap();
 
             if chunk_size == 0 {
                 break;
             }
 
-            let decrypted_chunk = match decryptor.decrypt_chunk(&buffer[..chunk_size]) {
+            let decrypted_chunk = match decryptor.decrypt_chunk(&buffer[..chunk_size]).await {
                 Ok(c) => c,
                 Err(e) => panic!("{}", e),
             };

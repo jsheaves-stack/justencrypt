@@ -3,12 +3,12 @@ use orion::{
     hash::{digest, Digest},
     kdf::{self, Salt},
 };
-use std::{
-    error::Error,
+use tokio::{
     fs::{File, OpenOptions},
-    io::{BufReader, Read, Write},
-    path::PathBuf,
+    io::{AsyncReadExt, AsyncWriteExt, BufReader},
 };
+
+use std::{error::Error, path::PathBuf};
 
 use base64::{engine::general_purpose::URL_SAFE, prelude::*};
 
@@ -36,7 +36,7 @@ pub fn get_encoded_file_name(file_path: &PathBuf) -> Result<String, Box<dyn Erro
 }
 
 impl Encryptor {
-    pub fn new(
+    pub async fn new(
         user_path: &PathBuf,
         file_path: &PathBuf,
         passphrase: &String,
@@ -57,7 +57,8 @@ impl Encryptor {
         let file = OpenOptions::new()
             .write(true)
             .create(true)
-            .open(&encoded_file_path)?;
+            .open(&encoded_file_path)
+            .await?;
 
         Ok(Encryptor {
             sealer,
@@ -68,15 +69,15 @@ impl Encryptor {
     }
 
     // Function to write salt and nonce to the output file
-    pub fn write_salt_and_nonce(&mut self) -> Result<(), Box<dyn Error>> {
-        self.file.write_all(&self.salt.as_ref())?;
-        self.file.write_all(&self.nonce.as_ref())?;
+    pub async fn write_salt_and_nonce(&mut self) -> Result<(), Box<dyn Error>> {
+        self.file.write_all(&self.salt.as_ref()).await?;
+        self.file.write_all(&self.nonce.as_ref()).await?;
 
         Ok(())
     }
 
     // Encrypt a single chunk of data
-    pub fn encrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub async fn encrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         let stream_tag = if data.len() < BUFFER_SIZE {
             StreamTag::Finish
         } else {
@@ -88,8 +89,8 @@ impl Encryptor {
         Ok(chunk)
     }
 
-    pub fn write_chunk(&mut self, data: &Vec<u8>) -> Result<(), Box<dyn Error>> {
-        self.file.write_all(&data)?;
+    pub async fn write_chunk(&mut self, data: &Vec<u8>) -> Result<(), Box<dyn Error>> {
+        self.file.write_all(&data).await?;
 
         Ok(())
     }
@@ -101,7 +102,7 @@ pub struct Decryptor {
 }
 
 impl Decryptor {
-    pub fn new(
+    pub async fn new(
         user_path: &PathBuf,
         file_path: &PathBuf,
         passphrase: &String,
@@ -109,16 +110,16 @@ impl Decryptor {
         let encoded_file_name = get_encoded_file_name(&file_path)?;
         let encoded_file_path = user_path.join(encoded_file_name);
 
-        let file = File::open(&encoded_file_path)?;
-        let mut reader = BufReader::new(&file);
+        let file = File::open(&encoded_file_path).await?;
+        let mut reader = BufReader::new(file);
 
         let password = kdf::Password::from_slice(passphrase.as_bytes())?;
 
         let mut salt_buf = [0u8; SALT_SIZE];
         let mut nonce_buf = [0u8; NONCE_SIZE];
 
-        reader.read_exact(&mut salt_buf)?;
-        reader.read_exact(&mut nonce_buf)?;
+        reader.read_exact(&mut salt_buf).await?;
+        reader.read_exact(&mut nonce_buf).await?;
 
         let salt = Salt::from_slice(&salt_buf)?;
         let nonce = Nonce::from_slice(&nonce_buf)?;
@@ -136,7 +137,7 @@ impl Decryptor {
         })
     }
 
-    pub fn decrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub async fn decrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         Ok(self.opener.open_chunk(data)?.0)
     }
 }
