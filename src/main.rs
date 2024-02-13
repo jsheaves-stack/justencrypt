@@ -8,6 +8,7 @@ use rocket::{
 use routes::{
     auth::{create_session, destroy_session},
     file::{download, upload},
+    user::get_user_manifest,
 };
 use session::session::AppSession;
 use std::collections::HashMap;
@@ -65,6 +66,7 @@ async fn rocket() -> _ {
     rocket::build()
         .mount("/file", routes![upload, download])
         .mount("/auth", routes![create_session, destroy_session])
+        .mount("/user", routes![get_user_manifest])
         .attach(CORS)
         .manage(state)
 }

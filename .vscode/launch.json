@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'yewcrypt'",
+            "name": "Debug executable 'justencrypt'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=yewcrypt",
-                    "--package=yewcrypt"
+                    "--bin=justencrypt",
+                    "--package=justencrypt"
                 ],
                 "filter": {
-                    "name": "yewcrypt",
+                    "name": "justencrypt",
                     "kind": "bin"
                 }
             },
@@ -25,16 +25,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'yewcrypt'",
+            "name": "Debug unit tests in executable 'justencrypt'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=yewcrypt",
-                    "--package=yewcrypt"
+                    "--bin=justencrypt",
+                    "--package=justencrypt"
                 ],
                 "filter": {
-                    "name": "yewcrypt",
+                    "name": "justencrypt",
                     "kind": "bin"
                 }
             },

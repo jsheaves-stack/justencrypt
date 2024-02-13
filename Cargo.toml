@@ -10,4 +10,5 @@ encryption = { path = "encryption" }
 rocket = { version = "0.5.0", features = ['json', 'secrets', 'tls'] }
 dotenv = "0.15.0"
 serde = "1.0.196"
+serde_json = "1.0.64"
 uuid = { version = "0.8", features = ["v4"] }

@@ -20,7 +20,7 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Option<String> {
-    let session = AppSession::open(&reqbody.user_name, &reqbody.pass_phrase);
+    let session = AppSession::open(&reqbody.user_name, &reqbody.pass_phrase).await;
 
     match session {
         Ok(v) => {
@@ -28,7 +28,7 @@ pub async fn create_session(
 
             let mut cookie = Cookie::new("session_id", uuid.clone());
 
-            cookie.set_same_site(Some(SameSite::Lax));
+            cookie.set_same_site(Some(SameSite::Strict));
 
             cookies.add_private(cookie);
 

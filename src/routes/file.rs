@@ -15,7 +15,9 @@ use rocket::{
     Data, Request, State,
 };
 
-use encryption::{Decryptor, Encryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE};
+use encryption::{
+    get_encoded_file_name, Decryptor, Encryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+};
 
 use crate::AppState;
 
@@ -45,28 +47,31 @@ pub async fn upload(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> std::io::Result<()> {
-    let active_sessions = state.active_sessions.read().await;
+    let mut active_sessions = state.active_sessions.write().await;
 
-    let session = match cookies.get_private("session_id") {
-        Some(cookie) => match active_sessions.get(cookie.value()) {
-            Some(t) => t,
-            None => panic!(),
-        },
-        None => panic!(),
-    };
+    let cookie = cookies.get_private("session_id").unwrap();
+    let session = active_sessions.get_mut(cookie.value()).unwrap();
+
+    session.manifest.files.insert(
+        file_name.to_str().unwrap().to_string(),
+        get_encoded_file_name(&file_name).unwrap(),
+    );
+
+    session.update_manifest().await.unwrap();
 
     // Create a channel
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
-    let output_path = session.user_path.join(&file_name);
+
     let pass_phrase = session.pass_phrase.clone();
     let user_path = session.user_path.clone();
 
     // Spawn a separate thread for synchronous processing
     tokio::spawn(async move {
-        let mut encryptor = match Encryptor::new(&user_path, &output_path, &pass_phrase) {
-            Ok(e) => e,
-            Err(e) => panic!("{}", e),
-        };
+        let mut encryptor =
+            match Encryptor::new(&user_path, &user_path.join(&file_name), &pass_phrase) {
+                Ok(e) => e,
+                Err(e) => panic!("{}", e),
+            };
 
         match encryptor.write_salt_and_nonce() {
             Ok(_) => (),

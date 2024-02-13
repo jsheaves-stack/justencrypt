@@ -29,6 +29,12 @@ pub struct Encryptor {
     salt: Salt,
 }
 
+pub fn get_encoded_file_name(file_path: &PathBuf) -> Result<String, Box<dyn Error>> {
+    let hashed_file_path: Digest = digest(&file_path.to_string_lossy().as_bytes())?;
+
+    Ok(URL_SAFE.encode(hashed_file_path.as_ref().to_vec()))
+}
+
 impl Encryptor {
     pub fn new(
         user_path: &PathBuf,
@@ -43,9 +49,8 @@ impl Encryptor {
         let key_length = KEY_LENGTH.try_into()?;
         let key = kdf::derive_key(&password, &salt, key_iterations, key_memory, key_length)?;
 
-        let hashed_file_path: Digest = digest(&file_path.to_string_lossy().as_bytes())?;
-        let base64_encoded_hash = URL_SAFE.encode(hashed_file_path.as_ref().to_vec());
-        let encoded_file_path = user_path.join(base64_encoded_hash);
+        let encoded_file_name = get_encoded_file_name(&file_path)?;
+        let encoded_file_path = user_path.join(encoded_file_name);
 
         let (sealer, nonce) = StreamSealer::new(&key)?;
 
@@ -101,9 +106,8 @@ impl Decryptor {
         file_path: &PathBuf,
         passphrase: &String,
     ) -> Result<Self, Box<dyn Error>> {
-        let hashed_file_path: Digest = digest(&file_path.to_string_lossy().as_bytes())?;
-        let base64_encoded_hash = URL_SAFE.encode(hashed_file_path.as_ref().to_vec());
-        let encoded_file_path = user_path.join(base64_encoded_hash);
+        let encoded_file_name = get_encoded_file_name(&file_path)?;
+        let encoded_file_path = user_path.join(encoded_file_name);
 
         let file = File::open(&encoded_file_path)?;
         let mut reader = BufReader::new(&file);
