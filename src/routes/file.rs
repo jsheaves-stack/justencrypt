@@ -17,7 +17,8 @@ use rocket::{
 };
 
 use encryption::{
-    get_encoded_file_name, Decryptor, Encryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    get_encoded_file_name, StreamDecryptor, StreamEncryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE,
+    TAG_SIZE,
 };
 
 use crate::AppState;
@@ -63,13 +64,14 @@ pub async fn upload(
     // Create a channel
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
 
-    let pass_phrase = session.pass_phrase.clone();
+    let passphrase = session.passphrase.clone();
     let user_path = session.user_path.clone();
 
     // Spawn a separate thread for synchronous processing
     tokio::spawn(async move {
         let mut encryptor =
-            match Encryptor::new(&user_path, &user_path.join(&file_name), &pass_phrase).await {
+            match StreamEncryptor::new(&user_path, &user_path.join(&file_name), &passphrase).await
+            {
                 Ok(e) => e,
                 Err(e) => panic!("{}", e),
             };
@@ -141,7 +143,7 @@ pub async fn download(
     let file_path = PathBuf::from(&session.user_path).join(&file_name); // Adjust path as needed
 
     let mut decryptor =
-        match Decryptor::new(&session.user_path, &file_path, &session.pass_phrase).await {
+        match StreamDecryptor::new(&session.user_path, &file_path, &session.passphrase).await {
             Ok(d) => d,
             Err(e) => panic!("{}", e),
         };

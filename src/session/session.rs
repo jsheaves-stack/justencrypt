@@ -1,9 +1,7 @@
-use std::{collections::HashMap, error::Error, path::PathBuf};
+use std::{collections::HashMap, error::Error, path::PathBuf, str::FromStr};
 
-use rocket::tokio::{
-    fs::File,
-    io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
-};
+use encryption::{FileDecryptor, FileEncryptor};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -13,30 +11,33 @@ pub struct UserManifest {
 
 pub struct AppSession {
     pub user_name: String,
-    pub pass_phrase: String,
+    pub passphrase: SecretString,
     pub user_path: PathBuf,
     pub manifest: UserManifest,
 }
 
 impl AppSession {
-    pub async fn open<'a>(user_name: &String, pass_phrase: &String) -> Result<Box<Self>, String> {
+    pub async fn open<'a>(
+        user_name: &String,
+        passphrase: &SecretString,
+    ) -> Result<Box<Self>, String> {
         let user_path = PathBuf::from(format!("./user_data/{}", user_name));
 
         if user_path.exists() {
-            let mut manifest_file = File::open(user_path.join("user.manifest")).await.unwrap();
-            let mut reader = BufReader::new(&mut manifest_file);
-            let mut contents = String::new();
+            let mut decryptor = FileDecryptor::new(&user_path.join("user.manifest"), passphrase)
+                .await
+                .unwrap();
 
-            reader.read_to_string(&mut contents).await.unwrap();
+            let decrypted_file = decryptor.decrypt_file().await.unwrap();
 
-            let manifest = match serde_json::from_str(&contents) {
+            let manifest = match serde_json::from_slice(&decrypted_file) {
                 Ok(v) => v,
                 Err(e) => panic!("{}", e),
             };
 
             Ok(Box::new(Self {
                 user_name: user_name.to_string(),
-                pass_phrase: pass_phrase.to_string(),
+                passphrase: SecretString::from_str(passphrase.expose_secret()).unwrap(),
                 user_path,
                 manifest,
             }))
@@ -46,14 +47,12 @@ impl AppSession {
     }
 
     pub async fn update_manifest(self: &mut Self) -> Result<(), Box<dyn Error>> {
-        let manifest_file = File::create(&self.user_path.join("user.manifest")).await?;
-        let mut writer = BufWriter::new(manifest_file);
+        let mut encryptor =
+            FileEncryptor::new(&self.user_path.join("user.manifest"), &self.passphrase).await?;
 
         let json = serde_json::to_string(&self.manifest)?;
 
-        writer.write_all(json.as_bytes()).await?;
-
-        writer.flush().await?;
+        encryptor.encrypt_file(json.as_bytes()).await?;
 
         Ok(())
     }

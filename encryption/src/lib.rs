@@ -2,7 +2,9 @@ use orion::{
     aead::streaming::{Nonce, StreamOpener, StreamSealer, StreamTag, ABYTES},
     hash::{digest, Digest},
     kdf::{self, Salt},
+    kex::SecretKey,
 };
+use secrecy::{ExposeSecret, SecretString};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt, BufReader},
@@ -22,7 +24,75 @@ const KEY_ITERATIONS: usize = 10;
 const KEY_MEMORY: usize = 1 << 16;
 const KEY_LENGTH: usize = 32;
 
-pub struct Encryptor {
+struct DerivedKey {
+    key: SecretKey,
+    salt: Salt,
+}
+
+trait Encryptor {
+    fn derive_key_from_string(passphrase: &SecretString) -> Result<DerivedKey, Box<dyn Error>> {
+        let salt = Salt::generate(SALT_SIZE)?;
+
+        Self::derive_key_from_string_and_salt(passphrase, salt)
+    }
+
+    fn derive_key_from_string_and_salt(
+        passphrase: &SecretString,
+        salt: Salt,
+    ) -> Result<DerivedKey, Box<dyn Error>> {
+        let password = kdf::Password::from_slice(passphrase.expose_secret().as_bytes())?;
+
+        let key_iterations = KEY_ITERATIONS.try_into()?;
+        let key_memory = KEY_MEMORY.try_into()?;
+        let key_length = KEY_LENGTH.try_into()?;
+        let key = kdf::derive_key(&password, &salt, key_iterations, key_memory, key_length)?;
+
+        Ok(DerivedKey {
+            key: SecretKey::from_slice(key.unprotected_as_bytes())?,
+            salt: Salt::from(salt),
+        })
+    }
+}
+
+impl Encryptor for FileEncryptor {}
+impl Encryptor for StreamEncryptor {}
+
+impl Encryptor for FileDecryptor {}
+impl Encryptor for StreamDecryptor {}
+
+pub struct FileEncryptor {
+    file: File,
+    // nonce: Nonce,
+    salt: Salt,
+    key: SecretKey,
+}
+
+impl FileEncryptor {
+    pub async fn new(
+        file_path: &PathBuf,
+        passphrase: &SecretString,
+    ) -> Result<Self, Box<dyn Error>> {
+        let input_file = File::create(file_path).await?;
+        let key_salt = Self::derive_key_from_string(&passphrase)?;
+
+        Ok(FileEncryptor {
+            file: input_file,
+            salt: key_salt.salt,
+            key: key_salt.key,
+        })
+    }
+
+    pub async fn encrypt_file(&mut self, file_data: &[u8]) -> Result<(), Box<dyn Error>> {
+        let encrypted_data = orion::aead::seal(&self.key, file_data)?;
+
+        self.file.write_all(&self.salt.as_ref()).await?;
+        self.file.write_all(encrypted_data.as_slice()).await?;
+
+        Ok(())
+    }
+}
+
+pub struct StreamEncryptor {
     file: File,
     sealer: StreamSealer,
     nonce: Nonce,
@@ -35,24 +105,19 @@ pub fn get_encoded_file_name(file_path: &PathBuf) -> Result<String, Box<dyn Erro
     Ok(URL_SAFE.encode(hashed_file_path.as_ref().to_vec()))
 }
 
-impl Encryptor {
+impl StreamEncryptor {
     pub async fn new(
         user_path: &PathBuf,
         file_path: &PathBuf,
-        passphrase: &String,
+        passphrase: &SecretString,
     ) -> Result<Self, Box<dyn Error>> {
-        let password = kdf::Password::from_slice(passphrase.as_bytes())?;
-        let salt = Salt::generate(SALT_SIZE)?;
-
-        let key_iterations = KEY_ITERATIONS.try_into()?;
-        let key_memory = KEY_MEMORY.try_into()?;
-        let key_length = KEY_LENGTH.try_into()?;
-        let key = kdf::derive_key(&password, &salt, key_iterations, key_memory, key_length)?;
-
         let encoded_file_name = get_encoded_file_name(&file_path)?;
         let encoded_file_path = user_path.join(encoded_file_name);
 
-        let (sealer, nonce) = StreamSealer::new(&key)?;
+        let derived_key = Self::derive_key_from_string(&passphrase)?;
+        let salt = Salt::from(derived_key.salt);
+
+        let (sealer, nonce) = StreamSealer::new(&derived_key.key)?;
 
         let file = OpenOptions::new()
             .write(true)
@@ -60,7 +125,7 @@ impl Encryptor {
             .open(&encoded_file_path)
             .await?;
 
-        Ok(Encryptor {
+        Ok(StreamEncryptor {
             sealer,
             nonce,
             salt,
@@ -96,16 +161,52 @@ impl Encryptor {
     }
 }
 
-pub struct Decryptor {
+pub struct FileDecryptor {
+    file: File,
+    key: SecretKey,
+}
+
+impl FileDecryptor {
+    pub async fn new(
+        file_path: &PathBuf,
+        passphrase: &SecretString,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut input_file = File::open(file_path).await?;
+        let mut salt_buf = [0u8; SALT_SIZE];
+
+        input_file.read_exact(&mut salt_buf).await?;
+
+        let salt = Salt::from_slice(&salt_buf)?;
+
+        let key_salt = Self::derive_key_from_string_and_salt(&passphrase, salt)?;
+
+        Ok(FileDecryptor {
+            file: input_file,
+            key: key_salt.key,
+        })
+    }
+
+    pub async fn decrypt_file(&mut self) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut file_buffer = vec![];
+
+        self.file.read_to_end(&mut file_buffer).await?;
+
+        let decrypted_data = orion::aead::open(&self.key, &file_buffer)?;
+
+        Ok(decrypted_data)
+    }
+}
+
+pub struct StreamDecryptor {
     opener: StreamOpener,
     pub file_path: PathBuf,
 }
 
-impl Decryptor {
+impl StreamDecryptor {
     pub async fn new(
         user_path: &PathBuf,
         file_path: &PathBuf,
-        passphrase: &String,
+        passphrase: &SecretString,
     ) -> Result<Self, Box<dyn Error>> {
         let encoded_file_name = get_encoded_file_name(&file_path)?;
         let encoded_file_path = user_path.join(encoded_file_name);
@@ -113,25 +214,20 @@ impl Decryptor {
         let file = File::open(&encoded_file_path).await?;
         let mut reader = BufReader::new(file);
 
-        let password = kdf::Password::from_slice(passphrase.as_bytes())?;
-
         let mut salt_buf = [0u8; SALT_SIZE];
         let mut nonce_buf = [0u8; NONCE_SIZE];
 
         reader.read_exact(&mut salt_buf).await?;
         reader.read_exact(&mut nonce_buf).await?;
 
-        let salt = Salt::from_slice(&salt_buf)?;
         let nonce = Nonce::from_slice(&nonce_buf)?;
+        let salt = Salt::from_slice(&salt_buf)?;
 
-        let key_iterations = KEY_ITERATIONS.try_into()?;
-        let key_memory = KEY_MEMORY.try_into()?;
-        let key_length = KEY_LENGTH.try_into()?;
-        let key = kdf::derive_key(&password, &salt, key_iterations, key_memory, key_length)?;
+        let derived_key = Self::derive_key_from_string_and_salt(&passphrase, salt)?;
 
-        let opener = StreamOpener::new(&key, &nonce)?;
+        let opener = StreamOpener::new(&derived_key.key, &nonce)?;
 
-        Ok(Decryptor {
+        Ok(StreamDecryptor {
             opener,
             file_path: PathBuf::from(encoded_file_path),
         })

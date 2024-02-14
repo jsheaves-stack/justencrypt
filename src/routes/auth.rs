@@ -1,8 +1,11 @@
+use std::str::FromStr;
+
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
     serde::json::Json,
     State,
 };
+use secrecy::SecretString;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -11,7 +14,7 @@ use crate::{AppSession, AppState};
 #[derive(Deserialize)]
 pub struct CreateSession {
     user_name: String,
-    pass_phrase: String,
+    passphrase: String,
 }
 
 #[post("/create_session", format = "json", data = "<reqbody>")]
@@ -20,7 +23,8 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Option<String> {
-    let session = AppSession::open(&reqbody.user_name, &reqbody.pass_phrase).await;
+    let passphrase = SecretString::from_str(&reqbody.passphrase.as_str()).unwrap();
+    let session = AppSession::open(&reqbody.user_name, &passphrase).await;
 
     match session {
         Ok(v) => {
