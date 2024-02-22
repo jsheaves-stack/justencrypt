@@ -17,7 +17,7 @@ pub struct CreateSession {
     passphrase: String,
 }
 
-#[post("/create_session", format = "json", data = "<reqbody>")]
+#[post("/create", format = "json", data = "<reqbody>")]
 pub async fn create_session(
     reqbody: Json<CreateSession>,
     state: &State<AppState>,
@@ -46,7 +46,7 @@ pub async fn create_session(
     }
 }
 
-#[post("/destroy_session")]
+#[post("/destroy")]
 pub async fn destroy_session(state: &State<AppState>, cookies: &CookieJar<'_>) -> Option<String> {
     let mut active_sessions = state.active_sessions.write().await;
 

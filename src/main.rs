@@ -6,7 +6,7 @@ use rocket::{
     Request, Response,
 };
 use routes::{
-    auth::{create_session, destroy_session},
+    session::{create_session, destroy_session},
     file::{download, upload},
     user::{create_user, get_user_manifest},
 };
@@ -65,7 +65,7 @@ async fn rocket() -> _ {
 
     rocket::build()
         .mount("/file", routes![upload, download])
-        .mount("/auth", routes![create_session, destroy_session])
+        .mount("/session", routes![create_session, destroy_session])
         .mount("/user", routes![get_user_manifest, create_user])
         .attach(CORS)
         .manage(state)
