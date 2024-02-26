@@ -34,7 +34,7 @@ impl Fairing for CORS {
         let figment = request.rocket().figment();
         let domain: String = figment
             .extract_inner("domain")
-            .unwrap_or_else(|_| "http://localhost:3000".to_string());
+            .unwrap_or_else(|_| "http://localhost:8000".to_string());
 
         let methods = "POST, GET, PATCH, OPTIONS";
 

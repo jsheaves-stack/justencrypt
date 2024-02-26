@@ -23,7 +23,7 @@ use encryption::{
 
 use crate::AppState;
 
-const STREAM_LIMIT: usize = 10 * (1000 * (1000 * (1000))); // 10 Gigabytes
+const STREAM_LIMIT: usize = 50 * (1000 * (1000 * (1000))); // 50 Gigabytes
 
 pub struct Passphrase(String);
 
@@ -42,9 +42,9 @@ impl<'r> FromRequest<'r> for Passphrase {
     }
 }
 
-#[post("/<file_name..>", data = "<data>")]
+#[post("/<file_path..>", data = "<data>")]
 pub async fn upload(
-    file_name: PathBuf,
+    file_path: PathBuf,
     data: Data<'_>,
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
@@ -54,9 +54,19 @@ pub async fn upload(
     let cookie = cookies.get_private("session_id").unwrap();
     let session = active_sessions.get_mut(cookie.value()).unwrap();
 
-    session.manifest.files.insert(
-        file_name.to_str().unwrap().to_string(),
-        get_encoded_file_name(&file_name).unwrap(),
+    let mut components = file_path
+        .iter()
+        .filter_map(|s| s.to_str())
+        .map(String::from)
+        .collect::<Vec<String>>();
+
+    let file_name = components.pop().unwrap();
+    let user_path = session.user_path.clone();
+
+    session.manifest.files.insert_path(
+        components.into_iter(),
+        file_name.clone(),
+        get_encoded_file_name(&user_path.join(&file_path)).unwrap(),
     );
 
     session.update_manifest().await.unwrap();
@@ -65,16 +75,19 @@ pub async fn upload(
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
 
     let passphrase = session.passphrase.clone();
-    let user_path = session.user_path.clone();
 
     // Spawn a separate thread for synchronous processing
     tokio::spawn(async move {
-        let mut encryptor =
-            match StreamEncryptor::new(&user_path, &user_path.join(&file_name), &passphrase).await
-            {
-                Ok(e) => e,
-                Err(e) => panic!("{}", e),
-            };
+        let mut encryptor = match StreamEncryptor::new(
+            &user_path,
+            &user_path.join(&file_path),
+            &passphrase,
+        )
+        .await
+        {
+            Ok(e) => e,
+            Err(e) => panic!("{}", e),
+        };
 
         match encryptor.write_salt_and_nonce().await {
             Ok(_) => (),

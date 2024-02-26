@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr};
 
 use encryption::FileEncryptor;
 use rocket::{
@@ -10,7 +10,10 @@ use rocket::{
 use secrecy::SecretString;
 use serde::Deserialize;
 
-use crate::{session::session::UserManifest, AppState};
+use crate::{
+    session::session::{FileSystemNode, UserManifest},
+    AppState,
+};
 
 #[get("/manifest")]
 pub async fn get_user_manifest(
@@ -43,7 +46,7 @@ pub async fn create_user(user_name: PathBuf, reqbody: Json<CreateUser>) -> Optio
         fs::create_dir(&user_path).await.unwrap();
 
         let manifest = UserManifest {
-            files: HashMap::default(),
+            files: FileSystemNode::default(),
         };
 
         let json = serde_json::to_string(&manifest).unwrap();

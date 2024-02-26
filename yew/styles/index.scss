@@ -22,6 +22,9 @@ main {
 
   height: 100%;
   width: 100%;
+
+  display: grid;
+  grid-template-rows: 4rem 1fr;
 }
 
 .login {
@@ -81,5 +84,46 @@ main {
       grid-template-rows: repeat(auto-fill, minmax(min-content, 2rem));
       grid-gap: 2rem;
     }
+  }
+}
+
+.header {
+  height: 100%;
+  width: 100%;
+
+  display: grid;
+  grid-template-columns: 12rem 1fr 12rem;
+}
+
+.file_viewer {
+  &__files {
+    align-items: center;
+    justify-items: center;
+
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min-content, 10em));
+    overflow: hidden;
+    grid-gap: 1em;
+  }
+
+  &__folder,
+  &__file {
+    height: 10em;
+    width: 10em;
+    overflow: hidden;
+  }
+
+  &__file {
+    background-color: lime;
+
+    &>img {
+      height: 100%;
+      width: 100%;
+    }
+  }
+
+  &__folder {
+    background-color: red;
   }
 }
