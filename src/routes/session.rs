@@ -28,7 +28,7 @@ pub async fn create_session(
 
     match session {
         Ok(v) => {
-            let uuid = Uuid::new_v4().to_hyphenated().to_string();
+            let uuid = Uuid::new_v4().hyphenated().to_string();
 
             let mut cookie = Cookie::new("session_id", uuid.clone());
 
@@ -47,16 +47,15 @@ pub async fn create_session(
 }
 
 #[post("/destroy")]
-pub async fn destroy_session(state: &State<AppState>, cookies: &CookieJar<'_>) -> Option<String> {
+pub async fn destroy_session(
+    state: &State<AppState>,
+    cookies: &CookieJar<'_>,
+) -> Result<(), String> {
     let mut active_sessions = state.active_sessions.write().await;
 
-    let _ = match cookies.get_private("session_id") {
-        Some(cookie) => match active_sessions.remove(cookie.value()) {
-            Some(_) => (),
-            None => panic!(),
-        },
-        None => panic!(),
-    };
+    let cookie = cookies.get_private("session_id").unwrap();
 
-    Some(String::new())
+    active_sessions.remove(cookie.value());
+
+    Ok(())
 }

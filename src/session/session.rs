@@ -107,10 +107,7 @@ impl AppSession {
 
             let decrypted_file = decryptor.decrypt_file().await.unwrap();
 
-            let manifest = match serde_json::from_slice(&decrypted_file) {
-                Ok(v) => v,
-                Err(e) => panic!("{}", e),
-            };
+            let manifest = serde_json::from_slice(&decrypted_file).unwrap();
 
             Ok(Box::new(Self {
                 user_name: user_name.to_string(),

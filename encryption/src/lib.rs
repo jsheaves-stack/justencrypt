@@ -15,14 +15,14 @@ use std::{error::Error, path::PathBuf};
 use base64::{engine::general_purpose::URL_SAFE, prelude::*};
 
 pub const NONCE_SIZE: usize = 24; // Nonce size for the XChaCha20 algorithm
-pub const SALT_SIZE: usize = 32;
-pub const TAG_SIZE: usize = ABYTES;
+pub const SALT_SIZE: usize = 32; // 32 byte salt
+pub const TAG_SIZE: usize = ABYTES; //  POLY1305 outsize (16) + tag size (1)
 
 pub const BUFFER_SIZE: usize = 1024 * 16; // Adjust this buffer size as needed (Minimum 8192)
 
 const KEY_ITERATIONS: usize = 10;
-const KEY_MEMORY: usize = 1 << 16;
-const KEY_LENGTH: usize = 32;
+const KEY_MEMORY: usize = 1 << 16; // 65536 bytes
+const KEY_LENGTH: usize = 32; // 32 byte key
 
 struct DerivedKey {
     key: SecretKey,
@@ -45,6 +45,7 @@ trait Encryptor {
         let key_iterations = KEY_ITERATIONS.try_into()?;
         let key_memory = KEY_MEMORY.try_into()?;
         let key_length = KEY_LENGTH.try_into()?;
+
         let key = kdf::derive_key(&password, &salt, key_iterations, key_memory, key_length)?;
 
         Ok(DerivedKey {
@@ -220,8 +221,8 @@ impl StreamDecryptor {
         reader.read_exact(&mut salt_buf).await?;
         reader.read_exact(&mut nonce_buf).await?;
 
-        let nonce = Nonce::from_slice(&nonce_buf)?;
         let salt = Salt::from_slice(&salt_buf)?;
+        let nonce = Nonce::from_slice(&nonce_buf)?;
 
         let derived_key = Self::derive_key_from_string_and_salt(&passphrase, salt)?;
 

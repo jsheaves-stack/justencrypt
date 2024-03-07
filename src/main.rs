@@ -6,8 +6,8 @@ use rocket::{
     Request, Response,
 };
 use routes::{
+    file::{get_file, put_file},
     session::{create_session, destroy_session},
-    file::{download, upload},
     user::{create_user, get_user_manifest},
 };
 use session::session::AppSession;
@@ -36,7 +36,7 @@ impl Fairing for CORS {
             .extract_inner("domain")
             .unwrap_or_else(|_| "http://localhost:8000".to_string());
 
-        let methods = "POST, GET, PATCH, OPTIONS";
+        let methods = "POST, GET, PATCH, PUT, HEAD, OPTIONS";
 
         response.set_header(Header::new("Allow", methods));
         response.set_header(Header::new("Access-Control-Allow-Origin", domain));
@@ -64,7 +64,7 @@ async fn rocket() -> _ {
     };
 
     rocket::build()
-        .mount("/file", routes![upload, download])
+        .mount("/file", routes![get_file, put_file])
         .mount("/session", routes![create_session, destroy_session])
         .mount("/user", routes![get_user_manifest, create_user])
         .attach(CORS)

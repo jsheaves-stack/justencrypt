@@ -2,26 +2,30 @@
 address = "0.0.0.0"
 domain = { env = "ROCKET_SERVER_DOMAIN" }
 port = 8000
-workers = 12
+workers = 16
 keep_alive = 5
-log_level = "normal"
+log_level = "debug"
 secret_key = { env = "ROCKET_SECRET_KEY" }
-limits = { forms = 1000, json = "3906 MiB" }
+
 [release]
 address = "0.0.0.0"
 domain = { env = "ROCKET_SERVER_DOMAIN" }
 port = 8000
-workers = 12
+workers = 16
 keep_alive = 5
 log_level = "critical"
 secret_key = { env = "ROCKET_SECRET_KEY" }
-limits = { forms = 1000, json = "3906 MiB" }
+
 # [default.tls]
 # certs = "cert.crt"
 # key = "key.key"
 
 [default.limits]
 form = "64 GiB"
-json = "10 GiB"
-msgpack = "2 MiB"
-"file/jpg" = "10 GiB"
+data-form = "64 GiB"
+file = "64 GiB"
+json = "64 GiB"
+msgpack = "64 GiB"
+"file/jpg" = "64 GiB"
+bytes = "64 GiB"
+string = "64 GiB"

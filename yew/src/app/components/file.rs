@@ -14,6 +14,7 @@ pub struct Props {
 #[function_component(File)]
 pub fn file(props: &Props) -> Html {
     let full_path = format!("{}/{}", props.file_path.join("/"), props.file_name);
+    let url = format!("http://localhost:8000/file/{}", full_path);
 
     let is_image = props
         .node
@@ -25,9 +26,9 @@ pub fn file(props: &Props) -> Html {
     html! {
         <div class={classes!("file_viewer__file")}>
             if is_image {
-                <img src={format!("http://localhost:8000/file/{}", full_path)} />
+                <img src={url.clone()} />
             } else {
-                <a href={full_path} download={props.file_name.clone()}>{props.file_name.clone()}</a>
+                <a href={url.clone()} target="_blank">{props.file_name.clone()}</a>
             }
         </div>
     }

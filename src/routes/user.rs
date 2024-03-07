@@ -22,13 +22,13 @@ pub async fn get_user_manifest(
 ) -> Option<Json<UserManifest>> {
     let active_sessions = state.active_sessions.read().await;
 
-    let session = match cookies.get_private("session_id") {
-        Some(cookie) => match active_sessions.get(cookie.value()) {
-            Some(s) => s,
-            None => panic!(),
-        },
-        None => panic!(),
-    };
+    let cookie = cookies
+        .get_private("session_id")
+        .expect("Couldn't find a session id");
+
+    let session = active_sessions
+        .get(cookie.value())
+        .expect("Could not find an active session for this session id");
 
     Some(Json(session.manifest.clone()))
 }
