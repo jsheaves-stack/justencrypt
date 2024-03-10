@@ -62,11 +62,14 @@ pub async fn put_file(
 
     session.update_manifest().await.unwrap();
 
-    // Create a channel for transferring file data chunks with a specified buffer size.
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
-
     // Clone the passphrase for use in the spawned encryption task.
     let passphrase = session.passphrase.clone();
+
+    // Drop active_sessions to release the write lock so we're not holding onto it the entire time we're processing a file.
+    drop(active_sessions);
+
+    // Create a channel for transferring file data chunks with a specified buffer size.
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
 
     // Spawn an async task to handle file encryption and writing.
     tokio::spawn(async move {

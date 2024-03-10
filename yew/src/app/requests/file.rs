@@ -11,21 +11,58 @@ extern "C" {
     fn uploadFileStream(file: JsValue, file_path: JsValue) -> web_sys::js_sys::Promise;
 }
 
-// In your Rust component
-pub fn upload_file(file: HtmlInputElement, file_path: Vec<String>, on_complete: Callback<bool>) {
-    if let Some(files) = file.files() {
-        if let Some(file) = files.get(0) {
-            let full_path = format!("{}/{}", file_path.join("/"), file.name());
+pub fn upload_files(
+    file_input: HtmlInputElement,
+    file_path: Vec<String>,
+    on_complete: Callback<usize>,
+) {
+    if let Some(files) = file_input.files() {
+        let total_files = files.length();
+        let mut successful_uploads = 0usize;
 
-            let promise = uploadFileStream(JsValue::from(file), JsValue::from(full_path));
+        for i in 0..total_files {
+            if let Some(file) = files.get(i) {
+                let file_name = file.name();
+                let full_path = format!("{}/{}", file_path.join("/"), file_name);
 
-            let future = async move {
-                match JsFuture::from(promise).await {
-                    Ok(_) => on_complete.emit(true),
-                    Err(e) => { panic!("{:?}", e)},
-                }
-            };
-            spawn_local(future);
+                let promise = uploadFileStream(JsValue::from(file), JsValue::from(full_path));
+
+                // Clone the callback to use in the async move block
+                let on_complete_clone = on_complete.clone();
+
+                let future = async move {
+                    match JsFuture::from(promise).await {
+                        Ok(_) => {
+                            // Use a counter to track successful uploads
+                            successful_uploads += 1;
+                            // If all files have been processed, emit the total number of successful uploads
+                            if successful_uploads == total_files as usize {
+                                web_sys::console::log_1(
+                                    &format!(
+                                        "Successfully uploaded all {} files.",
+                                        successful_uploads
+                                    )
+                                    .into(),
+                                );
+
+                                web_sys::console::log_1(
+                                    &format!("Successfully uploaded file {}.", successful_uploads)
+                                        .into(),
+                                );
+
+                                on_complete_clone.emit(successful_uploads);
+                            }
+                        }
+                        Err(e) => {
+                            // Handle the error, e.g., by logging or panicking
+                            web_sys::console::log_1(
+                                &format!("Error uploading file: {:?}", e).into(),
+                            );
+                        }
+                    }
+                };
+                spawn_local(future);
+            }
         }
     }
 }

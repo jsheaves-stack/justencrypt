@@ -4,7 +4,7 @@ use yew::prelude::*;
 use crate::app::{
     components::{file::File, folder::Folder},
     methods::manifest::FileSystemNode,
-    requests::file::upload_file,
+    requests::file::upload_files,
 };
 
 fn get_node_by_path<'a>(root: &'a FileSystemNode, path: &[String]) -> Option<&'a FileSystemNode> {
@@ -53,10 +53,10 @@ pub fn file_viewer(props: &Props) -> Html {
             e.prevent_default();
 
             if let Some(input) = file_input_ref.cast::<HtmlInputElement>() {
-                upload_file(
+                upload_files(
                     input,
                     current_path.to_vec(),
-                    Callback::from(move |success: bool| if success { () } else { () }),
+                    Callback::from(move |_: usize| ()),
                 );
             }
         })
@@ -69,7 +69,7 @@ pub fn file_viewer(props: &Props) -> Html {
             </div>
             <div>
                 <form onsubmit={on_file_upload}>
-                    <input type="file" ref={file_input_ref} />
+                    <input type="file" ref={file_input_ref} multiple={true} />
                     <button type="submit">{"Upload"}</button>
                 </form>
             </div>
