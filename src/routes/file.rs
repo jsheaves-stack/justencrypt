@@ -59,6 +59,8 @@ pub async fn put_file(
     let file_name = components.pop().unwrap();
     let user_path = session.user_path.clone();
 
+    println!("{:?}", &user_path.join(&file_path));
+
     // Insert the file path into the user's manifest and update the manifest.
     session.manifest.files.insert_path(
         components.into_iter(),
@@ -128,7 +130,7 @@ pub async fn put_file(
             }
         }
 
-        Ok(RequestSuccess::Created)
+        Ok(())
     });
 
     // Buffer to store data chunks read from the request.
