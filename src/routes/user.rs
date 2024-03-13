@@ -11,6 +11,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 
 use crate::{
+    enums::{request_error::RequestError, request_success::RequestSuccess},
     session::session::{FileSystemNode, UserManifest},
     AppState,
 };
@@ -19,18 +20,21 @@ use crate::{
 pub async fn get_user_manifest(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
-) -> Option<Json<UserManifest>> {
+) -> Result<Json<UserManifest>, RequestError> {
     let active_sessions = state.active_sessions.read().await;
 
-    let cookie = cookies
-        .get_private("session_id")
-        .expect("Couldn't find a session id");
+    // Retrieve the user's session based on the "session_id" cookie.
+    let cookie = match cookies.get_private("session_id") {
+        Some(c) => c,
+        None => return Err(RequestError::MissingSessionId),
+    };
 
-    let session = active_sessions
-        .get(cookie.value())
-        .expect("Could not find an active session for this session id");
+    let session = match active_sessions.get(cookie.value()) {
+        Some(s) => s,
+        None => return Err(RequestError::MissingActiveSession),
+    };
 
-    Some(Json(session.manifest.clone()))
+    Ok(Json(session.manifest.clone()))
 }
 
 #[derive(Deserialize)]
@@ -39,29 +43,56 @@ pub struct CreateUser {
 }
 
 #[post("/create/<user_name..>", format = "json", data = "<reqbody>")]
-pub async fn create_user(user_name: PathBuf, reqbody: Json<CreateUser>) -> Option<()> {
+pub async fn create_user(
+    user_name: PathBuf,
+    reqbody: Json<CreateUser>,
+) -> Result<RequestSuccess, RequestError> {
     let user_path = PathBuf::from("./user_data/").join(user_name);
 
     if !user_path.exists() {
-        fs::create_dir(&user_path).await.unwrap();
+        match fs::create_dir(&user_path).await {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to create user directory: {}", e);
+                return Err(RequestError::FailedToWriteData);
+            }
+        }
 
         let manifest = UserManifest {
             files: FileSystemNode::default(),
         };
 
-        let json = serde_json::to_string(&manifest).unwrap();
+        let json = match serde_json::to_string(&manifest) {
+            Ok(j) => j,
+            Err(e) => {
+                error!("Failed to parse user manifest: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
-        let mut encryptor = FileEncryptor::new(
+        let mut encryptor = match FileEncryptor::new(
             &user_path.join("user.manifest"),
             &SecretString::from_str(&reqbody.passphrase).unwrap(),
         )
         .await
-        .unwrap();
+        {
+            Ok(e) => e,
+            Err(e) => {
+                error!("Failed to create stream encryptor for manifest file: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
-        encryptor.encrypt_file(json.as_bytes()).await.unwrap();
+        match encryptor.encrypt_file(json.as_bytes()).await {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to encrypt user manifest: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
-        Some(())
+        Ok(RequestSuccess::NoContent)
     } else {
-        panic!("Profile already exists")
+        return Err(RequestError::UserAlreadyExists);
     }
 }

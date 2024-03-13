@@ -9,6 +9,8 @@ use encryption::{FileDecryptor, FileEncryptor};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+use crate::enums::request_error::RequestError;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FileSystemNode {
     is_file: bool,
@@ -97,7 +99,7 @@ impl AppSession {
     pub async fn open<'a>(
         user_name: &String,
         passphrase: &SecretString,
-    ) -> Result<Box<Self>, String> {
+    ) -> Result<Box<Self>, RequestError> {
         let user_path = PathBuf::from(format!("./user_data/{}", user_name));
 
         if user_path.exists() {
@@ -105,7 +107,13 @@ impl AppSession {
                 .await
                 .unwrap();
 
-            let decrypted_file = decryptor.decrypt_file().await.unwrap();
+            let decrypted_file = match decryptor.decrypt_file().await {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to decrypt manifest file: {}", e);
+                    return Err(RequestError::FailedToReadUserManifest);
+                }
+            };
 
             let manifest = serde_json::from_slice(&decrypted_file).unwrap();
 
@@ -116,7 +124,7 @@ impl AppSession {
                 manifest,
             }))
         } else {
-            Err(String::from("Failed to find user data."))
+            return Err(RequestError::UserDoesNotExist);
         }
     }
 

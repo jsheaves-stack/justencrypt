@@ -4,14 +4,14 @@ domain = { env = "ROCKET_SERVER_DOMAIN" }
 port = 8000
 workers = 16
 keep_alive = 5
-log_level = "debug"
+log_level = "normal"
 secret_key = { env = "ROCKET_SECRET_KEY" }
 
 [release]
 address = "0.0.0.0"
 domain = { env = "ROCKET_SERVER_DOMAIN" }
 port = 8000
-workers = 16
+workers = 64
 keep_alive = 5
 log_level = "critical"
 secret_key = { env = "ROCKET_SECRET_KEY" }

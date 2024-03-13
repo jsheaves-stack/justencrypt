@@ -4,6 +4,7 @@ use encryption::{
     get_encoded_file_name, StreamDecryptor, StreamEncryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE,
     TAG_SIZE,
 };
+
 use rocket::{
     data::ByteUnit,
     get,
@@ -19,7 +20,10 @@ use rocket::{
     Data, State,
 };
 
-use crate::AppState;
+use crate::{
+    enums::{request_error::RequestError, request_success::RequestSuccess},
+    AppState,
+};
 
 const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
 
@@ -29,18 +33,20 @@ pub async fn put_file(
     reqdata: Data<'_>,  // The raw data of the file being uploaded.
     state: &State<AppState>, // Application state for accessing global resources like session management.
     cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
-) -> std::io::Result<()> {
+) -> Result<RequestSuccess, RequestError> {
     // Lock the active sessions map for write access.
     let mut active_sessions = state.active_sessions.write().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = cookies
-        .get_private("session_id")
-        .expect("Couldn't find a session id");
+    let cookie = match cookies.get_private("session_id") {
+        Some(c) => c,
+        None => return Err(RequestError::MissingSessionId),
+    };
 
-    let session = active_sessions
-        .get_mut(cookie.value())
-        .expect("Could not find an active session for this session id");
+    let session = match active_sessions.get_mut(cookie.value()) {
+        Some(s) => s,
+        None => return Err(RequestError::MissingActiveSession),
+    };
 
     // Process the file path to separate it into components.
     let mut components = file_path
@@ -60,7 +66,13 @@ pub async fn put_file(
         get_encoded_file_name(&user_path.join(&file_path)).unwrap(),
     );
 
-    session.update_manifest().await.unwrap();
+    match session.update_manifest().await {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Failed to write user manifest: {}", e);
+            return Err(RequestError::FailedToWriteUserManifest);
+        }
+    };
 
     // Clone the passphrase for use in the spawned encryption task.
     let passphrase = session.passphrase.clone();
@@ -74,29 +86,49 @@ pub async fn put_file(
     // Spawn an async task to handle file encryption and writing.
     tokio::spawn(async move {
         // Initialize the stream encryptor for the file.
-        let mut encryptor =
-            StreamEncryptor::new(&user_path, &user_path.join(&file_path), &passphrase)
-                .await
-                .expect("Failed to create StreamEncryptor");
+        let mut encryptor = match StreamEncryptor::new(
+            &user_path,
+            &user_path.join(&file_path),
+            &passphrase,
+        )
+        .await
+        {
+            Ok(e) => e,
+            Err(e) => {
+                error!("Failed to create StreamEncryptor: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
         // Write encryption metadata (salt and nonce) to the file.
-        encryptor
-            .write_salt_and_nonce()
-            .await
-            .expect("Failed to write salt and nonce");
+        match encryptor.write_salt_and_nonce().await {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to write salt and nonce chunks: {}", e);
+                return Err(RequestError::FailedToWriteData);
+            }
+        };
 
         // Continuously read data chunks from the channel, encrypt, and write them.
         while let Some(data) = rx.recv().await {
-            let encrypted_chunk = encryptor
-                .encrypt_chunk(&data)
-                .await
-                .expect("Failed to encrypt chunk");
+            let encrypted_chunk = match encryptor.encrypt_chunk(&data).await {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to encrypt chunk: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
 
-            encryptor
-                .write_chunk(&encrypted_chunk)
-                .await
-                .expect("Failed to write encrypted chunk");
+            match encryptor.write_chunk(&encrypted_chunk).await {
+                Ok(_) => (),
+                Err(e) => {
+                    error!("Failed to write encrypted chunk: {}", e);
+                    return Err(RequestError::FailedToWriteData);
+                }
+            }
         }
+
+        Ok(RequestSuccess::Created)
     });
 
     // Buffer to store data chunks read from the request.
@@ -107,7 +139,13 @@ pub async fn put_file(
 
     loop {
         // Read a chunk of data from the stream.
-        let chunk_size = data_stream.read(&mut buffer[current_size..]).await?;
+        let chunk_size = match data_stream.read(&mut buffer[current_size..]).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to read chunk from data stream: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
         // Break the loop if no more data is available.
         if chunk_size == 0 {
@@ -115,7 +153,14 @@ pub async fn put_file(
                 break;
             }
             // Send the last chunk of data if not empty.
-            tx.send(buffer[..current_size].to_vec()).await.unwrap();
+            match tx.send(buffer[..current_size].to_vec()).await {
+                Ok(_) => (),
+                Err(e) => {
+                    error!("Failed to send buffer through channel: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
+
             break;
         }
 
@@ -123,12 +168,18 @@ pub async fn put_file(
 
         // If the buffer is full, send it through the channel and reset the current size.
         if current_size >= BUFFER_SIZE {
-            tx.send(buffer[..BUFFER_SIZE].to_vec()).await.unwrap();
+            match tx.send(buffer[..BUFFER_SIZE].to_vec()).await {
+                Ok(_) => (),
+                Err(e) => {
+                    error!("Failed to send buffer through channel: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
             current_size = current_size - BUFFER_SIZE;
         }
     }
 
-    Ok(())
+    Ok(RequestSuccess::Created)
 }
 
 #[get("/<file_name..>")]
@@ -136,41 +187,55 @@ pub async fn get_file(
     file_name: PathBuf, // The name/path of the file being requested, extracted from the URL.
     state: &State<AppState>, // Application state for accessing global resources like session management.
     cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
-) -> ByteStream![Vec<u8>] {
+) -> Result<ByteStream![Vec<u8>], RequestError> {
     // Read access to the active sessions map.
     let active_sessions = state.active_sessions.read().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = cookies
-        .get_private("session_id")
-        .expect("Couldn't find a session id");
+    let cookie = match cookies.get_private("session_id") {
+        Some(c) => c,
+        None => return Err(RequestError::MissingSessionId),
+    };
 
-    let session = active_sessions
-        .get(cookie.value())
-        .expect("Could not find an active session for this session id");
+    let session = match active_sessions.get(cookie.value()) {
+        Some(s) => s,
+        None => return Err(RequestError::MissingActiveSession),
+    };
 
     // Construct the full path to the requested file.
     let file_path = PathBuf::from(&session.user_path).join(&file_name);
 
     // Initialize the stream decryptor for the requested file.
-    let mut decryptor = StreamDecryptor::new(&session.user_path, &file_path, &session.passphrase)
-        .await
-        .expect("Failed to create StreamDecryptor");
+    let mut decryptor =
+        match StreamDecryptor::new(&session.user_path, &file_path, &session.passphrase).await {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to create StreamDecryptor: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
     // Open the encrypted file.
-    let input_file = File::open(decryptor.file_path.clone())
-        .await
-        .expect("Failed to open file");
+    let input_file = match File::open(decryptor.file_path.clone()).await {
+        Ok(i) => i,
+        Err(e) => {
+            error!("Failed to open file: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
+    };
 
     let mut reader = BufReader::new(input_file);
 
+    let salt_nonce_size = (SALT_SIZE + NONCE_SIZE).try_into().unwrap();
+
     // Skip the encryption metadata (salt and nonce) at the beginning of the file.
-    reader
-        .seek(SeekFrom::Start(
-            (SALT_SIZE + NONCE_SIZE).try_into().unwrap(),
-        ))
-        .await
-        .expect("Failed to seek in file");
+    match reader.seek(SeekFrom::Start(salt_nonce_size)).await {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Failed to seek in file: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
+    };
 
     // Create an unbounded channel for streaming decrypted file chunks.
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE + TAG_SIZE);
@@ -181,7 +246,13 @@ pub async fn get_file(
 
         // Loop to read and decrypt the file in chunks.
         loop {
-            let chunk_size = reader.read(&mut buffer).await.expect("Failed to read file");
+            let chunk_size = match reader.read(&mut buffer).await {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("Failed to read file: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
 
             // Break the loop if end of file is reached.
             if chunk_size == 0 {
@@ -189,10 +260,13 @@ pub async fn get_file(
             }
 
             // Decrypt the current chunk.
-            let decrypted_chunk = decryptor
-                .decrypt_chunk(&buffer[..chunk_size])
-                .await
-                .expect("Failed to decrypt chunk");
+            let decrypted_chunk = match decryptor.decrypt_chunk(&buffer[..chunk_size]).await {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to decrypt file chunk: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
 
             // Break the loop if the decrypted chunk is empty.
             if decrypted_chunk.len() == 0 {
@@ -200,16 +274,22 @@ pub async fn get_file(
             }
 
             // Send the decrypted chunk for streaming.
-            tx.send(decrypted_chunk)
-                .await
-                .expect("Failed to send chunk");
+            match tx.send(decrypted_chunk).await {
+                Ok(_) => (),
+                Err(e) => {
+                    error!("Failed to send file chunk through channel: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
         }
+
+        Ok(())
     });
 
     // Stream the decrypted file chunks as they become available.
-    ByteStream! {
+    Ok(ByteStream! {
         while let Some(chunk) = rx.recv().await {
             yield chunk;
         }
-    }
+    })
 }

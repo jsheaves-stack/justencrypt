@@ -9,7 +9,10 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{AppSession, AppState};
+use crate::{
+    enums::{request_error::RequestError, request_success::RequestSuccess},
+    AppSession, AppState,
+};
 
 #[derive(Deserialize)]
 pub struct CreateSession {
@@ -22,7 +25,7 @@ pub async fn create_session(
     reqbody: Json<CreateSession>,
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
-) -> Option<String> {
+) -> Result<RequestSuccess, RequestError> {
     let passphrase = SecretString::from_str(&reqbody.passphrase.as_str()).unwrap();
     let session = AppSession::open(&reqbody.user_name, &passphrase).await;
 
@@ -40,9 +43,12 @@ pub async fn create_session(
 
             active_sessions.insert(uuid, *v);
 
-            Some("Success".to_string())
+            Ok(RequestSuccess::NoContent)
         }
-        Err(e) => Some(e),
+        Err(e) => {
+            error!("{}", e);
+            return Err(RequestError::FailedToCreateUserSession);
+        }
     }
 }
 
@@ -50,12 +56,17 @@ pub async fn create_session(
 pub async fn destroy_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
-) -> Result<(), String> {
+) -> Result<RequestSuccess, RequestError> {
     let mut active_sessions = state.active_sessions.write().await;
 
-    let cookie = cookies.get_private("session_id").unwrap();
+    // Retrieve the user's session based on the "session_id" cookie.
+    let cookie = match cookies.get_private("session_id") {
+        Some(c) => c,
+        None => return Err(RequestError::MissingSessionId),
+    };
 
-    active_sessions.remove(cookie.value());
-
-    Ok(())
+    match active_sessions.remove(cookie.value()) {
+        Some(_) => return Ok(RequestSuccess::NoContent),
+        None => return Err(RequestError::MissingActiveSession),
+    };
 }
