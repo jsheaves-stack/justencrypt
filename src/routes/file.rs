@@ -86,13 +86,7 @@ pub async fn put_file(
     // Spawn an async task to handle file encryption and writing.
     tokio::spawn(async move {
         // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(
-            &user_path,
-            &user_path.join(&file_path),
-            &passphrase,
-        )
-        .await
-        {
+        let mut encryptor = match StreamEncryptor::new(&user_path, &file_path, &passphrase).await {
             Ok(e) => e,
             Err(e) => {
                 error!("Failed to create StreamEncryptor: {}", e);
@@ -152,6 +146,7 @@ pub async fn put_file(
             if current_size == 0 {
                 break;
             }
+
             // Send the last chunk of data if not empty.
             match tx.send(buffer[..current_size].to_vec()).await {
                 Ok(_) => (),
@@ -161,7 +156,7 @@ pub async fn put_file(
                 }
             };
 
-            break;
+            current_size = 0;
         }
 
         current_size += chunk_size;
@@ -175,6 +170,7 @@ pub async fn put_file(
                     return Err(RequestError::FailedToProcessData);
                 }
             };
+
             current_size = current_size - BUFFER_SIZE;
         }
     }
@@ -182,9 +178,9 @@ pub async fn put_file(
     Ok(RequestSuccess::Created)
 }
 
-#[get("/<file_name..>")]
+#[get("/<file_path..>")]
 pub async fn get_file(
-    file_name: PathBuf, // The name/path of the file being requested, extracted from the URL.
+    file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
     state: &State<AppState>, // Application state for accessing global resources like session management.
     cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
 ) -> Result<ByteStream![Vec<u8>], RequestError> {
@@ -201,9 +197,6 @@ pub async fn get_file(
         Some(s) => s,
         None => return Err(RequestError::MissingActiveSession),
     };
-
-    // Construct the full path to the requested file.
-    let file_path = PathBuf::from(&session.user_path).join(&file_name);
 
     // Initialize the stream decryptor for the requested file.
     let mut decryptor =

@@ -2,11 +2,12 @@ use std::{
     collections::HashMap,
     error::Error,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
-use encryption::{FileDecryptor, FileEncryptor};
-use secrecy::{ExposeSecret, SecretString};
+pub use encryption::Salt;
+
+use encryption::{Auth, DerivedKey, FileDecryptor, FileEncryptor, SecretKey};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::enums::request_error::RequestError;
@@ -93,6 +94,7 @@ pub struct AppSession {
     pub passphrase: SecretString,
     pub user_path: PathBuf,
     pub manifest: UserManifest,
+    pub manifest_key: DerivedKey,
 }
 
 impl AppSession {
@@ -119,9 +121,10 @@ impl AppSession {
 
             Ok(Box::new(Self {
                 user_name: user_name.to_string(),
-                passphrase: SecretString::from_str(passphrase.expose_secret()).unwrap(),
+                passphrase: passphrase.clone(),
                 user_path,
                 manifest,
+                manifest_key: decryptor.key_salt,
             }))
         } else {
             return Err(RequestError::UserDoesNotExist);
@@ -129,8 +132,14 @@ impl AppSession {
     }
 
     pub async fn update_manifest(self: &mut Self) -> Result<(), Box<dyn Error>> {
-        let mut encryptor =
-            FileEncryptor::new(&self.user_path.join("user.manifest"), &self.passphrase).await?;
+        let mut encryptor = FileEncryptor::new(
+            &self.user_path.join("user.manifest"),
+            Auth::DerivedKey(
+                SecretKey::from_slice(self.manifest_key.key.unprotected_as_bytes()).unwrap(),
+                Salt::from_slice(self.manifest_key.salt.as_ref()).unwrap(),
+            ),
+        )
+        .await?;
 
         let json = serde_json::to_string(&self.manifest)?;
 

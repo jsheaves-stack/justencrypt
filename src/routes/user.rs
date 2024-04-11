@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr};
 
-use encryption::FileEncryptor;
+use encryption::{Auth, FileEncryptor};
 use rocket::{
     http::CookieJar,
     serde::json::Json,
@@ -72,7 +72,7 @@ pub async fn create_user(
 
         let mut encryptor = match FileEncryptor::new(
             &user_path.join("user.manifest"),
-            &SecretString::from_str(&reqbody.passphrase).unwrap(),
+            Auth::Passphrase(SecretString::from_str(&reqbody.passphrase).unwrap()),
         )
         .await
         {

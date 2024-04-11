@@ -1,5 +1,8 @@
-use orion::{
-    aead::streaming::{Nonce, StreamOpener, StreamSealer, StreamTag, ABYTES},
+pub use orion::{
+    aead::{
+        self,
+        streaming::{Nonce, StreamOpener, StreamSealer, StreamTag, ABYTES},
+    },
     hash::{digest, Digest},
     kdf::{self, Salt},
     kex::SecretKey,
@@ -12,7 +15,7 @@ use tokio::{
 
 use std::{error::Error, path::PathBuf};
 
-use base64::{engine::general_purpose::URL_SAFE, prelude::*};
+use base64::{engine::general_purpose::URL_SAFE, Engine};
 
 pub const NONCE_SIZE: usize = 24; // Nonce size for the XChaCha20 algorithm
 pub const SALT_SIZE: usize = 32; // 32 byte salt
@@ -24,9 +27,9 @@ const KEY_ITERATIONS: usize = 10;
 const KEY_MEMORY: usize = 1 << 16; // 65536 bytes
 const KEY_LENGTH: usize = 32; // 32 byte key
 
-struct DerivedKey {
-    key: SecretKey,
-    salt: Salt,
+pub struct DerivedKey {
+    pub key: SecretKey,
+    pub salt: Salt,
 }
 
 trait Encryptor {
@@ -61,32 +64,39 @@ impl Encryptor for StreamEncryptor {}
 impl Encryptor for FileDecryptor {}
 impl Encryptor for StreamDecryptor {}
 
+pub enum Auth {
+    Passphrase(SecretString),
+    DerivedKey(SecretKey, Salt),
+}
+
 pub struct FileEncryptor {
     file: File,
-    // nonce: Nonce,
-    salt: Salt,
-    key: SecretKey,
+    derived_key: DerivedKey,
 }
 
 impl FileEncryptor {
-    pub async fn new(
-        file_path: &PathBuf,
-        passphrase: &SecretString,
-    ) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(file_path: &PathBuf, auth: Auth) -> Result<Self, Box<dyn Error>> {
         let input_file = File::create(file_path).await?;
-        let key_salt = Self::derive_key_from_string(&passphrase)?;
+
+        let (key, salt) = match auth {
+            Auth::Passphrase(passphrase) => {
+                let key_salt = Self::derive_key_from_string(&passphrase)?;
+
+                (key_salt.key, key_salt.salt)
+            }
+            Auth::DerivedKey(key, salt) => (key, salt),
+        };
 
         Ok(FileEncryptor {
             file: input_file,
-            salt: key_salt.salt,
-            key: key_salt.key,
+            derived_key: DerivedKey { key, salt },
         })
     }
 
     pub async fn encrypt_file(&mut self, file_data: &[u8]) -> Result<(), Box<dyn Error>> {
-        let encrypted_data = orion::aead::seal(&self.key, file_data)?;
+        let encrypted_data = aead::seal(&self.derived_key.key, file_data)?;
 
-        self.file.write_all(&self.salt.as_ref()).await?;
+        self.file.write_all(&self.derived_key.salt.as_ref()).await?;
         self.file.write_all(encrypted_data.as_slice()).await?;
 
         Ok(())
@@ -164,7 +174,7 @@ impl StreamEncryptor {
 
 pub struct FileDecryptor {
     file: File,
-    key: SecretKey,
+    pub key_salt: DerivedKey,
 }
 
 impl FileDecryptor {
@@ -183,7 +193,7 @@ impl FileDecryptor {
 
         Ok(FileDecryptor {
             file: input_file,
-            key: key_salt.key,
+            key_salt,
         })
     }
 
@@ -192,7 +202,7 @@ impl FileDecryptor {
 
         self.file.read_to_end(&mut file_buffer).await?;
 
-        let decrypted_data = orion::aead::open(&self.key, &file_buffer)?;
+        let decrypted_data = aead::open(&self.key_salt.key, &file_buffer)?;
 
         Ok(decrypted_data)
     }
