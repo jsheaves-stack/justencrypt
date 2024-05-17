@@ -1,6 +1,5 @@
 [debug]
 address = "0.0.0.0"
-domain = { env = "ROCKET_SERVER_DOMAIN" }
 port = 8000
 workers = 16
 keep_alive = 5
@@ -9,7 +8,6 @@ secret_key = { env = "ROCKET_SECRET_KEY" }
 
 [release]
 address = "0.0.0.0"
-domain = { env = "ROCKET_SERVER_DOMAIN" }
 port = 8000
 workers = 16
 keep_alive = 5
