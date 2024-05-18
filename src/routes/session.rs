@@ -16,8 +16,8 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct CreateSession {
-    user_name: String,
-    passphrase: String,
+    username: String,
+    password: String,
 }
 
 #[post("/create", format = "json", data = "<reqbody>")]
@@ -26,8 +26,8 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    let passphrase = SecretString::from_str(&reqbody.passphrase.as_str()).unwrap();
-    let session = AppSession::open(&reqbody.user_name, &passphrase).await;
+    let passphrase = SecretString::from_str(&reqbody.password.as_str()).unwrap();
+    let session = AppSession::open(&reqbody.username, &passphrase).await;
 
     match session {
         Ok(v) => {

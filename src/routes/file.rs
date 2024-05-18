@@ -127,6 +127,7 @@ pub async fn put_file(
 
     // Buffer to store data chunks read from the request.
     let mut buffer = [0u8; BUFFER_SIZE];
+    
     // Open the request data stream with a limit.
     let mut data_stream = reqdata.open(ByteUnit::from(STREAM_LIMIT));
     let mut current_size = 0;
