@@ -63,7 +63,7 @@ pub async fn put_file(
     session.manifest.files.insert_path(
         components.into_iter(),
         file_name.clone(),
-        get_encoded_file_name(&user_path.join(&file_path)).unwrap(),
+        get_encoded_file_name(&file_path).unwrap(),
     );
 
     match session.update_manifest().await {
@@ -127,7 +127,7 @@ pub async fn put_file(
 
     // Buffer to store data chunks read from the request.
     let mut buffer = [0u8; BUFFER_SIZE];
-    
+
     // Open the request data stream with a limit.
     let mut data_stream = reqdata.open(ByteUnit::from(STREAM_LIMIT));
     let mut current_size = 0;

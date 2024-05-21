@@ -14,29 +14,62 @@ use crate::enums::request_error::RequestError;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FileSystemNode {
-    is_file: bool,
+    pub is_file: bool,
+    pub file_name: String,
     encoded_name: Option<String>, // Encoded name (only for files)
-    file_extension: Option<String>,
+    pub file_extension: Option<String>,
     children: HashMap<String, FileSystemNode>, // Children nodes
 }
 
 impl FileSystemNode {
-    fn new_file(encoded_file_name: String, file_extension: String) -> Self {
+    pub fn new_file(file_name: String, encoded_file_name: String, file_extension: String) -> Self {
         FileSystemNode {
             is_file: true,
+            file_name: format!("{}.{}", file_name, file_extension),
             encoded_name: Some(encoded_file_name),
             file_extension: Some(file_extension),
             children: HashMap::new(), // Files have no children
         }
     }
 
-    fn new_folder() -> Self {
+    pub fn new_folder(file_name: String) -> Self {
         FileSystemNode {
             is_file: false,
+            file_name,
             encoded_name: None,
             file_extension: None,
             children: HashMap::new(),
         }
+    }
+
+    pub fn _find_path(&self, path: &PathBuf) -> Option<&FileSystemNode> {
+        let components = path.iter().filter_map(|s| s.to_str());
+        let mut current_node = self;
+
+        for component in components {
+            match current_node.children.get(component) {
+                Some(node) => current_node = node,
+                None => return None,
+            }
+        }
+
+        Some(current_node)
+    }
+
+    pub fn find_path_nodes(&self, path: &PathBuf) -> Vec<&FileSystemNode> {
+        let components = path.iter().filter_map(|s| s.to_str());
+        let mut current_node = self;
+
+        for component in components {
+            match current_node.children.get(component) {
+                Some(node) => {
+                    current_node = node;
+                }
+                None => return Vec::new(),
+            }
+        }
+
+        current_node.children.values().collect()
     }
 
     pub fn insert_path<I>(
@@ -50,8 +83,8 @@ impl FileSystemNode {
         if !self.is_file {
             if let Some(component) = components.next() {
                 self.children
-                    .entry(component)
-                    .or_insert_with(FileSystemNode::new_folder)
+                    .entry(component.clone())
+                    .or_insert_with(|| FileSystemNode::new_folder(component))
                     .insert_path(components, file_name, encoded_file_name);
             } else {
                 let file_extension = Path::new(&file_name)
@@ -71,7 +104,7 @@ impl FileSystemNode {
                 // Insert the file at this location
                 self.children.insert(
                     file_name_with_extension,
-                    FileSystemNode::new_file(encoded_file_name, file_extension),
+                    FileSystemNode::new_file(file_name, encoded_file_name, file_extension),
                 );
             }
         }
@@ -80,7 +113,7 @@ impl FileSystemNode {
 
 impl Default for FileSystemNode {
     fn default() -> Self {
-        FileSystemNode::new_folder()
+        FileSystemNode::new_folder(String::from(""))
     }
 }
 

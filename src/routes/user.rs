@@ -39,15 +39,13 @@ pub async fn get_user_manifest(
 
 #[derive(Deserialize)]
 pub struct CreateUser {
-    passphrase: String,
+    username: String,
+    password: String,
 }
 
-#[post("/create/<user_name..>", format = "json", data = "<reqbody>")]
-pub async fn create_user(
-    user_name: PathBuf,
-    reqbody: Json<CreateUser>,
-) -> Result<RequestSuccess, RequestError> {
-    let user_path = PathBuf::from("./user_data/").join(user_name);
+#[post("/create", format = "json", data = "<reqbody>")]
+pub async fn create_user(reqbody: Json<CreateUser>) -> Result<RequestSuccess, RequestError> {
+    let user_path = PathBuf::from("./user_data/").join(&reqbody.username);
 
     if !user_path.exists() {
         match fs::create_dir(&user_path).await {
@@ -72,7 +70,7 @@ pub async fn create_user(
 
         let mut encryptor = match FileEncryptor::new(
             &user_path.join("user.manifest"),
-            Auth::Passphrase(SecretString::from_str(&reqbody.passphrase).unwrap()),
+            Auth::Passphrase(SecretString::from_str(&reqbody.password).unwrap()),
         )
         .await
         {
