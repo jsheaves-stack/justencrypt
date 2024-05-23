@@ -2,7 +2,8 @@ use rocket::{launch, routes, tokio::sync::RwLock};
 use routes::{
     file::{get_file, put_file},
     folder::get_folder,
-    session::{create_session, destroy_session},
+    session::{check_session, create_session, destroy_session},
+    thumbnail::get_thumbnail,
     user::{create_user, get_user_manifest},
 };
 use session::session::AppSession;
@@ -31,10 +32,14 @@ async fn rocket() -> _ {
     };
 
     rocket::build()
-        .mount("/file", routes![get_file, put_file])
-        .mount("/folder", routes![get_folder])
-        .mount("/session", routes![create_session, destroy_session])
-        .mount("/user", routes![get_user_manifest, create_user])
         .attach(CORS)
         .manage(state)
+        .mount("/file", routes![get_file, put_file])
+        .mount("/thumbnail", routes![get_thumbnail])
+        .mount("/folder", routes![get_folder])
+        .mount("/user", routes![get_user_manifest, create_user])
+        .mount(
+            "/session",
+            routes![create_session, destroy_session, check_session],
+        )
 }

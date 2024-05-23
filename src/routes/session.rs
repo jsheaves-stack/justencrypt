@@ -70,3 +70,23 @@ pub async fn destroy_session(
         None => return Err(RequestError::MissingActiveSession),
     };
 }
+
+#[get("/")]
+pub async fn check_session(
+    state: &State<AppState>,
+    cookies: &CookieJar<'_>,
+) -> Result<RequestSuccess, RequestError> {
+    // Read access to the active sessions map.
+    let active_sessions = state.active_sessions.read().await;
+
+    // Retrieve the user's session based on the "session_id" cookie.
+    let cookie = match cookies.get_private("session_id") {
+        Some(c) => c,
+        None => return Err(RequestError::MissingSessionId),
+    };
+
+    match active_sessions.get(cookie.value()) {
+        Some(_) => Ok(RequestSuccess::NoContent),
+        None => Err(RequestError::MissingActiveSession),
+    }
+}
