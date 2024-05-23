@@ -14,9 +14,9 @@ keep_alive = 5
 log_level = "critical"
 secret_key = { env = "ROCKET_SECRET_KEY" }
 
-[default.tls]
-certs = "cert.crt"
-key = "key.key"
+# [default.tls]
+# certs = "cert.crt"
+# key = "key.key"
 
 [default.limits]
 form = "10 MiB"
