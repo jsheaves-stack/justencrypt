@@ -14,16 +14,16 @@ keep_alive = 5
 log_level = "critical"
 secret_key = { env = "ROCKET_SECRET_KEY" }
 
-# [default.tls]
-# certs = "cert.crt"
-# key = "key.key"
+[default.tls]
+certs = "cert.crt"
+key = "key.key"
 
 [default.limits]
-form = "64 GiB"
-data-form = "64 GiB"
+form = "10 MiB"
+data-form = "10 MiB"
 file = "64 GiB"
-json = "64 GiB"
-msgpack = "64 GiB"
-"file/jpg" = "64 GiB"
-bytes = "64 GiB"
-string = "64 GiB"
+json = "10 MiB"
+msgpack = "1 MiB"
+"file/jpg" = "10 GiB"
+bytes = "10 MiB"
+string = "10 MiB"
