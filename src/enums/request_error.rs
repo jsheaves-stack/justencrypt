@@ -28,4 +28,7 @@ pub enum RequestError {
 
     #[error("User does not exist")]
     UserDoesNotExist,
+
+    #[error("Unsupported file type")]
+    UnsupportedFileType
 }

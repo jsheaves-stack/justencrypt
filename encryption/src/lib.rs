@@ -220,7 +220,7 @@ impl StreamDecryptor {
         passphrase: &SecretString,
     ) -> Result<Self, Box<dyn Error>> {
         let encoded_file_name = get_encoded_file_name(&file_path)?;
-        let encoded_file_path = user_path.join(encoded_file_name);
+        let encoded_file_path = user_path.join(&encoded_file_name);
 
         let file = File::open(&encoded_file_path).await?;
         let mut reader = BufReader::new(file);

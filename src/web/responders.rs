@@ -54,6 +54,11 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .status(Status::NotFound)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
+
+            RequestError::UnsupportedFileType => Response::build()
+                .status(Status::UnsupportedMediaType)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
         };
 
         response
