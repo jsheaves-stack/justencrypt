@@ -148,6 +148,8 @@ pub async fn get_thumbnail(
             Err(_) => return Err(RequestError::FailedToProcessData),
         };
 
+        thumbnail_buffer.set_position(0);
+
         // Initialize the stream encryptor for the file.
         let mut encryptor = match StreamEncryptor::new(
             &user_path.join(".thumbnail"),
@@ -172,10 +174,10 @@ pub async fn get_thumbnail(
             }
         };
 
-        let mut encryption_file_buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
+        let mut encryption_file_buffer = [0u8; BUFFER_SIZE];
 
         loop {
-            let data = match thumbnail_buffer.read(&mut encryption_file_buffer).await {
+            let chunk_size = match thumbnail_buffer.read(&mut encryption_file_buffer).await {
                 Ok(f) => f,
                 Err(e) => {
                     error!("Failed to read file: {}", e);
@@ -183,12 +185,12 @@ pub async fn get_thumbnail(
                 }
             };
 
-            if data == 0 {
+            if chunk_size == 0 {
                 break;
             }
 
             let encrypted_chunk = match encryptor
-                .encrypt_chunk(&encryption_file_buffer[data..])
+                .encrypt_chunk(&encryption_file_buffer[..chunk_size])
                 .await
             {
                 Ok(d) => d,
