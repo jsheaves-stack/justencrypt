@@ -59,6 +59,11 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .status(Status::UnsupportedMediaType)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
+
+            RequestError::FailedToRemoveFile => Response::build()
+                .status(Status::InternalServerError)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
         };
 
         response

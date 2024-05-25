@@ -7,13 +7,13 @@ use encryption::{
 
 use rocket::{
     data::ByteUnit,
-    get,
+    delete, get,
     http::CookieJar,
     put,
     response::stream::ByteStream,
     tokio::{
         self,
-        fs::File,
+        fs::{self, File},
         io::{AsyncReadExt, AsyncSeekExt, BufReader},
         sync::mpsc,
     },
@@ -286,4 +286,47 @@ pub async fn get_file(
             yield chunk;
         }
     })
+}
+
+#[delete("/<file_path..>")]
+pub async fn delete_file(
+    file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
+    state: &State<AppState>, // Application state for accessing global resources like session management.
+    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+) -> Result<RequestSuccess, RequestError> {
+    // Lock the active sessions map for write access.
+    let mut active_sessions = state.active_sessions.write().await;
+
+    // Retrieve the user's session based on the "session_id" cookie.
+    let cookie = match cookies.get_private("session_id") {
+        Some(c) => c,
+        None => return Err(RequestError::MissingSessionId),
+    };
+
+    let session = match active_sessions.get_mut(cookie.value()) {
+        Some(s) => s,
+        None => return Err(RequestError::MissingActiveSession),
+    };
+
+    let file_name = get_encoded_file_name(&file_path).unwrap();
+
+    match fs::remove_file(session.user_path.join(file_name)).await {
+        Ok(_) => (),
+        Err(_) => return Err(RequestError::FailedToRemoveFile),
+    };
+
+    match session.manifest.files.delete_item(&file_path) {
+        Ok(_) => (),
+        Err(_) => return Err(RequestError::FailedToRemoveFile),
+    };
+
+    match session.update_manifest().await {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Failed to write user manifest: {}", e);
+            return Err(RequestError::FailedToWriteUserManifest);
+        }
+    };
+
+    Ok(RequestSuccess::NoContent)
 }

@@ -72,6 +72,38 @@ impl FileSystemNode {
         current_node.children.values().collect()
     }
 
+    pub fn delete_item(&mut self, path: &PathBuf) -> Result<(), String> {
+        let mut components = path.iter().filter_map(|s| s.to_str());
+        if let Some(first_component) = components.next() {
+            if components.clone().count() == 0 {
+                // Path is a single component, remove directly from children
+                if self.children.remove(first_component).is_some() {
+                    return Ok(());
+                } else {
+                    return Err(format!("Item '{}' not found", first_component));
+                }
+            }
+
+            let mut current_node = self;
+            for component in components.clone().take(components.clone().count() - 1) {
+                match current_node.children.get_mut(component) {
+                    Some(node) => current_node = node,
+                    None => return Err(format!("Path '{}' not found", component)),
+                }
+            }
+
+            if let Some(last_component) = components.last() {
+                if current_node.children.remove(last_component).is_some() {
+                    return Ok(());
+                } else {
+                    return Err(format!("Item '{}' not found", last_component));
+                }
+            }
+        }
+
+        Err("Invalid path".to_string())
+    }
+
     pub fn insert_path<I>(
         &mut self,
         mut components: I,

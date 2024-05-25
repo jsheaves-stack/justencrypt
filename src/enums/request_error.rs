@@ -30,5 +30,8 @@ pub enum RequestError {
     UserDoesNotExist,
 
     #[error("Unsupported file type")]
-    UnsupportedFileType
+    UnsupportedFileType,
+
+    #[error("Failed to remove file")]
+    FailedToRemoveFile
 }
