@@ -118,7 +118,7 @@ impl FileSystemNode {
                     .entry(component.clone())
                     .or_insert_with(|| FileSystemNode::new_folder(component))
                     .insert_path(components, file_name, encoded_file_name);
-            } else {
+            } else if !file_name.is_empty() {
                 let file_extension = Path::new(&file_name)
                     .extension()
                     .and_then(|e| e.to_str())

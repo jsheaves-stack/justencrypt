@@ -1,7 +1,7 @@
-use rocket::{launch, routes, tokio::sync::RwLock};
+use rocket::{launch, tokio::sync::RwLock};
 use routes::{
     file::{delete_file, get_file, put_file},
-    folder::get_folder,
+    folder::{create_folder, get_folder},
     session::{check_session, create_session, destroy_session},
     thumbnail::get_thumbnail,
     user::{create_user, get_user_manifest},
@@ -36,7 +36,7 @@ async fn rocket() -> _ {
         .manage(state)
         .mount("/file", routes![get_file, put_file, delete_file])
         .mount("/thumbnail", routes![get_thumbnail])
-        .mount("/folder", routes![get_folder])
+        .mount("/folder", routes![get_folder, create_folder])
         .mount("/user", routes![get_user_manifest, create_user])
         .mount(
             "/session",

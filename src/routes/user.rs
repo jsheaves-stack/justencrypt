@@ -43,7 +43,7 @@ pub struct CreateUser {
     password: String,
 }
 
-#[post("/create", format = "json", data = "<reqbody>")]
+#[put("/create", format = "json", data = "<reqbody>")]
 pub async fn create_user(reqbody: Json<CreateUser>) -> Result<RequestSuccess, RequestError> {
     let user_path = PathBuf::from("./user_data/").join(&reqbody.username);
 
