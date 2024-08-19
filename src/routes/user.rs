@@ -45,7 +45,19 @@ pub struct CreateUser {
 
 #[put("/create", format = "json", data = "<reqbody>")]
 pub async fn create_user(reqbody: Json<CreateUser>) -> Result<RequestSuccess, RequestError> {
-    let user_path = PathBuf::from("./user_data/").join(&reqbody.username);
+    let user_data = PathBuf::from("./user_data/");
+
+    if !user_data.exists() {
+        match fs::create_dir(&user_data).await {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to create user_data directory: {}", e);
+                return Err(RequestError::FailedToWriteData);
+            }
+        };
+    }
+
+    let user_path = user_data.join(&reqbody.username);
 
     if !user_path.exists() {
         match fs::create_dir(&user_path).await {

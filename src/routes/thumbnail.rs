@@ -8,7 +8,7 @@ use rocket::{
     get,
     http::{ContentType, CookieJar},
     tokio::{
-        fs::File,
+        fs::{self, File},
         io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom},
     },
     State,
@@ -41,12 +41,22 @@ pub async fn get_thumbnail(
     let user_path = session.user_path.clone();
     let passphrase = session.passphrase.clone();
 
-    let encoded_thumbnail_file_name =
-        PathBuf::from(get_encoded_file_name(&Path::new(".thumbnail").join(&file_path)).unwrap());
+    let cache_path = Path::new(&user_path).join(".cache");
 
-    let thumbnail_path: PathBuf = Path::new(&user_path)
-        .join(".thumbnail")
-        .join(&encoded_thumbnail_file_name);
+    if !cache_path.exists() {
+        match fs::create_dir(&cache_path).await {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to create user cache directory: {}", e);
+                return Err(RequestError::FailedToWriteData);
+            }
+        };
+    }
+
+    let encoded_thumbnail_file_name =
+        PathBuf::from(get_encoded_file_name(&Path::new(".cache").join(&file_path)).unwrap());
+
+    let thumbnail_path: PathBuf = cache_path.join(&encoded_thumbnail_file_name);
 
     let thumbnail_extension = file_path.extension().unwrap();
 
@@ -152,8 +162,8 @@ pub async fn get_thumbnail(
 
         // Initialize the stream encryptor for the file.
         let mut encryptor = match StreamEncryptor::new(
-            &user_path.join(".thumbnail"),
-            &PathBuf::from(".thumbnail").join(file_path),
+            &user_path.join(".cache"),
+            &PathBuf::from(".cache").join(file_path),
             &passphrase,
         )
         .await
@@ -213,8 +223,8 @@ pub async fn get_thumbnail(
     } else {
         // Initialize the stream decryptor for the requested file.
         let mut decryptor = match StreamDecryptor::new(
-            &user_path.join(".thumbnail"),
-            &PathBuf::from(".thumbnail").join(file_path),
+            &user_path.join(".cache"),
+            &PathBuf::from(".cache").join(file_path),
             &passphrase,
         )
         .await
