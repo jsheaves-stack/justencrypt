@@ -16,6 +16,11 @@ use crate::{
     AppState,
 };
 
+#[options("/manifest")]
+pub fn manifest_options() -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
+}
+
 #[get("/manifest")]
 pub async fn get_user_manifest(
     state: &State<AppState>,
@@ -41,6 +46,11 @@ pub async fn get_user_manifest(
 pub struct CreateUser {
     username: String,
     password: String,
+}
+
+#[options("/create")]
+pub fn create_user_options() -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
 }
 
 #[put("/create", format = "json", data = "<reqbody>")]

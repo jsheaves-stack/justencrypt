@@ -1,4 +1,7 @@
-use crate::{enums::request_error::RequestError, AppState};
+use crate::{
+    enums::{request_error::RequestError, request_success::RequestSuccess},
+    AppState,
+};
 use encryption::{
     get_encoded_file_name, StreamDecryptor, StreamEncryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE,
     TAG_SIZE,
@@ -17,6 +20,11 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
 };
+
+#[options("/<_file_path..>")]
+pub fn thumbnail_options(_file_path: PathBuf) -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
+}
 
 #[get("/<file_path..>")]
 pub async fn get_thumbnail(

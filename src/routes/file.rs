@@ -27,6 +27,11 @@ use crate::{
 
 const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
 
+#[options("/<_file_path..>")]
+pub fn file_options(_file_path: PathBuf) -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
+}
+
 #[put("/<file_path..>", data = "<reqdata>")]
 pub async fn put_file(
     file_path: PathBuf, // The path where the file should be stored, extracted from the URL.

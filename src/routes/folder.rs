@@ -25,6 +25,11 @@ impl From<&FileSystemNode> for GetFolder {
     }
 }
 
+#[options("/<_folder_path..>")]
+pub fn folder_options(_folder_path: PathBuf) -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
+}
+
 #[get("/<folder_path..>")]
 pub async fn get_folder(
     folder_path: PathBuf, // The name/path of the folder being requested, extracted from the URL.

@@ -20,6 +20,11 @@ pub struct CreateSession {
     password: String,
 }
 
+#[options("/create")]
+pub fn create_session_options() -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
+}
+
 #[post("/create", format = "json", data = "<reqbody>")]
 pub async fn create_session(
     reqbody: Json<CreateSession>,
@@ -52,6 +57,11 @@ pub async fn create_session(
     }
 }
 
+#[options("/destroy")]
+pub fn destroy_session_options() -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
+}
+
 #[post("/destroy")]
 pub async fn destroy_session(
     state: &State<AppState>,
@@ -69,6 +79,11 @@ pub async fn destroy_session(
         Some(_) => return Ok(RequestSuccess::NoContent),
         None => return Err(RequestError::MissingActiveSession),
     };
+}
+
+#[options("/")]
+pub fn check_session_options() -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
 }
 
 #[get("/")]
