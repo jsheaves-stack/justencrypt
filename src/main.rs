@@ -1,4 +1,9 @@
-use rocket::{launch, tokio::sync::RwLock};
+use rocket::{
+    launch,
+    shield::{Hsts, Shield},
+    time::Duration,
+    tokio::sync::RwLock,
+};
 use routes::{
     file::{delete_file, file_options, get_file, put_file},
     folder::{create_folder, folder_options, get_folder},
@@ -34,8 +39,11 @@ async fn rocket() -> _ {
         active_sessions: RwLock::default(),
     };
 
+    let hsts = Hsts::Enable(Duration::days(365));
+
     rocket::build()
         .attach(CORS)
+        .attach(Shield::default().enable(hsts))
         .manage(state)
         .mount(
             "/file",
