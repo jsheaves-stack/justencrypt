@@ -9,7 +9,7 @@ secret_key = { env = "ROCKET_SECRET_KEY" }
 [release]
 address = "0.0.0.0"
 port = 8000
-workers = 8
+workers = 16
 keep_alive = 5
 log_level = "critical"
 secret_key = { env = "ROCKET_SECRET_KEY" }

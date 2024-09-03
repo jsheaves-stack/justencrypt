@@ -3,8 +3,8 @@ use crate::{
     AppState,
 };
 use encryption::{
-    get_encoded_file_name, StreamDecryptor, StreamEncryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE,
-    TAG_SIZE,
+    get_encoded_file_name, DerivedKey, Salt, SecretKey, StreamDecryptor, StreamEncryptor,
+    BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
 };
 use image::ImageFormat;
 use rocket::{
@@ -46,9 +46,12 @@ pub async fn get_thumbnail(
         None => return Err(RequestError::MissingActiveSession),
     };
 
-    let user_path = session.user_path.clone();
-    let passphrase = session.passphrase.clone();
+    let derived_key = DerivedKey {
+        salt: Salt::from_slice(session.manifest_key.salt.as_ref()).unwrap(),
+        key: SecretKey::from_slice(session.manifest_key.key.unprotected_as_bytes()).unwrap(),
+    };
 
+    let user_path = session.user_path.clone();
     let cache_path = Path::new(&user_path).join(".cache");
 
     if !cache_path.exists() {
@@ -76,7 +79,7 @@ pub async fn get_thumbnail(
         let mut decryptor = match StreamDecryptor::new(
             &session.user_path,
             &PathBuf::from(&file_path),
-            &session.passphrase,
+            &session.manifest_key,
         )
         .await
         {
@@ -172,7 +175,7 @@ pub async fn get_thumbnail(
         let mut encryptor = match StreamEncryptor::new(
             &user_path.join(".cache"),
             &PathBuf::from(".cache").join(file_path),
-            &passphrase,
+            derived_key,
         )
         .await
         {
@@ -233,7 +236,7 @@ pub async fn get_thumbnail(
         let mut decryptor = match StreamDecryptor::new(
             &user_path.join(".cache"),
             &PathBuf::from(".cache").join(file_path),
-            &passphrase,
+            &session.manifest_key,
         )
         .await
         {

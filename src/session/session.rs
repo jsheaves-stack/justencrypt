@@ -155,8 +155,7 @@ pub struct UserManifest {
 }
 
 pub struct AppSession {
-    pub user_name: String,
-    pub passphrase: SecretString,
+    pub _user_name: String,
     pub user_path: PathBuf,
     pub manifest: UserManifest,
     pub manifest_key: DerivedKey,
@@ -170,9 +169,12 @@ impl AppSession {
         let user_path = PathBuf::from(format!("./user_data/{}", user_name));
 
         if user_path.exists() {
-            let mut decryptor = FileDecryptor::new(&user_path.join("user.manifest"), passphrase)
-                .await
-                .unwrap();
+            let mut decryptor = FileDecryptor::new(
+                &user_path.join("user.manifest"),
+                &Auth::Passphrase(passphrase.clone()),
+            )
+            .await
+            .unwrap();
 
             let decrypted_file = match decryptor.decrypt_file().await {
                 Ok(d) => d,
@@ -185,8 +187,7 @@ impl AppSession {
             let manifest = serde_json::from_slice(&decrypted_file).unwrap();
 
             Ok(Box::new(Self {
-                user_name: user_name.to_string(),
-                passphrase: passphrase.clone(),
+                _user_name: user_name.to_string(),
                 user_path,
                 manifest,
                 manifest_key: decryptor.key_salt,

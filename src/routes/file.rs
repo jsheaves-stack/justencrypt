@@ -1,8 +1,8 @@
 use std::{io::SeekFrom, path::PathBuf};
 
 use encryption::{
-    get_encoded_file_name, StreamDecryptor, StreamEncryptor, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE,
-    TAG_SIZE,
+    get_encoded_file_name, DerivedKey, Salt, SecretKey, StreamDecryptor, StreamEncryptor,
+    BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
 };
 
 use rocket::{
@@ -53,6 +53,11 @@ pub async fn put_file(
         None => return Err(RequestError::MissingActiveSession),
     };
 
+    let derived_key = DerivedKey {
+        salt: Salt::from_slice(session.manifest_key.salt.as_ref()).unwrap(),
+        key: SecretKey::from_slice(session.manifest_key.key.unprotected_as_bytes()).unwrap(),
+    };
+
     // Process the file path to separate it into components.
     let mut components = file_path
         .iter()
@@ -79,9 +84,6 @@ pub async fn put_file(
         }
     };
 
-    // Clone the passphrase for use in the spawned encryption task.
-    let passphrase = session.passphrase.clone();
-
     // Drop active_sessions to release the write lock so we're not holding onto it the entire time we're processing a file.
     drop(active_sessions);
 
@@ -91,7 +93,7 @@ pub async fn put_file(
     // Spawn an async task to handle file encryption and writing.
     tokio::spawn(async move {
         // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(&user_path, &file_path, &passphrase).await {
+        let mut encryptor = match StreamEncryptor::new(&user_path, &file_path, derived_key).await {
             Ok(e) => e,
             Err(e) => {
                 error!("Failed to create StreamEncryptor: {}", e);
@@ -206,7 +208,7 @@ pub async fn get_file(
 
     // Initialize the stream decryptor for the requested file.
     let mut decryptor =
-        match StreamDecryptor::new(&session.user_path, &file_path, &session.passphrase).await {
+        match StreamDecryptor::new(&session.user_path, &file_path, &session.manifest_key).await {
             Ok(d) => d,
             Err(e) => {
                 error!("Failed to create StreamDecryptor: {}", e);
