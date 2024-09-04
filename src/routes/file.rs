@@ -316,15 +316,30 @@ pub async fn delete_file(
     };
 
     let file_name = get_encoded_file_name(&file_path).unwrap();
+    let full_file_path = session.user_path.join(&file_name);
 
-    match fs::remove_file(session.user_path.join(file_name)).await {
+    match fs::remove_file(&full_file_path).await {
         Ok(_) => (),
-        Err(_) => return Err(RequestError::FailedToRemoveFile),
+        Err(e) => {
+            error!("Failed to delete file: {}", e);
+            return Err(RequestError::FailedToRemoveFile);
+        }
+    };
+
+    match fs::remove_file(full_file_path.with_extension("meta")).await {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Failed to delete meta file: {}", e);
+            return Err(RequestError::FailedToRemoveFile);
+        }
     };
 
     match session.manifest.files.delete_item(&file_path) {
         Ok(_) => (),
-        Err(_) => return Err(RequestError::FailedToRemoveFile),
+        Err(e) => {
+            error!("Failed to delete file from manifest: {}", e);
+            return Err(RequestError::FailedToRemoveFile);
+        }
     };
 
     match session.update_manifest().await {
