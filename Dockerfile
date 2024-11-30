@@ -1,5 +1,5 @@
 # Start with a Rust base image
-FROM rust:1.72-slim-buster as builder
+FROM rust:1.82.0-slim-bullseye as builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -17,7 +17,7 @@ COPY . .
 RUN cargo build --release
 
 # Start a new stage with a minimal image
-FROM debian:buster-slim
+FROM debian:bullseye-slim
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
