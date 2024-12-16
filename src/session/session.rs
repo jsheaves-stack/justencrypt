@@ -162,7 +162,7 @@ impl AppSession {
         if user_path.exists() {
             let mut decryptor = FileDecryptor::new(
                 &user_path.join("user.manifest"),
-                &Auth::Passphrase(passphrase.clone()),
+                Auth::Passphrase(passphrase.clone()),
             )
             .await
             .unwrap();
