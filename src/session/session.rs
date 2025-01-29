@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    env,
     error::Error,
     path::{Path, PathBuf},
 };
@@ -177,11 +178,16 @@ impl AppSession {
         user_name: &String,
         passphrase: &SecretString,
     ) -> Result<Box<Self>, RequestError> {
-        let user_path = PathBuf::from(format!("./user_data/{}", user_name));
+        let user_data = match env::var("JUSTENCRYPT_USER_DATA_PATH") {
+            Ok(val) => val,
+            Err(_) => String::from("./user_data"),
+        };
 
-        if user_path.exists() {
+        let user_data_path = PathBuf::from(user_data).join(user_name);
+
+        if user_data_path.exists() {
             let mut decryptor = FileDecryptor::new(
-                &user_path.join("user.manifest"),
+                &user_data_path.join("user.manifest"),
                 Auth::Passphrase(passphrase.clone()),
             )
             .await
@@ -199,7 +205,7 @@ impl AppSession {
 
             Ok(Box::new(Self {
                 _user_name: user_name.to_string(),
-                user_path,
+                user_path: user_data_path,
                 manifest,
                 manifest_key: decryptor.key_salt,
             }))

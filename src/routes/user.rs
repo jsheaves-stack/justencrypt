@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{env, path::PathBuf, str::FromStr};
 
 use encryption::{Auth, FileEncryptor};
 use rocket::{
@@ -55,9 +55,14 @@ pub fn create_user_options() -> Result<RequestSuccess, RequestError> {
 
 #[put("/create", format = "json", data = "<reqbody>")]
 pub async fn create_user(reqbody: Json<CreateUser>) -> Result<RequestSuccess, RequestError> {
-    let user_data = PathBuf::from("./user_data/");
+    let user_data = match env::var("JUSTENCRYPT_USER_DATA_PATH") {
+        Ok(val) => val,
+        Err(_) => String::from("./user_data"),
+    };
 
-    if !user_data.exists() {
+    let user_data_path = PathBuf::from("./user_data/");
+
+    if !user_data_path.exists() {
         match fs::create_dir(&user_data).await {
             Ok(_) => (),
             Err(e) => {
@@ -67,7 +72,7 @@ pub async fn create_user(reqbody: Json<CreateUser>) -> Result<RequestSuccess, Re
         };
     }
 
-    let user_path = user_data.join(&reqbody.username);
+    let user_path = user_data_path.join(&reqbody.username);
 
     if !user_path.exists() {
         match fs::create_dir(&user_path).await {

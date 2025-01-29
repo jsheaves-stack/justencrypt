@@ -209,13 +209,11 @@ pub async fn get_file(
         None => return Err(RequestError::MissingActiveSession),
     };
 
+    let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
+    let encoded_file_path = session.user_path.join(encoded_file_name);
+
     // Initialize the stream decryptor for the requested file.
-    let mut decryptor = match StreamDecryptor::new(
-        session.user_path.join(file_path),
-        &session.manifest_key,
-    )
-    .await
-    {
+    let mut decryptor = match StreamDecryptor::new(encoded_file_path, &session.manifest_key).await {
         Ok(d) => d,
         Err(e) => {
             error!("Failed to create StreamDecryptor: {}", e);
