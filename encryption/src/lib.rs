@@ -412,8 +412,7 @@ mod tests {
     async fn test_stream_encryption_decryption() {
         use tokio::fs;
 
-        let temp_file_path = PathBuf::from("test_stream.enc");
-        let user_path = PathBuf::from("./");
+        let temp_file_path = PathBuf::from("./test_stream.enc");
         let passphrase = SecretString::new("securepassword123".to_string());
 
         let encryptor_derived_key = FileEncryptor::derive_key_from_string(&passphrase).unwrap();
@@ -423,7 +422,7 @@ mod tests {
         let key = SecretKey::from_slice(encryptor_derived_key.key.unprotected_as_bytes()).unwrap();
 
         let encoded_file_name = get_encoded_file_name(temp_file_path.clone()).unwrap();
-        let encoded_file_path = user_path.join(encoded_file_name);
+        let encoded_file_path = PathBuf::from(encoded_file_name.clone());
 
         let mut stream_encryptor =
             StreamEncryptor::new(encoded_file_path.clone(), encryptor_derived_key)
