@@ -36,6 +36,15 @@ pub struct AppState {
 #[launch]
 async fn rocket() -> _ {
     dotenv::dotenv().ok();
+
+    let secret_key = if cfg!(debug_assertions) {
+        env::var("JUSTENCRYPT_ROCKET_SECRET_KEY")
+            .unwrap_or_else(|_| "ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=".into())
+    } else {
+        env::var("JUSTENCRYPT_ROCKET_SECRET_KEY")
+            .expect("JUSTENCRYPT_ROCKET_SECRET_KEY must be set in release mode")
+    };
+
     let config = Config::figment()
         .merge((
             "address",
@@ -66,11 +75,7 @@ async fn rocket() -> _ {
             "log_level",
             env::var("JUSTENCRYPT_LOG_LEVEL").unwrap_or_else(|_| "critical".into()),
         ))
-        .merge((
-            "secret_key",
-            env::var("JUSTENCRYPT_ROCKET_SECRET_KEY")
-                .expect("JUSTENCRYPT_ROCKET_SECRET_KEY must be set"),
-        ))
+        .merge(("secret_key", secret_key))
         .merge((
             "limits",
             Limits::default()
