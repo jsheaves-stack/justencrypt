@@ -42,7 +42,7 @@ impl FileSystemNode {
         }
     }
 
-    pub fn _find_path(&self, path: &PathBuf) -> Option<&FileSystemNode> {
+    pub fn find_path(&self, path: &Path) -> Option<&FileSystemNode> {
         let components = path.iter().filter_map(|s| s.to_str());
         let mut current_node = self;
 
@@ -56,7 +56,7 @@ impl FileSystemNode {
         Some(current_node)
     }
 
-    pub fn find_path_nodes(&self, path: &PathBuf) -> Vec<&FileSystemNode> {
+    pub fn find_path_nodes(&self, path: &Path) -> Vec<&FileSystemNode> {
         let components = path.iter().filter_map(|s| s.to_str());
         let mut current_node = self;
 
@@ -72,7 +72,7 @@ impl FileSystemNode {
         current_node.children.values().collect()
     }
 
-    pub fn delete_item(&mut self, path: &PathBuf) -> Result<(), String> {
+    pub fn delete_item(&mut self, path: PathBuf) -> Result<(), String> {
         let mut components = path.iter().filter_map(|s| s.to_str()).peekable();
 
         let mut current_node = self;
@@ -124,13 +124,33 @@ impl FileSystemNode {
 
                 let file_name_with_extension = format!("{}.{}", file_name, file_extension);
 
-                // Insert the file at this location
                 self.children.insert(
                     file_name_with_extension,
                     FileSystemNode::new_file(file_name, encoded_file_name, file_extension),
                 );
             }
         }
+    }
+
+    pub fn collect_encoded_names_at_path(&self, path: &Path) -> Option<Vec<String>> {
+        let node = self.find_path(path)?;
+        Some(node.collect_encoded_names())
+    }
+
+    fn collect_encoded_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+
+        if self.is_file {
+            if let Some(encoded) = &self.encoded_name {
+                names.push(encoded.clone());
+            }
+        } else {
+            for child in self.children.values() {
+                names.extend(child.collect_encoded_names());
+            }
+        }
+
+        names
     }
 }
 
@@ -184,11 +204,11 @@ impl AppSession {
                 manifest_key: decryptor.key_salt,
             }))
         } else {
-            return Err(RequestError::UserDoesNotExist);
+            Err(RequestError::UserDoesNotExist)
         }
     }
 
-    pub async fn update_manifest(self: &mut Self) -> Result<(), Box<dyn Error>> {
+    pub async fn update_manifest(&mut self) -> Result<(), Box<dyn Error>> {
         let mut encryptor = FileEncryptor::new(
             &self.user_path.join("user.manifest"),
             Auth::DerivedKey(
@@ -201,6 +221,21 @@ impl AppSession {
         let json = serde_json::to_string(&self.manifest)?;
 
         encryptor.encrypt_file(json.as_bytes()).await?;
+
+        Ok(())
+    }
+
+    pub fn get_files_to_delete(&self, path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+        Ok(self
+            .manifest
+            .files
+            .collect_encoded_names_at_path(path)
+            .unwrap())
+    }
+
+    pub async fn remove_node_from_manifest(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        self.manifest.files.delete_item(path.to_path_buf())?;
+        self.update_manifest().await?;
 
         Ok(())
     }

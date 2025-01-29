@@ -54,6 +54,9 @@ pub async fn get_thumbnail(
     let user_path = session.user_path.clone();
     let cache_path = Path::new(&user_path).join(".cache");
 
+    let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
+    let encoded_file_path = cache_path.join(encoded_file_name);
+
     if !cache_path.exists() {
         match fs::create_dir(&cache_path).await {
             Ok(_) => (),
@@ -65,7 +68,7 @@ pub async fn get_thumbnail(
     }
 
     let encoded_thumbnail_file_name =
-        PathBuf::from(get_encoded_file_name(&Path::new(".cache").join(&file_path)).unwrap());
+        PathBuf::from(get_encoded_file_name(Path::new(".cache").join(file_path.clone())).unwrap());
 
     let thumbnail_path: PathBuf = cache_path.join(&encoded_thumbnail_file_name);
 
@@ -76,19 +79,14 @@ pub async fn get_thumbnail(
             ContentType::from_extension(thumbnail_extension.to_str().unwrap()).unwrap();
 
         // Initialize the stream decryptor for the requested file.
-        let mut decryptor = match StreamDecryptor::new(
-            &session.user_path,
-            &PathBuf::from(&file_path),
-            &session.manifest_key,
-        )
-        .await
-        {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to create StreamDecryptor: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
+        let mut decryptor =
+            match StreamDecryptor::new(encoded_file_path.clone(), &session.manifest_key).await {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to create StreamDecryptor: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
 
         // Open the encrypted file.
         let input_file = match File::open(decryptor.file_path.clone()).await {
@@ -139,7 +137,7 @@ pub async fn get_thumbnail(
             };
 
             // Break the loop if the decrypted chunk is empty.
-            if decrypted_chunk.len() == 0 {
+            if decrypted_chunk.is_empty() {
                 break;
             }
 
@@ -172,13 +170,7 @@ pub async fn get_thumbnail(
         thumbnail_buffer.set_position(0);
 
         // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(
-            &user_path.join(".cache"),
-            &PathBuf::from(".cache").join(file_path),
-            derived_key,
-        )
-        .await
-        {
+        let mut encryptor = match StreamEncryptor::new(encoded_file_path, derived_key).await {
             Ok(e) => e,
             Err(e) => {
                 error!("Failed to create StreamEncryptor: {}", e);
@@ -221,7 +213,7 @@ pub async fn get_thumbnail(
                 }
             };
 
-            match encryptor.write_chunk(&encrypted_chunk).await {
+            match encryptor.write_chunk(encrypted_chunk).await {
                 Ok(_) => (),
                 Err(e) => {
                     error!("Failed to write encrypted chunk: {}", e);
@@ -230,22 +222,17 @@ pub async fn get_thumbnail(
             }
         }
 
-        return Ok(thumbnail_buffer.into_inner());
+        Ok(thumbnail_buffer.into_inner())
     } else {
         // Initialize the stream decryptor for the requested file.
-        let mut decryptor = match StreamDecryptor::new(
-            &user_path.join(".cache"),
-            &PathBuf::from(".cache").join(file_path),
-            &session.manifest_key,
-        )
-        .await
-        {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to create StreamDecryptor: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
+        let mut decryptor =
+            match StreamDecryptor::new(encoded_file_path, &session.manifest_key).await {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to create StreamDecryptor: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
 
         // Open the encrypted file.
         let input_file = match File::open(decryptor.file_path.clone()).await {
@@ -295,13 +282,13 @@ pub async fn get_thumbnail(
                 }
             };
 
-            if decrypted_chunk.len() == 0 {
+            if decrypted_chunk.is_empty() {
                 break;
             }
 
             decrypted_file_buffer.extend_from_slice(&decrypted_chunk);
         }
 
-        return Ok(decrypted_file_buffer);
+        Ok(decrypted_file_buffer)
     }
 }

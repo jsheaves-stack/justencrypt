@@ -49,7 +49,7 @@ trait Encryptor {
         let key_memory = KEY_MEMORY.try_into()?;
         let key_length = KEY_LENGTH.try_into()?;
 
-        let key = kdf::derive_key(&password, &salt, key_iterations, key_memory, key_length)?;
+        let key = kdf::derive_key(&password, salt, key_iterations, key_memory, key_length)?;
 
         Ok(DerivedKey {
             key: SecretKey::from_slice(key.unprotected_as_bytes())?,
@@ -161,7 +161,7 @@ impl FileEncryptor {
     pub async fn encrypt_file(&mut self, file_data: &[u8]) -> Result<(), Box<dyn Error>> {
         let encrypted_data = aead::seal(&self.derived_key.key, file_data)?;
 
-        self.file.write_all(&self.derived_key.salt.as_ref()).await?;
+        self.file.write_all(self.derived_key.salt.as_ref()).await?;
         self.file.write_all(encrypted_data.as_slice()).await?;
 
         Ok(())
@@ -175,27 +175,20 @@ pub struct StreamEncryptor {
     salt: Salt,
 }
 
-pub fn get_encoded_file_name(file_path: &PathBuf) -> Result<String, Box<dyn Error>> {
-    let hashed_file_path: Digest = digest(&file_path.to_string_lossy().as_bytes())?;
+pub fn get_encoded_file_name(file_path: PathBuf) -> Result<String, Box<dyn Error>> {
+    let hashed_file_path: Digest = digest(file_path.to_string_lossy().as_bytes())?;
 
-    Ok(URL_SAFE.encode(hashed_file_path.as_ref().to_vec()))
+    Ok(URL_SAFE.encode(hashed_file_path.as_ref()))
 }
 
 impl StreamEncryptor {
-    pub async fn new(
-        user_path: &PathBuf,
-        file_path: &PathBuf,
-        derived_key: DerivedKey,
-    ) -> Result<Self, Box<dyn Error>> {
-        let encoded_file_name = get_encoded_file_name(&file_path)?;
-        let encoded_file_path = user_path.join(encoded_file_name);
-
+    pub async fn new(file_path: PathBuf, derived_key: DerivedKey) -> Result<Self, Box<dyn Error>> {
         let secret_key = SecretKey::generate(KEY_LENGTH)?;
         let salt = Salt::generate(SALT_SIZE)?;
         let (sealer, nonce) = StreamSealer::new(&secret_key)?;
 
         let mut key_encryptor = FileEncryptor::new(
-            &encoded_file_path.with_extension("meta"),
+            &file_path.with_extension("meta"),
             Auth::DerivedKey(
                 SecretKey::from_slice(derived_key.key.unprotected_as_bytes().to_vec().as_slice())
                     .unwrap(),
@@ -219,7 +212,8 @@ impl StreamEncryptor {
         let file = OpenOptions::new()
             .write(true)
             .create(true)
-            .open(&encoded_file_path)
+            .truncate(true)
+            .open(file_path)
             .await?;
 
         Ok(StreamEncryptor {
@@ -232,8 +226,8 @@ impl StreamEncryptor {
 
     // Function to write salt and nonce to the output file
     pub async fn write_salt_and_nonce(&mut self) -> Result<(), Box<dyn Error>> {
-        self.file.write_all(&self.salt.as_ref()).await?;
-        self.file.write_all(&self.nonce.as_ref()).await?;
+        self.file.write_all(self.salt.as_ref()).await?;
+        self.file.write_all(self.nonce.as_ref()).await?;
 
         Ok(())
     }
@@ -251,7 +245,7 @@ impl StreamEncryptor {
         Ok(chunk)
     }
 
-    pub async fn write_chunk(&mut self, data: &Vec<u8>) -> Result<(), Box<dyn Error>> {
+    pub async fn write_chunk(&mut self, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
         self.file.write_all(&data).await?;
 
         Ok(())
@@ -308,14 +302,8 @@ pub struct StreamDecryptor {
 }
 
 impl StreamDecryptor {
-    pub async fn new(
-        user_path: &PathBuf,
-        file_path: &PathBuf,
-        derived_key: &DerivedKey,
-    ) -> Result<Self, Box<dyn Error>> {
-        let encoded_file_name = get_encoded_file_name(&file_path)?;
-        let encoded_file_path = user_path.join(&encoded_file_name);
-        let key_file_path = encoded_file_path.with_extension("meta");
+    pub async fn new(file_path: PathBuf, derived_key: &DerivedKey) -> Result<Self, Box<dyn Error>> {
+        let key_file_path = file_path.with_extension("meta");
 
         let auth = Auth::DerivedKey(
             SecretKey::from_slice(derived_key.key.unprotected_as_bytes().to_vec().as_slice())
@@ -332,7 +320,7 @@ impl StreamDecryptor {
         let file_encryption_metadata =
             FileEncryptionMetadata::deserialize(&file_encryption_metadata_vec)?;
 
-        let file = File::open(&encoded_file_path).await?;
+        let file = File::open(file_path.clone()).await?;
         let mut reader = BufReader::new(file);
 
         let mut salt_buf = [0u8; SALT_SIZE];
@@ -344,14 +332,11 @@ impl StreamDecryptor {
         let nonce = Nonce::from_slice(&nonce_buf)?;
 
         let opener = StreamOpener::new(
-            &SecretKey::from_slice(&file_encryption_metadata.key.as_slice()).unwrap(),
+            &SecretKey::from_slice(file_encryption_metadata.key.as_slice()).unwrap(),
             &nonce,
         )?;
 
-        Ok(StreamDecryptor {
-            opener,
-            file_path: PathBuf::from(encoded_file_path),
-        })
+        Ok(StreamDecryptor { opener, file_path })
     }
 
     pub async fn decrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -437,8 +422,11 @@ mod tests {
             Salt::from_slice(encryptor_derived_key.salt.as_ref().to_vec().as_slice()).unwrap();
         let key = SecretKey::from_slice(encryptor_derived_key.key.unprotected_as_bytes()).unwrap();
 
+        let encoded_file_name = get_encoded_file_name(temp_file_path.clone()).unwrap();
+        let encoded_file_path = user_path.join(encoded_file_name);
+
         let mut stream_encryptor =
-            StreamEncryptor::new(&user_path, &temp_file_path, encryptor_derived_key)
+            StreamEncryptor::new(encoded_file_path.clone(), encryptor_derived_key)
                 .await
                 .unwrap();
 
@@ -449,14 +437,14 @@ mod tests {
         let encrypted_chunk = stream_encryptor.encrypt_chunk(data).await.unwrap();
 
         stream_encryptor
-            .write_chunk(&encrypted_chunk)
+            .write_chunk(encrypted_chunk.clone())
             .await
             .unwrap();
 
         let decryptor_derived_key = DerivedKey { salt, key };
 
         let mut stream_decryptor =
-            StreamDecryptor::new(&user_path, &temp_file_path, &decryptor_derived_key)
+            StreamDecryptor::new(encoded_file_path.clone(), &decryptor_derived_key)
                 .await
                 .unwrap();
 
@@ -467,12 +455,10 @@ mod tests {
 
         assert_eq!(decrypted_chunk, data);
 
-        let encoded_file_name = get_encoded_file_name(&temp_file_path).unwrap();
-        let encoded_file_path = user_path.join(encoded_file_name);
-        let key_file_path = encoded_file_path.with_extension("meta");
-
         // Clean up
-        fs::remove_file(encoded_file_path).await.unwrap();
-        fs::remove_file(key_file_path).await.unwrap();
+        fs::remove_file(encoded_file_path.clone()).await.unwrap();
+        fs::remove_file(encoded_file_path.with_extension("meta"))
+            .await
+            .unwrap();
     }
 }

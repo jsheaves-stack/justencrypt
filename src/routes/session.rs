@@ -31,7 +31,7 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    let passphrase = SecretString::from_str(&reqbody.password.as_str()).unwrap();
+    let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
     let session = AppSession::open(&reqbody.username, &passphrase).await;
 
     match session {
@@ -52,7 +52,7 @@ pub async fn create_session(
         }
         Err(e) => {
             error!("{}", e);
-            return Err(RequestError::FailedToCreateUserSession);
+            Err(RequestError::FailedToCreateUserSession)
         }
     }
 }
@@ -76,9 +76,9 @@ pub async fn destroy_session(
     };
 
     match active_sessions.remove(cookie.value()) {
-        Some(_) => return Ok(RequestSuccess::NoContent),
-        None => return Err(RequestError::MissingActiveSession),
-    };
+        Some(_) => Ok(RequestSuccess::NoContent),
+        None => Err(RequestError::MissingActiveSession),
+    }
 }
 
 #[options("/")]

@@ -113,6 +113,6 @@ pub async fn create_user(reqbody: Json<CreateUser>) -> Result<RequestSuccess, Re
 
         Ok(RequestSuccess::NoContent)
     } else {
-        return Err(RequestError::UserAlreadyExists);
+        Err(RequestError::UserAlreadyExists)
     }
 }

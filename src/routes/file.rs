@@ -73,7 +73,7 @@ pub async fn put_file(
     session.manifest.files.insert_path(
         components.into_iter(),
         file_name.clone(),
-        get_encoded_file_name(&file_path).unwrap(),
+        get_encoded_file_name(file_path.clone()).unwrap(),
     );
 
     match session.update_manifest().await {
@@ -92,8 +92,11 @@ pub async fn put_file(
 
     // Spawn an async task to handle file encryption and writing.
     tokio::spawn(async move {
+        let encoded_file_name = get_encoded_file_name(file_path).unwrap();
+        let encoded_file_path = user_path.join(encoded_file_name);
+
         // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(&user_path, &file_path, derived_key).await {
+        let mut encryptor = match StreamEncryptor::new(encoded_file_path, derived_key).await {
             Ok(e) => e,
             Err(e) => {
                 error!("Failed to create StreamEncryptor: {}", e);
@@ -120,7 +123,7 @@ pub async fn put_file(
                 }
             };
 
-            match encryptor.write_chunk(&encrypted_chunk).await {
+            match encryptor.write_chunk(encrypted_chunk).await {
                 Ok(_) => (),
                 Err(e) => {
                     error!("Failed to write encrypted chunk: {}", e);
@@ -179,7 +182,7 @@ pub async fn put_file(
                 }
             };
 
-            current_size = current_size - BUFFER_SIZE;
+            current_size -= BUFFER_SIZE;
         }
     }
 
@@ -207,14 +210,18 @@ pub async fn get_file(
     };
 
     // Initialize the stream decryptor for the requested file.
-    let mut decryptor =
-        match StreamDecryptor::new(&session.user_path, &file_path, &session.manifest_key).await {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to create StreamDecryptor: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
+    let mut decryptor = match StreamDecryptor::new(
+        session.user_path.join(file_path),
+        &session.manifest_key,
+    )
+    .await
+    {
+        Ok(d) => d,
+        Err(e) => {
+            error!("Failed to create StreamDecryptor: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
+    };
 
     // Open the encrypted file.
     let input_file = match File::open(decryptor.file_path.clone()).await {
@@ -270,7 +277,7 @@ pub async fn get_file(
             };
 
             // Break the loop if the decrypted chunk is empty.
-            if decrypted_chunk.len() == 0 {
+            if decrypted_chunk.is_empty() {
                 break;
             }
 
@@ -315,7 +322,7 @@ pub async fn delete_file(
         None => return Err(RequestError::MissingActiveSession),
     };
 
-    let file_name = get_encoded_file_name(&file_path).unwrap();
+    let file_name = get_encoded_file_name(file_path.clone()).unwrap();
     let full_file_path = session.user_path.join(&file_name);
 
     match fs::remove_file(&full_file_path).await {
@@ -334,7 +341,7 @@ pub async fn delete_file(
         }
     };
 
-    match session.manifest.files.delete_item(&file_path) {
+    match session.manifest.files.delete_item(file_path) {
         Ok(_) => (),
         Err(e) => {
             error!("Failed to delete file from manifest: {}", e);
