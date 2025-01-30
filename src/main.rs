@@ -1,10 +1,10 @@
 use rocket::{
+    config::{Config, TlsConfig},
     data::{ByteUnit, Limits},
     launch,
     shield::{Hsts, Shield},
     time::Duration,
     tokio::sync::RwLock,
-    Config,
 };
 use routes::{
     file::{delete_file, file_options, get_file, put_file},
@@ -100,8 +100,7 @@ async fn rocket() -> _ {
             env::var("JUSTENCRYPT_LOG_LEVEL").unwrap_or_else(|_| "critical".into()),
         ))
         .merge(("secret_key", secret_key))
-        .merge(("cert", tls_cert_path))
-        .merge(("key", tls_key_path))
+        .merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)))
         .merge((
             "limits",
             Limits::default()
