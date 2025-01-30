@@ -20,7 +20,7 @@ impl Fairing for CORS {
     async fn on_response<'r>(&self, request: &'r Request<'_>, response: &mut Response<'r>) {
         let methods = "POST, GET, PATCH, PUT, HEAD, OPTIONS, DELETE";
 
-        if let Ok(origin) = env::var("JUSTENCRYPT_ROCKET_ALLOW_ORIGIN") {
+        if let Ok(origin) = env::var("JUSTENCRYPT_ALLOW_ORIGIN") {
             response.set_header(Header::new("Access-Control-Allow-Origin", origin));
         }
 
