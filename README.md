@@ -42,7 +42,9 @@ The API uses environment variables for configuration. Below are the required var
 | `JUSTENCRYPT_WORKERS`                  | Number of worker threads for handling requests. Default: `16`. |
 | `JUSTENCRYPT_KEEP_ALIVE`               | Keep-alive timeout in seconds. Default: `5`. |
 | `JUSTENCRYPT_LOG_LEVEL`                | Logging level for Rocket. Options: `normal`, `critical`, etc. Default: `critical`. |
-| `JUSTENCRYPT_ROCKET_SECRET_KEY`        | Required for securing private cookies. A suitable 256-bit base64 key can be generated using OpenSSL: `openssl rand -base64 32`. |
+| `JUSTENCRYPT_ROCKET_SECRET_KEY`        | Required for securing private cookies. A suitable 256-bit base64 key can be generated using OpenSSL: `openssl rand -base64 32`. Required in release mode. |
+| `JUSTENCRYPT_TLS_KEY_PATH`             | The path to the tls key file. Required in release mode. |
+| `JUSTENCRYPT_TLS_CERT_PATH`            | The path to the tls cert file. Required in release mode. |
 | `JUSTENCRYPT_ALLOW_ORIGIN`             | The Access-Control-Allow-Origin domain value. Default: `http://localhost:8000`. |
 | `JUSTENCRYPT_LIMITS_FORM`              | Maximum size allowed for form submissions. Default: `10 MiB`. |
 | `JUSTENCRYPT_LIMITS_DATA_FORM`         | Maximum size allowed for data-form submissions. Default: `10 MiB`. |
@@ -62,6 +64,8 @@ JUSTENCRYPT_WORKERS=16
 JUSTENCRYPT_KEEP_ALIVE=5
 JUSTENCRYPT_LOG_LEVEL=critical
 JUSTENCRYPT_ROCKET_SECRET_KEY=your_generated_secret_key
+JUSTENCRYPT_TLS_KEY_PATH=./default.key
+JUSTENCRYPT_TLS_CERT_PATH=./default.crt
 JUSTENCRYPT_ALLOW_ORIGIN=https://example.com
 JUSTENCRYPT_LIMITS_FORM=10MiB
 JUSTENCRYPT_LIMITS_DATA_FORM=10MiB

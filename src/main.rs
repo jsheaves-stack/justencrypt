@@ -33,17 +33,41 @@ pub struct AppState {
     active_sessions: RwLock<HashMap<String, AppSession>>,
 }
 
+fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
+    if cfg!(debug_assertions) {
+        match env::var(var_name) {
+            Ok(v) => v,
+            Err(_) => default.to_owned(),
+        }
+    } else {
+        match env::var(var_name) {
+            Ok(v) => v,
+            Err(e) => panic!("{} Error: {}", error_msg, e),
+        }
+    }
+}
+
 #[launch]
 async fn rocket() -> _ {
     dotenv::dotenv().ok();
 
-    let secret_key = if cfg!(debug_assertions) {
-        env::var("JUSTENCRYPT_ROCKET_SECRET_KEY")
-            .unwrap_or_else(|_| "ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=".into())
-    } else {
-        env::var("JUSTENCRYPT_ROCKET_SECRET_KEY")
-            .expect("JUSTENCRYPT_ROCKET_SECRET_KEY must be set in release mode")
-    };
+    let secret_key = get_required_env_var(
+        "JUSTENCRYPT_ROCKET_SECRET_KEY",
+        "ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=",
+        "JUSTENCRYPT_ROCKET_SECRET_KEY must be set in release mode.",
+    );
+
+    let tls_key_path = get_required_env_var(
+        "JUSTENCRYPT_TLS_KEY_PATH",
+        "",
+        "JUSTENCRYPT_TLS_KEY_PATH must be set in release mode.",
+    );
+
+    let tls_cert_path = get_required_env_var(
+        "JUSTENCRYPT_TLS_CERT_PATH",
+        "",
+        "JUSTENCRYPT_TLS_CERT_PATH must be set in release mode.",
+    );
 
     let config = Config::figment()
         .merge((
@@ -76,6 +100,8 @@ async fn rocket() -> _ {
             env::var("JUSTENCRYPT_LOG_LEVEL").unwrap_or_else(|_| "critical".into()),
         ))
         .merge(("secret_key", secret_key))
+        .merge(("cert", tls_cert_path))
+        .merge(("key", tls_key_path))
         .merge((
             "limits",
             Limits::default()

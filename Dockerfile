@@ -31,14 +31,8 @@ WORKDIR /usr/local/bin
 # Copy the built executable from the builder stage
 COPY --from=builder /usr/src/justencrypt/target/release/justencrypt .
 
-# Copy the Rocket.toml configuration file
-COPY --from=builder /usr/src/justencrypt/Rocket.toml .
-
 # Create a directory for user data
 RUN mkdir -p /usr/local/bin/user_data
-
-# Set the environment variable for the Rocket configuration file
-ENV ROCKET_CONFIG=/usr/local/bin/Rocket.toml
 
 # Expose the port the app runs on
 EXPOSE 8000
