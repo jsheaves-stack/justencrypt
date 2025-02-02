@@ -52,10 +52,7 @@ pub async fn get_thumbnail(
     };
 
     let user_path = session.user_path.clone();
-    let cache_path = Path::new(&user_path).join(".cache");
-
-    let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
-    let encoded_file_path = cache_path.join(encoded_file_name);
+    let cache_path = user_path.join(".cache");
 
     if !cache_path.exists() {
         match fs::create_dir(&cache_path).await {
@@ -80,7 +77,7 @@ pub async fn get_thumbnail(
 
         // Initialize the stream decryptor for the requested file.
         let mut decryptor =
-            match StreamDecryptor::new(encoded_file_path.clone(), &session.manifest_key).await {
+            match StreamDecryptor::new(thumbnail_path.clone(), &session.manifest_key).await {
                 Ok(d) => d,
                 Err(e) => {
                     error!("Failed to create StreamDecryptor: {}", e);
@@ -170,7 +167,7 @@ pub async fn get_thumbnail(
         thumbnail_buffer.set_position(0);
 
         // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(encoded_file_path, derived_key).await {
+        let mut encryptor = match StreamEncryptor::new(thumbnail_path, derived_key).await {
             Ok(e) => e,
             Err(e) => {
                 error!("Failed to create StreamEncryptor: {}", e);
@@ -225,14 +222,14 @@ pub async fn get_thumbnail(
         Ok(thumbnail_buffer.into_inner())
     } else {
         // Initialize the stream decryptor for the requested file.
-        let mut decryptor =
-            match StreamDecryptor::new(encoded_file_path, &session.manifest_key).await {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to create StreamDecryptor: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
+        let mut decryptor = match StreamDecryptor::new(thumbnail_path, &session.manifest_key).await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to create StreamDecryptor: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
         // Open the encrypted file.
         let input_file = match File::open(decryptor.file_path.clone()).await {
