@@ -75,9 +75,12 @@ pub async fn get_thumbnail(
         let content_type =
             ContentType::from_extension(thumbnail_extension.to_str().unwrap()).unwrap();
 
+        let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
+        let encoded_file_path = user_path.join(encoded_file_name);
+
         // Initialize the stream decryptor for the requested file.
         let mut decryptor =
-            match StreamDecryptor::new(thumbnail_path.clone(), &session.manifest_key).await {
+            match StreamDecryptor::new(encoded_file_path, &session.manifest_key).await {
                 Ok(d) => d,
                 Err(e) => {
                     error!("Failed to create StreamDecryptor: {}", e);
