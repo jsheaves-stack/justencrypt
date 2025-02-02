@@ -1,6 +1,7 @@
 use rocket::{
     config::{Config, TlsConfig},
     data::{ByteUnit, Limits},
+    figment::Figment,
     launch,
     shield::{Hsts, Shield},
     time::Duration,
@@ -47,10 +48,7 @@ fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> Strin
     }
 }
 
-#[launch]
-async fn rocket() -> _ {
-    dotenv::dotenv().ok();
-
+fn get_app_config() -> Figment {
     let secret_key = get_required_env_var(
         "JUSTENCRYPT_ROCKET_SECRET_KEY",
         "ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=",
@@ -69,7 +67,7 @@ async fn rocket() -> _ {
         "JUSTENCRYPT_TLS_CERT_PATH must be set in release mode.",
     );
 
-    let config = Config::figment()
+    Config::figment()
         .merge((
             "address",
             env::var("JUSTENCRYPT_ADDRESS").unwrap_or_else(|_| "0.0.0.0".into()),
@@ -160,7 +158,14 @@ async fn rocket() -> _ {
                         .parse::<ByteUnit>()
                         .unwrap(),
                 ),
-        ));
+        ))
+}
+
+#[launch]
+async fn rocket() -> _ {
+    dotenv::dotenv().ok();
+
+    let app_config = get_app_config();
 
     let state = AppState {
         active_sessions: RwLock::default(),
@@ -168,7 +173,7 @@ async fn rocket() -> _ {
 
     let hsts = Hsts::Enable(Duration::days(365));
 
-    rocket::custom(config)
+    rocket::custom(app_config)
         .attach(CORS)
         .attach(Shield::default().enable(hsts))
         .manage(state)

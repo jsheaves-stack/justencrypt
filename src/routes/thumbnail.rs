@@ -55,7 +55,7 @@ pub async fn get_thumbnail(
     let cache_path = Path::new(&user_path).join(".cache");
 
     let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
-    let encoded_file_path = session.user_path.join(encoded_file_name);
+    let encoded_file_path = cache_path.join(encoded_file_name);
 
     if !cache_path.exists() {
         match fs::create_dir(&cache_path).await {
