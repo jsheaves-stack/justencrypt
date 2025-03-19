@@ -1,8 +1,8 @@
 use std::{io::SeekFrom, path::PathBuf};
 
 use encryption::{
-    get_encoded_file_name, DerivedKey, Salt, SecretKey, StreamDecryptor, StreamEncryptor,
-    BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
+    DerivedKey, Salt, SecretKey, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
 };
 
 use rocket::{

@@ -7,7 +7,7 @@ use std::{
 
 pub use encryption::Salt;
 
-use encryption::{Auth, DerivedKey, FileDecryptor, FileEncryptor, SecretKey};
+use encryption::{file_decryptor::FileDecryptor, Auth, DerivedKey, FileEncryptor, SecretKey};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
