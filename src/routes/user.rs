@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf, str::FromStr};
 
-use encryption::{Auth, FileEncryptor};
+use encryption::{file_encryptor::FileEncryptor, Auth};
 use rocket::{
     http::CookieJar,
     serde::json::Json,

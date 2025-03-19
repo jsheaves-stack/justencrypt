@@ -3,7 +3,12 @@ use std::{error::Error, path::PathBuf};
 use orion::aead;
 use tokio::{fs::File, io::AsyncWriteExt};
 
-use crate::{Auth, DerivedKey, Encryptor, FileEncryptor};
+use crate::{Auth, DerivedKey, Encryptor};
+
+pub struct FileEncryptor {
+    file: File,
+    derived_key: DerivedKey,
+}
 
 impl Encryptor for FileEncryptor {}
 

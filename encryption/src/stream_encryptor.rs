@@ -11,8 +11,8 @@ use tokio::{
 };
 
 use crate::{
-    Auth, DerivedKey, Encryptor, FileEncryptionMetadata, FileEncryptor, BUFFER_SIZE, KEY_LENGTH,
-    NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    file_encryptor::FileEncryptor, Auth, DerivedKey, Encryptor, FileEncryptionMetadata,
+    BUFFER_SIZE, KEY_LENGTH, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
 };
 
 pub struct StreamEncryptor {

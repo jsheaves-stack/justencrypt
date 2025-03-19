@@ -8,7 +8,6 @@ pub use orion::{
     kex::SecretKey,
 };
 use secrecy::{ExposeSecret, SecretString};
-use tokio::fs::File;
 
 use std::{error::Error, path::PathBuf};
 
@@ -63,11 +62,6 @@ trait Encryptor {
 pub enum Auth {
     Passphrase(SecretString),
     DerivedKey(SecretKey, Salt),
-}
-
-pub struct FileEncryptor {
-    file: File,
-    derived_key: DerivedKey,
 }
 
 pub struct FileEncryptionMetadata {
@@ -161,8 +155,8 @@ fn _decrypt(
 #[cfg(test)]
 mod tests {
     use crate::{
-        file_decryptor::FileDecryptor, stream_decryptor::StreamDecryptor,
-        stream_encryptor::StreamEncryptor,
+        file_decryptor::FileDecryptor, file_encryptor::FileEncryptor,
+        stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
     };
 
     use super::*;
