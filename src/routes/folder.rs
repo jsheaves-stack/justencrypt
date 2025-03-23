@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::{
-    db::sql::File,
+    db::db::File,
     enums::{request_error::RequestError, request_success::RequestSuccess},
     AppState,
 };

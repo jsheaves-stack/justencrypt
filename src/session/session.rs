@@ -6,10 +6,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio;
 use secrecy::SecretString;
 
-use crate::db::{
-    self,
-    sql::{self, File},
-};
+use crate::db::db::{self, File};
 
 pub struct AppSession {
     user_path: PathBuf,
@@ -34,7 +31,7 @@ impl AppSession {
             let user_path = PathBuf::from(user_data_path).join(user_name.clone());
             let user_db_path = user_path.join(format!("{user_name}.db"));
 
-            let db_pool = db::sql::create_user_db_connection(user_db_path, passphrase.clone());
+            let db_pool = db::create_user_db_connection(user_db_path, passphrase.clone());
 
             Self { user_path, db_pool }
         })
@@ -56,7 +53,7 @@ impl AppSession {
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get().unwrap();
 
-            sql::add_file(
+            db::add_file(
                 &db,
                 file_path.to_str().unwrap(),
                 &encoded_file_name.as_str(),
@@ -79,7 +76,7 @@ impl AppSession {
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get().unwrap();
 
-            sql::add_folder(&db, folder_path.to_str().unwrap()).unwrap();
+            db::add_folder(&db, folder_path.to_str().unwrap()).unwrap();
         })
         .await?;
 
@@ -96,7 +93,7 @@ impl AppSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get().unwrap();
-            sql::add_thumbnail(
+            db::add_thumbnail(
                 &db,
                 file_path.to_str().unwrap(),
                 encoded_name.as_str(),
@@ -120,7 +117,7 @@ impl AppSession {
         Ok(tokio::task::spawn_blocking(move || {
             let db = db_pool.get().unwrap();
 
-            sql::get_folder(&db, folder_path.to_str().unwrap()).unwrap()
+            db::get_folder(&db, folder_path.to_str().unwrap()).unwrap()
         })
         .await?)
     }
@@ -134,7 +131,7 @@ impl AppSession {
 
         Ok(tokio::task::spawn_blocking(move || {
             let db = db_pool.get().unwrap();
-            sql::get_thumbnail(&db, file_path.to_str().unwrap()).unwrap()
+            db::get_thumbnail(&db, file_path.to_str().unwrap()).unwrap()
         })
         .await?)
     }
@@ -148,7 +145,7 @@ impl AppSession {
         Ok(tokio::task::spawn_blocking(move || {
             let db = db_pool.get().unwrap();
 
-            sql::get_file(&db, file_path.to_str().unwrap()).unwrap()
+            db::get_file(&db, file_path.to_str().unwrap()).unwrap()
         })
         .await?)
     }

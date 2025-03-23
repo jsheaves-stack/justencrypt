@@ -145,8 +145,6 @@ pub async fn get_thumbnail(
             decrypted_file_buffer.extend_from_slice(&decrypted_chunk);
         }
 
-        
-
         let image_format = match content_type {
             _ if content_type == ContentType::JPEG => ImageFormat::Jpeg,
             _ if content_type == ContentType::PNG => ImageFormat::Png,
