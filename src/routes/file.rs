@@ -40,7 +40,7 @@ pub async fn put_file(
     cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
 ) -> Result<RequestSuccess, RequestError> {
     // Lock the active sessions map for write access.
-    let mut active_sessions = state.active_sessions.write().await;
+    let active_sessions = state.active_sessions.read().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
     let cookie = match cookies.get_private("session_id") {
@@ -48,10 +48,12 @@ pub async fn put_file(
         None => return Err(RequestError::MissingSessionId),
     };
 
-    let session = match active_sessions.get_mut(cookie.value()) {
+    let mut session = match active_sessions.get(cookie.value()) {
         Some(s) => s,
         None => return Err(RequestError::MissingActiveSession),
-    };
+    }
+    .lock()
+    .await;
 
     let user_path = session.get_user_path().clone();
     let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
@@ -72,9 +74,6 @@ pub async fn put_file(
         .add_file(file_path.clone(), encoded_file_name, metadata)
         .await
         .unwrap();
-
-    // Drop active_sessions to release the write lock so we're not holding onto it the entire time we're processing a file.
-    drop(active_sessions);
 
     // Create a channel for transferring file data chunks with a specified buffer size.
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
@@ -184,7 +183,9 @@ pub async fn get_file(
     let session = match active_sessions.get(cookie.value()) {
         Some(s) => s,
         None => return Err(RequestError::MissingActiveSession),
-    };
+    }
+    .lock()
+    .await;
 
     let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
     let encoded_file_path = session.get_user_path().join(encoded_file_name);
@@ -289,7 +290,7 @@ pub async fn delete_file(
     cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
 ) -> Result<RequestSuccess, RequestError> {
     // Lock the active sessions map for write access.
-    let mut active_sessions = state.active_sessions.write().await;
+    let active_sessions = state.active_sessions.read().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
     let cookie = match cookies.get_private("session_id") {
@@ -297,10 +298,12 @@ pub async fn delete_file(
         None => return Err(RequestError::MissingSessionId),
     };
 
-    let session = match active_sessions.get_mut(cookie.value()) {
+    let session = match active_sessions.get(cookie.value()) {
         Some(s) => s,
         None => return Err(RequestError::MissingActiveSession),
-    };
+    }
+    .lock()
+    .await;
 
     let file_name = get_encoded_file_name(file_path.clone()).unwrap();
     let full_file_path = session.get_user_path().join(&file_name);

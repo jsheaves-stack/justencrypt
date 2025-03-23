@@ -5,7 +5,7 @@ use rocket::{
     launch,
     shield::{Hsts, Shield},
     time::Duration,
-    tokio::sync::RwLock,
+    tokio::sync::{Mutex, RwLock},
 };
 use routes::{
     file::{delete_file, file_options, get_file, put_file},
@@ -18,7 +18,7 @@ use routes::{
     user::{create_user, create_user_options, manifest_options},
 };
 use session::session::AppSession;
-use std::{collections::HashMap, env};
+use std::{collections::HashMap, env, sync::Arc};
 use web::fairings::CORS;
 
 mod db;
@@ -32,11 +32,11 @@ extern crate rocket;
 extern crate serde;
 
 pub struct AppState {
-    active_sessions: RwLock<HashMap<String, AppSession>>,
+    active_sessions: RwLock<HashMap<String, Arc<Mutex<AppSession>>>>,
 }
 
 fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
-    if !cfg!(debug_assertions) {
+    if cfg!(debug_assertions) {
         match env::var(var_name) {
             Ok(v) => v,
             Err(_) => default.to_owned(),
@@ -166,9 +166,9 @@ fn get_app_config() -> Figment {
         return app_config;
     }
 
-    // app_config
-    //     .to_owned()
-    //     .merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)));
+    app_config
+        .to_owned()
+        .merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)));
 
     app_config
 }

@@ -1,8 +1,9 @@
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
     serde::json::Json,
+    tokio::sync::Mutex,
     State,
 };
 use secrecy::SecretString;
@@ -32,29 +33,23 @@ pub async fn create_session(
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
-    let session = AppSession::open(&reqbody.username, &passphrase).await;
+    let session = Arc::new(Mutex::new(
+        AppSession::open(&reqbody.username, &passphrase)
+            .await
+            .unwrap(),
+    ));
 
-    match session {
-        Ok(v) => {
-            let uuid = Uuid::new_v4().hyphenated().to_string();
+    let uuid = Uuid::new_v4().hyphenated().to_string();
 
-            let mut cookie = Cookie::new("session_id", uuid.clone());
+    let mut cookie = Cookie::new("session_id", uuid.clone());
 
-            cookie.set_same_site(Some(SameSite::Strict));
+    cookie.set_same_site(Some(SameSite::Strict));
 
-            cookies.add_private(cookie);
+    cookies.add_private(cookie);
 
-            let mut active_sessions = state.active_sessions.write().await;
+    state.active_sessions.write().await.insert(uuid, session);
 
-            active_sessions.insert(uuid, v);
-
-            Ok(RequestSuccess::NoContent)
-        }
-        Err(e) => {
-            error!("{}", e);
-            Err(RequestError::FailedToCreateUserSession)
-        }
-    }
+    Ok(RequestSuccess::NoContent)
 }
 
 #[options("/destroy")]

@@ -1,10 +1,28 @@
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use encryption::{FileEncryptionMetadata, SecretKey};
-use r2d2::PooledConnection;
+use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, OptionalExtension};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+
+pub fn create_user_db_connection(
+    db_path: PathBuf,
+    password: SecretString,
+) -> Pool<SqliteConnectionManager> {
+    let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
+        conn.execute_batch(&format!(
+            "PRAGMA key = '{}'; PRAGMA foreign_keys = ON;",
+            password.expose_secret()
+        ))
+        .unwrap();
+
+        conn.execute_batch(get_schema())
+    });
+
+    Pool::new(db_manager).unwrap()
+}
 
 pub fn get_schema() -> &'static str {
     "

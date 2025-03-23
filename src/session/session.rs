@@ -7,7 +7,7 @@ use rocket::tokio;
 use secrecy::SecretString;
 
 use crate::db::{
-    db,
+    self,
     sql::{self, File},
 };
 
@@ -34,7 +34,7 @@ impl AppSession {
             let user_path = PathBuf::from(user_data_path).join(user_name.clone());
             let user_db_path = user_path.join(format!("{user_name}.db"));
 
-            let db_pool = db::create_user_db_connection(user_db_path, passphrase.clone());
+            let db_pool = db::sql::create_user_db_connection(user_db_path, passphrase.clone());
 
             Self { user_path, db_pool }
         })

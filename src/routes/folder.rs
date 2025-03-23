@@ -27,7 +27,7 @@ pub async fn get_folder(
     cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
 ) -> Result<Json<Vec<File>>, RequestError> {
     // Read access to the active sessions map.
-    let mut active_sessions = state.active_sessions.write().await;
+    let active_sessions = state.active_sessions.read().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
     let cookie = match cookies.get_private("session_id") {
@@ -35,10 +35,12 @@ pub async fn get_folder(
         None => return Err(RequestError::MissingSessionId),
     };
 
-    let session = match active_sessions.get_mut(cookie.value()) {
+    let mut session = match active_sessions.get(cookie.value()) {
         Some(s) => s,
         None => return Err(RequestError::MissingActiveSession),
-    };
+    }
+    .lock()
+    .await;
 
     Ok(rocket::serde::json::Json(
         session.get_folder(folder_path).await.unwrap(),
@@ -52,7 +54,7 @@ pub async fn create_folder(
     cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
 ) -> Result<RequestSuccess, RequestError> {
     // Lock the active sessions map for write access.
-    let mut active_sessions = state.active_sessions.write().await;
+    let active_sessions = state.active_sessions.read().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
     let cookie = match cookies.get_private("session_id") {
@@ -60,10 +62,12 @@ pub async fn create_folder(
         None => return Err(RequestError::MissingSessionId),
     };
 
-    let session = match active_sessions.get_mut(cookie.value()) {
+    let mut session = match active_sessions.get(cookie.value()) {
         Some(s) => s,
         None => return Err(RequestError::MissingActiveSession),
-    };
+    }
+    .lock()
+    .await;
 
     session.add_folder(folder_path).await.unwrap();
 
