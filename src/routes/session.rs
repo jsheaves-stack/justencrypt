@@ -34,9 +34,10 @@ pub async fn create_session(
 ) -> Result<RequestSuccess, RequestError> {
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
     let session = Arc::new(Mutex::new(
-        AppSession::open(&reqbody.username, &passphrase)
-            .await
-            .unwrap(),
+        match AppSession::open(&reqbody.username, &passphrase).await {
+            Ok(a) => a,
+            Err(_) => return Err(RequestError::FailedToCreateUserSession),
+        },
     ));
 
     let uuid = Uuid::new_v4().hyphenated().to_string();

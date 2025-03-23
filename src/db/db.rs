@@ -7,21 +7,38 @@ use rusqlite::{params, OptionalExtension};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, thiserror::Error)]
+pub enum DbError {
+    #[error("Database error: {0}")]
+    Rusqlite(#[from] rusqlite::Error),
+
+    #[error("Missing file name in path")]
+    MissingFileName,
+
+    #[error("Failed to convert path to str")]
+    InvalidPath,
+
+    #[error("Connection pool error: {0}")]
+    PoolError(#[from] r2d2::Error),
+
+    #[error("Thread join error: {0}")]
+    ThreadJoinError(String),
+}
+
 pub fn create_user_db_connection(
     db_path: PathBuf,
     password: SecretString,
-) -> Pool<SqliteConnectionManager> {
+) -> Result<Pool<SqliteConnectionManager>, DbError> {
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
         conn.execute_batch(&format!(
             "PRAGMA key = '{}'; PRAGMA foreign_keys = ON;",
             password.expose_secret()
-        ))
-        .unwrap();
+        ))?;
 
         conn.execute_batch(get_schema())
     });
 
-    Pool::new(db_manager).unwrap()
+    Ok(Pool::new(db_manager)?)
 }
 
 pub fn get_schema() -> &'static str {
@@ -74,14 +91,13 @@ pub fn get_schema() -> &'static str {
 fn get_folder_id_and_create_if_missing(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
-) -> Result<i32, rusqlite::Error> {
+) -> Result<i32, DbError> {
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
 
     for component in path.components() {
         let name = match component {
             Component::Normal(name) => name.to_string_lossy().to_string(),
-            Component::RootDir => continue,
             _ => continue,
         };
 
@@ -100,7 +116,6 @@ fn get_folder_id_and_create_if_missing(
                     "INSERT INTO folders (parent_folder_id, name) VALUES (?1, ?2)",
                     params![current_id, name],
                 )?;
-
                 db.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?
             }
         };
@@ -112,14 +127,13 @@ fn get_folder_id_and_create_if_missing(
 pub fn get_folder_id(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
-) -> Result<Option<i32>, rusqlite::Error> {
+) -> Result<Option<i32>, DbError> {
     let path = Path::new(folder_path_str.trim_matches('/'));
-    let mut current_id = 1; // Start from ROOT
+    let mut current_id = 1;
 
     for component in path.components() {
         let name = match component {
             Component::Normal(name) => name.to_string_lossy().to_string(),
-            Component::RootDir => continue,
             _ => continue,
         };
 
@@ -149,22 +163,26 @@ pub fn add_file(
     nonce_size: usize,
     salt_size: usize,
     tag_size: usize,
-) -> Result<(), rusqlite::Error> {
+) -> Result<(), DbError> {
     let path = Path::new(full_file_path.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let file_name = path
         .file_name()
-        .expect("Missing file name")
+        .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
 
-    let file_extension = path.extension().unwrap().to_string_lossy();
+    let file_extension = path
+        .extension()
+        .map(|ext| ext.to_string_lossy())
+        .unwrap_or_default();
+
     let parent_folder_id =
         get_folder_id_and_create_if_missing(&db, &parent_path.to_string_lossy())?;
 
     db.execute(
         "INSERT INTO files 
-      (parent_folder_id, name, encoded_name, file_extension, key, buffer_size, nonce_size, salt_size, tag_size) 
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        (parent_folder_id, name, encoded_name, file_extension, key, buffer_size, nonce_size, salt_size, tag_size) 
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             parent_folder_id,
             file_name,
@@ -184,28 +202,24 @@ pub fn add_file(
 pub fn get_file(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
-) -> Result<FileEncryptionMetadata, rusqlite::Error> {
+) -> Result<FileEncryptionMetadata, DbError> {
     let path = Path::new(file_path_str.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
+    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
+    let parent_folder_id = get_folder_id(&db, parent_str)?.ok_or(DbError::MissingFileName)?;
 
-    let parent_folder_id = get_folder_id(&db, parent_path.to_str().unwrap())
-        .unwrap()
-        .unwrap();
-
-    let path = Path::new(file_path_str.trim_matches('/'));
     let file_name = path
         .file_name()
-        .expect("Missing file name")
+        .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
 
     let result = db.query_row(
         "SELECT key, buffer_size, nonce_size, salt_size, tag_size
-      FROM files
-      WHERE parent_folder_id = ?1 AND name = ?2",
+        FROM files
+        WHERE parent_folder_id = ?1 AND name = ?2",
         params![parent_folder_id, file_name],
         |row| {
             let key_blob: Vec<u8> = row.get(0)?;
-
             Ok(FileEncryptionMetadata {
                 key: SecretKey::from_slice(&key_blob).unwrap(),
                 buffer_size: row.get(1)?,
@@ -228,32 +242,27 @@ pub fn add_thumbnail(
     nonce_size: usize,
     salt_size: usize,
     tag_size: usize,
-) -> Result<(), rusqlite::Error> {
+) -> Result<(), DbError> {
     let path = Path::new(full_file_path.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let file_name = path
         .file_name()
-        .expect("Missing file name")
+        .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
 
-    let parent_folder_id = get_folder_id(&db, &parent_path.to_string_lossy())?;
+    let parent_folder_id =
+        get_folder_id(&db, &parent_path.to_string_lossy())?.ok_or(DbError::MissingFileName)?;
 
-    let file_id: i32 = db
-        .query_row(
-            "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-            params![parent_folder_id, file_name],
-            |row| {
-                let file_id: i32 = row.get(0).unwrap();
-
-                Ok(file_id)
-            },
-        )
-        .unwrap();
+    let file_id: i32 = db.query_row(
+        "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+        params![parent_folder_id, file_name],
+        |row| row.get(0),
+    )?;
 
     db.execute(
         "INSERT INTO thumbnails 
-          (encoded_name, file_id, key, buffer_size, nonce_size, salt_size, tag_size) 
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (encoded_name, file_id, key, buffer_size, nonce_size, salt_size, tag_size) 
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             encoded_name,
             file_id,
@@ -271,41 +280,30 @@ pub fn add_thumbnail(
 pub fn get_thumbnail(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
-) -> Result<FileEncryptionMetadata, rusqlite::Error> {
+) -> Result<FileEncryptionMetadata, DbError> {
     let path = Path::new(file_path_str.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
-
-    let parent_folder_id = get_folder_id(&db, parent_path.to_str().unwrap())
-        .unwrap()
-        .unwrap();
-
-    let path = Path::new(file_path_str.trim_matches('/'));
+    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
+    let parent_folder_id = get_folder_id(&db, parent_str)?.ok_or(DbError::MissingFileName)?;
 
     let file_name = path
         .file_name()
-        .expect("Missing file name")
+        .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
 
-    let file_id = db.query_row(
-        "SELECT id
-          FROM files
-          WHERE parent_folder_id = ?1 AND name = ?2",
+    let file_id: i32 = db.query_row(
+        "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
         params![parent_folder_id, file_name],
-        |row| {
-            let file_id: i32 = row.get(0)?;
-
-            Ok(file_id)
-        },
+        |row| row.get(0),
     )?;
 
-    db.query_row(
+    let result = db.query_row(
         "SELECT key, buffer_size, nonce_size, salt_size, tag_size
-      FROM thumbnails
-      WHERE file_id = ?1",
+        FROM thumbnails
+        WHERE file_id = ?1",
         params![file_id],
         |row| {
             let key_blob: Vec<u8> = row.get(0)?;
-
             Ok(FileEncryptionMetadata {
                 key: SecretKey::from_slice(&key_blob).unwrap(),
                 buffer_size: row.get(1)?,
@@ -314,7 +312,9 @@ pub fn get_thumbnail(
                 tag_size: row.get(4)?,
             })
         },
-    )
+    )?;
+
+    Ok(result)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -327,9 +327,9 @@ pub struct File {
 pub fn get_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
-) -> Result<Vec<File>, rusqlite::Error> {
+) -> Result<Vec<File>, DbError> {
     let folder_id =
-        get_folder_id(db, folder_path_str)?.ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
+        get_folder_id(db, folder_path_str)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
 
     let mut entries = Vec::new();
 
@@ -362,8 +362,7 @@ pub fn get_folder(
 pub fn add_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     path_str: &str,
-) -> Result<(), rusqlite::Error> {
+) -> Result<(), DbError> {
     get_folder_id_and_create_if_missing(&db, &path_str)?;
-
     Ok(())
 }

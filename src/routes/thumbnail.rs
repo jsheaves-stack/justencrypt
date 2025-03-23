@@ -11,6 +11,7 @@ use rocket::{
     get,
     http::{ContentType, CookieJar},
     tokio::{
+        self,
         fs::{self, File},
         io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom},
     },
@@ -145,30 +146,44 @@ pub async fn get_thumbnail(
             decrypted_file_buffer.extend_from_slice(&decrypted_chunk);
         }
 
-        let image_format = match content_type {
-            _ if content_type == ContentType::JPEG => ImageFormat::Jpeg,
-            _ if content_type == ContentType::PNG => ImageFormat::Png,
-            _ if content_type == ContentType::GIF => ImageFormat::Gif,
-            _ if content_type == ContentType::WEBP => ImageFormat::WebP,
-            _ if content_type == ContentType::AVIF => ImageFormat::Avif,
-            _ => return Err(RequestError::UnsupportedFileType),
-        };
+        let mut thumbnail_buffer = tokio::task::spawn_blocking(move || {
+            let mut thumbnail_buffer = Cursor::new(Vec::new());
 
-        let img = match image::load_from_memory_with_format(&decrypted_file_buffer, image_format) {
-            Ok(i) => i,
-            Err(_) => return Err(RequestError::FailedToProcessData),
-        };
+            let image_format = match content_type {
+                _ if content_type == ContentType::JPEG => ImageFormat::Jpeg,
+                _ if content_type == ContentType::PNG => ImageFormat::Png,
+                _ if content_type == ContentType::GIF => ImageFormat::Gif,
+                _ if content_type == ContentType::WEBP => ImageFormat::WebP,
+                _ if content_type == ContentType::AVIF => ImageFormat::Avif,
+                _ => {
+                    error!("Unsupported image format: {:?}", content_type);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
 
-        let resized_image = img.thumbnail(150, 150);
+            let img = image::load_from_memory_with_format(&decrypted_file_buffer, image_format)
+                .map_err(|e| {
+                    error!("Failed to decode image: {}", e);
+                    RequestError::FailedToProcessData
+                })?;
 
-        let mut thumbnail_buffer = Cursor::new(Vec::new());
+            let resized_image = img.thumbnail(150, 150);
 
-        match resized_image.write_to(&mut thumbnail_buffer, image_format) {
-            Ok(_) => (),
-            Err(_) => return Err(RequestError::FailedToProcessData),
-        };
+            resized_image
+                .write_to(&mut thumbnail_buffer, image_format)
+                .map_err(|e| {
+                    error!("Failed to write resized image: {}", e);
+                    RequestError::FailedToProcessData
+                })?;
 
-        thumbnail_buffer.set_position(0);
+            thumbnail_buffer.set_position(0);
+            Ok::<_, RequestError>(thumbnail_buffer)
+        })
+        .await
+        .map_err(|e| {
+            error!("Blocking image resize task panicked: {}", e);
+            RequestError::FailedToProcessData
+        })??;
 
         // Initialize the stream encryptor for the file.
         let mut encryptor = match StreamEncryptor::new(thumbnail_path).await {
