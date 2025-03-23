@@ -36,7 +36,7 @@ pub struct AppState {
 }
 
 fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
-    if cfg!(debug_assertions) {
+    if !cfg!(debug_assertions) {
         match env::var(var_name) {
             Ok(v) => v,
             Err(_) => default.to_owned(),
@@ -166,9 +166,9 @@ fn get_app_config() -> Figment {
         return app_config;
     }
 
-    app_config
-        .to_owned()
-        .merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)));
+    // app_config
+    //     .to_owned()
+    //     .merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)));
 
     app_config
 }

@@ -2,18 +2,13 @@ use std::{env, path::PathBuf, str::FromStr};
 
 use encryption::{file_encryptor::FileEncryptor, Auth};
 use rocket::{
-    http::CookieJar,
     serde::json::Json,
     tokio::fs::{self},
-    State,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
 
-use crate::{
-    enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppState,
-};
+use crate::enums::{request_error::RequestError, request_success::RequestSuccess};
 
 #[options("/manifest")]
 pub fn manifest_options() -> Result<RequestSuccess, RequestError> {

@@ -3,7 +3,6 @@ use std::{error::Error, path::PathBuf};
 use orion::{
     aead::streaming::{Nonce, StreamOpener},
     kdf::Salt,
-    kex::SecretKey,
 };
 use tokio::{
     fs::File,

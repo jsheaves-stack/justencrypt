@@ -4,7 +4,7 @@ use crate::{
 };
 use encryption::{
     get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
-    FileEncryptionMetadata, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
 };
 use image::ImageFormat;
 use rocket::{
@@ -33,7 +33,7 @@ pub async fn get_thumbnail(
     cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
 ) -> Result<Vec<u8>, RequestError> {
     // Read access to the active sessions map.
-    let active_sessions = state.active_sessions.read().await;
+    let mut active_sessions = state.active_sessions.write().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
     let cookie = match cookies.get_private("session_id") {
@@ -41,7 +41,7 @@ pub async fn get_thumbnail(
         None => return Err(RequestError::MissingSessionId),
     };
 
-    let session = match active_sessions.get(cookie.value()) {
+    let session = match active_sessions.get_mut(cookie.value()) {
         Some(s) => s,
         None => return Err(RequestError::MissingActiveSession),
     };
@@ -65,7 +65,11 @@ pub async fn get_thumbnail(
     let thumbnail_path: PathBuf = cache_path.join(&encoded_thumbnail_file_name);
 
     let thumbnail_extension = file_path.extension().unwrap();
-    let metadata = FileEncryptionMetadata::new();
+
+    let metadata = session
+        .get_file_encryption_metadata(file_path.clone())
+        .await
+        .unwrap();
 
     if !thumbnail_path.exists() {
         let content_type =
@@ -173,6 +177,17 @@ pub async fn get_thumbnail(
             }
         };
 
+        let thumbnail_metadata = encryptor.get_file_encryption_metadata();
+
+        session
+            .add_thumbnail(
+                file_path,
+                encoded_thumbnail_file_name.to_str().unwrap().to_string(),
+                thumbnail_metadata,
+            )
+            .await
+            .unwrap();
+
         // Write encryption metadata (salt and nonce) to the file.
         match encryptor.write_salt_and_nonce().await {
             Ok(_) => (),
@@ -219,8 +234,10 @@ pub async fn get_thumbnail(
 
         Ok(thumbnail_buffer.into_inner())
     } else {
+        let thumbnail_metadata = session.get_thumbnail(file_path).await.unwrap();
+
         // Initialize the stream decryptor for the requested file.
-        let mut decryptor = match StreamDecryptor::new(thumbnail_path, metadata).await {
+        let mut decryptor = match StreamDecryptor::new(thumbnail_path, thumbnail_metadata).await {
             Ok(d) => d,
             Err(e) => {
                 error!("Failed to create StreamDecryptor: {}", e);

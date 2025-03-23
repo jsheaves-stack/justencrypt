@@ -46,7 +46,7 @@ pub async fn create_session(
 
             let mut active_sessions = state.active_sessions.write().await;
 
-            active_sessions.insert(uuid, *v);
+            active_sessions.insert(uuid, v);
 
             Ok(RequestSuccess::NoContent)
         }

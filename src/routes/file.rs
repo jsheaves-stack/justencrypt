@@ -2,7 +2,7 @@ use std::{io::SeekFrom, path::PathBuf};
 
 use encryption::{
     get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
-    FileEncryptionMetadata, SecretKey, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
 };
 
 use rocket::{
@@ -70,6 +70,7 @@ pub async fn put_file(
 
     session
         .add_file(file_path.clone(), encoded_file_name, metadata)
+        .await
         .unwrap();
 
     // Drop active_sessions to release the write lock so we're not holding onto it the entire time we're processing a file.
@@ -188,7 +189,10 @@ pub async fn get_file(
     let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
     let encoded_file_path = session.get_user_path().join(encoded_file_name);
 
-    let metadata = session.get_file_encryption_metadata(file_path).unwrap();
+    let metadata = session
+        .get_file_encryption_metadata(file_path)
+        .await
+        .unwrap();
 
     // Initialize the stream decryptor for the requested file.
     let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
