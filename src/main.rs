@@ -15,12 +15,13 @@ use routes::{
         destroy_session, destroy_session_options,
     },
     thumbnail::{get_thumbnail, thumbnail_options},
-    user::{create_user, create_user_options, get_user_manifest, manifest_options},
+    user::{create_user, create_user_options, manifest_options},
 };
 use session::session::AppSession;
 use std::{collections::HashMap, env};
 use web::fairings::CORS;
 
+mod db;
 mod enums;
 mod routes;
 mod session;
@@ -67,7 +68,7 @@ fn get_app_config() -> Figment {
         "JUSTENCRYPT_TLS_CERT_PATH must be set in release mode.",
     );
 
-    Config::figment()
+    let app_config = Config::figment()
         .merge((
             "address",
             env::var("JUSTENCRYPT_ADDRESS").unwrap_or_else(|_| "0.0.0.0".into()),
@@ -98,7 +99,6 @@ fn get_app_config() -> Figment {
             env::var("JUSTENCRYPT_LOG_LEVEL").unwrap_or_else(|_| "critical".into()),
         ))
         .merge(("secret_key", secret_key))
-        .merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)))
         .merge((
             "limits",
             Limits::default()
@@ -158,7 +158,19 @@ fn get_app_config() -> Figment {
                         .parse::<ByteUnit>()
                         .unwrap(),
                 ),
-        ))
+        ));
+
+    // If built in debug and no cert or key is provided, skip enabling tls.
+    // Otherwise, tls is mandatory.
+    if cfg!(debug_assertions) && (tls_cert_path.eq("") || tls_key_path.eq("")) {
+        return app_config;
+    }
+
+    app_config
+        .to_owned()
+        .merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)));
+
+    app_config
 }
 
 #[launch]
@@ -188,12 +200,7 @@ async fn rocket() -> _ {
         )
         .mount(
             "/user",
-            routes![
-                get_user_manifest,
-                create_user,
-                manifest_options,
-                create_user_options
-            ],
+            routes![create_user, manifest_options, create_user_options],
         )
         .mount(
             "/session",

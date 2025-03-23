@@ -4,7 +4,7 @@ use crate::{
 };
 use encryption::{
     get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
-    DerivedKey, Salt, SecretKey, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    FileEncryptionMetadata, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
 };
 use image::ImageFormat;
 use rocket::{
@@ -46,12 +46,7 @@ pub async fn get_thumbnail(
         None => return Err(RequestError::MissingActiveSession),
     };
 
-    let derived_key = DerivedKey {
-        salt: Salt::from_slice(session.manifest_key.salt.as_ref()).unwrap(),
-        key: SecretKey::from_slice(session.manifest_key.key.unprotected_as_bytes()).unwrap(),
-    };
-
-    let user_path = session.user_path.clone();
+    let user_path = session.get_user_path().clone();
     let cache_path = user_path.join(".cache");
 
     if !cache_path.exists() {
@@ -70,6 +65,7 @@ pub async fn get_thumbnail(
     let thumbnail_path: PathBuf = cache_path.join(&encoded_thumbnail_file_name);
 
     let thumbnail_extension = file_path.extension().unwrap();
+    let metadata = FileEncryptionMetadata::new();
 
     if !thumbnail_path.exists() {
         let content_type =
@@ -79,17 +75,16 @@ pub async fn get_thumbnail(
         let encoded_file_path = user_path.join(encoded_file_name);
 
         // Initialize the stream decryptor for the requested file.
-        let mut decryptor =
-            match StreamDecryptor::new(encoded_file_path, &session.manifest_key).await {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to create StreamDecryptor: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
+        let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to create StreamDecryptor: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
         // Open the encrypted file.
-        let input_file = match File::open(decryptor.file_path.clone()).await {
+        let input_file = match File::open(decryptor.get_file_path()).await {
             Ok(i) => i,
             Err(e) => {
                 error!("Failed to open file: {}", e);
@@ -170,7 +165,7 @@ pub async fn get_thumbnail(
         thumbnail_buffer.set_position(0);
 
         // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(thumbnail_path, derived_key).await {
+        let mut encryptor = match StreamEncryptor::new(thumbnail_path).await {
             Ok(e) => e,
             Err(e) => {
                 error!("Failed to create StreamEncryptor: {}", e);
@@ -225,8 +220,7 @@ pub async fn get_thumbnail(
         Ok(thumbnail_buffer.into_inner())
     } else {
         // Initialize the stream decryptor for the requested file.
-        let mut decryptor = match StreamDecryptor::new(thumbnail_path, &session.manifest_key).await
-        {
+        let mut decryptor = match StreamDecryptor::new(thumbnail_path, metadata).await {
             Ok(d) => d,
             Err(e) => {
                 error!("Failed to create StreamDecryptor: {}", e);
@@ -235,7 +229,7 @@ pub async fn get_thumbnail(
         };
 
         // Open the encrypted file.
-        let input_file = match File::open(decryptor.file_path.clone()).await {
+        let input_file = match File::open(decryptor.get_file_path()).await {
             Ok(i) => i,
             Err(e) => {
                 error!("Failed to open file: {}", e);

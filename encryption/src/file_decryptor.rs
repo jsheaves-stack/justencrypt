@@ -3,14 +3,12 @@ use std::{error::Error, path::PathBuf};
 use orion::{aead, kdf::Salt, kex::SecretKey};
 use tokio::{fs::File, io::AsyncReadExt};
 
-use crate::{Auth, DerivedKey, Encryptor, SALT_SIZE};
+use crate::{derive_key_from_string_and_salt, Auth, DerivedKey, SALT_SIZE};
 
 pub struct FileDecryptor {
     file: File,
-    pub key_salt: DerivedKey,
+    key_salt: DerivedKey,
 }
-
-impl Encryptor for FileDecryptor {}
 
 impl FileDecryptor {
     pub async fn new(file_path: &PathBuf, auth: Auth) -> Result<Self, Box<dyn Error>> {
@@ -23,7 +21,7 @@ impl FileDecryptor {
 
         let key = match auth {
             Auth::Passphrase(passphrase) => {
-                let derived = Self::derive_key_from_string_and_salt(&passphrase, &salt)?;
+                let derived = derive_key_from_string_and_salt(&passphrase, &salt)?;
                 derived.key
             }
             Auth::DerivedKey(key, _) => SecretKey::from_slice(key.unprotected_as_bytes())?,

@@ -12,34 +12,12 @@ use serde::Deserialize;
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    session::session::{FileSystemNode, UserManifest},
     AppState,
 };
 
 #[options("/manifest")]
 pub fn manifest_options() -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
-}
-
-#[get("/manifest")]
-pub async fn get_user_manifest(
-    state: &State<AppState>,
-    cookies: &CookieJar<'_>,
-) -> Result<Json<UserManifest>, RequestError> {
-    let active_sessions = state.active_sessions.read().await;
-
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
-
-    let session = match active_sessions.get(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    };
-
-    Ok(Json(session.manifest.clone()))
 }
 
 #[derive(Deserialize)]
@@ -83,11 +61,7 @@ pub async fn create_user(reqbody: Json<CreateUser>) -> Result<RequestSuccess, Re
             }
         }
 
-        let manifest = UserManifest {
-            files: FileSystemNode::default(),
-        };
-
-        let json = match serde_json::to_string(&manifest) {
+        let json = match serde_json::to_string("{}") {
             Ok(j) => j,
             Err(e) => {
                 error!("Failed to parse user manifest: {}", e);

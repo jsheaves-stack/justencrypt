@@ -2,7 +2,7 @@ use std::{io::SeekFrom, path::PathBuf};
 
 use encryption::{
     get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
-    DerivedKey, Salt, SecretKey, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    FileEncryptionMetadata, SecretKey, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
 };
 
 use rocket::{
@@ -53,36 +53,24 @@ pub async fn put_file(
         None => return Err(RequestError::MissingActiveSession),
     };
 
-    let derived_key = DerivedKey {
-        salt: Salt::from_slice(session.manifest_key.salt.as_ref()).unwrap(),
-        key: SecretKey::from_slice(session.manifest_key.key.unprotected_as_bytes()).unwrap(),
-    };
+    let user_path = session.get_user_path().clone();
+    let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
+    let encoded_file_path = user_path.join(encoded_file_name.clone());
 
-    // Process the file path to separate it into components.
-    let mut components = file_path
-        .iter()
-        .filter_map(|s| s.to_str())
-        .map(String::from)
-        .collect::<Vec<String>>();
-
-    // Extract the file name from the path and prepare the user's directory path.
-    let file_name = components.pop().unwrap();
-    let user_path = session.user_path.clone();
-
-    // Insert the file path into the user's manifest and update the manifest.
-    session.manifest.files.insert_path(
-        components.into_iter(),
-        file_name.clone(),
-        get_encoded_file_name(file_path.clone()).unwrap(),
-    );
-
-    match session.update_manifest().await {
-        Ok(_) => (),
+    // Initialize the stream encryptor for the file.
+    let mut encryptor = match StreamEncryptor::new(encoded_file_path).await {
+        Ok(e) => e,
         Err(e) => {
-            error!("Failed to write user manifest: {}", e);
-            return Err(RequestError::FailedToWriteUserManifest);
+            error!("Failed to create StreamEncryptor: {}", e);
+            return Err(RequestError::FailedToProcessData);
         }
     };
+
+    let metadata = encryptor.get_file_encryption_metadata();
+
+    session
+        .add_file(file_path.clone(), encoded_file_name, metadata)
+        .unwrap();
 
     // Drop active_sessions to release the write lock so we're not holding onto it the entire time we're processing a file.
     drop(active_sessions);
@@ -92,18 +80,6 @@ pub async fn put_file(
 
     // Spawn an async task to handle file encryption and writing.
     tokio::spawn(async move {
-        let encoded_file_name = get_encoded_file_name(file_path).unwrap();
-        let encoded_file_path = user_path.join(encoded_file_name);
-
-        // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(encoded_file_path, derived_key).await {
-            Ok(e) => e,
-            Err(e) => {
-                error!("Failed to create StreamEncryptor: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
-
         // Write encryption metadata (salt and nonce) to the file.
         match encryptor.write_salt_and_nonce().await {
             Ok(_) => (),
@@ -210,10 +186,12 @@ pub async fn get_file(
     };
 
     let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
-    let encoded_file_path = session.user_path.join(encoded_file_name);
+    let encoded_file_path = session.get_user_path().join(encoded_file_name);
+
+    let metadata = session.get_file_encryption_metadata(file_path).unwrap();
 
     // Initialize the stream decryptor for the requested file.
-    let mut decryptor = match StreamDecryptor::new(encoded_file_path, &session.manifest_key).await {
+    let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
         Ok(d) => d,
         Err(e) => {
             error!("Failed to create StreamDecryptor: {}", e);
@@ -222,7 +200,7 @@ pub async fn get_file(
     };
 
     // Open the encrypted file.
-    let input_file = match File::open(decryptor.file_path.clone()).await {
+    let input_file = match File::open(decryptor.get_file_path()).await {
         Ok(i) => i,
         Err(e) => {
             error!("Failed to open file: {}", e);
@@ -321,7 +299,7 @@ pub async fn delete_file(
     };
 
     let file_name = get_encoded_file_name(file_path.clone()).unwrap();
-    let full_file_path = session.user_path.join(&file_name);
+    let full_file_path = session.get_user_path().join(&file_name);
 
     match fs::remove_file(&full_file_path).await {
         Ok(_) => (),
@@ -336,22 +314,6 @@ pub async fn delete_file(
         Err(e) => {
             error!("Failed to delete meta file: {}", e);
             return Err(RequestError::FailedToRemoveFile);
-        }
-    };
-
-    match session.manifest.files.delete_item(file_path) {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Failed to delete file from manifest: {}", e);
-            return Err(RequestError::FailedToRemoveFile);
-        }
-    };
-
-    match session.update_manifest().await {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Failed to write user manifest: {}", e);
-            return Err(RequestError::FailedToWriteUserManifest);
         }
     };
 

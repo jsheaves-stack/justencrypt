@@ -33,5 +33,5 @@ pub enum RequestError {
     UnsupportedFileType,
 
     #[error("Failed to remove file")]
-    FailedToRemoveFile
+    FailedToRemoveFile,
 }
