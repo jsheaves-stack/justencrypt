@@ -14,24 +14,24 @@ pub enum RequestError {
     #[error("Failed to write data")]
     FailedToWriteData,
 
-    #[error("Failed to write user manifest")]
-    FailedToWriteUserManifest,
-
-    #[error("Failed to read user manifest")]
-    FailedToReadUserManifest,
-
     #[error("Failed to create user session")]
     FailedToCreateUserSession,
 
     #[error("User already exists")]
     UserAlreadyExists,
 
-    #[error("User does not exist")]
-    UserDoesNotExist,
-
     #[error("Unsupported file type")]
     UnsupportedFileType,
 
     #[error("Failed to remove file")]
     FailedToRemoveFile,
+
+    #[error("Failed to add file")]
+    FailedToAddFile,
+
+    #[error("Failed to create folder")]
+    FailedToCreateFolder,
+
+    #[error("Failed to read folder contents")]
+    FailedToReadFolderContents,
 }

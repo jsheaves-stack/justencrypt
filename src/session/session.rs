@@ -6,7 +6,10 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio;
 use secrecy::SecretString;
 
-use crate::db::db::{self, DbError, File};
+use crate::{
+    db::db::{self, File},
+    enums::db_error::DbError,
+};
 
 pub struct AppSession {
     user_path: PathBuf,
@@ -14,8 +17,8 @@ pub struct AppSession {
 }
 
 impl AppSession {
-    pub async fn open(user_name: &String, passphrase: &SecretString) -> Result<Self, DbError> {
-        let user_name = user_name.clone();
+    pub async fn open(user_name: &str, passphrase: &SecretString) -> Result<Self, DbError> {
+        let user_name = user_name.to_owned();
         let passphrase = passphrase.clone();
 
         tokio::task::spawn_blocking(move || {
@@ -23,6 +26,11 @@ impl AppSession {
                 .unwrap_or_else(|_| String::from("./user_data"));
 
             let user_path = PathBuf::from(&user_data_path).join(&user_name);
+
+            if !user_path.exists() {
+                return Err(DbError::UserDoesNotExist);
+            }
+
             let user_db_path = user_path.join(format!("{user_name}.db"));
 
             let db_pool = db::create_user_db_connection(user_db_path, passphrase)?;
@@ -52,11 +60,7 @@ impl AppSession {
                 &db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
                 &encoded_file_name,
-                metadata.key.unprotected_as_bytes(),
-                metadata.buffer_size,
-                metadata.salt_size,
-                metadata.nonce_size,
-                metadata.tag_size,
+                metadata,
             )
         })
         .await
@@ -92,11 +96,7 @@ impl AppSession {
                 &db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
                 &encoded_name,
-                metadata.key.unprotected_as_bytes(),
-                metadata.buffer_size,
-                metadata.nonce_size,
-                metadata.salt_size,
-                metadata.tag_size,
+                metadata,
             )
         })
         .await

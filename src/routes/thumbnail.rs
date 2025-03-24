@@ -69,10 +69,16 @@ pub async fn get_thumbnail(
 
     let thumbnail_extension = file_path.extension().unwrap();
 
-    let metadata = session
+    let metadata = match session
         .get_file_encryption_metadata(file_path.clone())
         .await
-        .unwrap();
+    {
+        Ok(m) => m,
+        Err(e) => {
+            error!("Failed to get file encryption metadata for file: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
+    };
 
     if !thumbnail_path.exists() {
         let content_type =
@@ -146,7 +152,7 @@ pub async fn get_thumbnail(
             decrypted_file_buffer.extend_from_slice(&decrypted_chunk);
         }
 
-        let mut thumbnail_buffer = tokio::task::spawn_blocking(move || {
+        let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
             let mut thumbnail_buffer = Cursor::new(Vec::new());
 
             let image_format = match content_type {
@@ -157,7 +163,7 @@ pub async fn get_thumbnail(
                 _ if content_type == ContentType::AVIF => ImageFormat::Avif,
                 _ => {
                     error!("Unsupported image format: {:?}", content_type);
-                    return Err(RequestError::FailedToProcessData);
+                    return Err(RequestError::UnsupportedFileType);
                 }
             };
 
@@ -177,7 +183,8 @@ pub async fn get_thumbnail(
                 })?;
 
             thumbnail_buffer.set_position(0);
-            Ok::<_, RequestError>(thumbnail_buffer)
+
+            Ok(thumbnail_buffer)
         })
         .await
         .map_err(|e| {
@@ -196,14 +203,20 @@ pub async fn get_thumbnail(
 
         let thumbnail_metadata = encryptor.get_file_encryption_metadata();
 
-        session
+        match session
             .add_thumbnail(
                 file_path,
                 encoded_thumbnail_file_name.to_str().unwrap().to_string(),
                 thumbnail_metadata,
             )
             .await
-            .unwrap();
+        {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to write salt and nonce chunks: {}", e);
+                return Err(RequestError::FailedToAddFile);
+            }
+        };
 
         // Write encryption metadata (salt and nonce) to the file.
         match encryptor.write_salt_and_nonce().await {

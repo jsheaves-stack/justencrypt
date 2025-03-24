@@ -19,7 +19,7 @@ use routes::{
 };
 use session::session::AppSession;
 use std::{collections::HashMap, env, sync::Arc};
-use web::fairings::CORS;
+use web::fairings::Cors;
 
 mod db;
 mod enums;
@@ -162,7 +162,7 @@ fn get_app_config() -> Figment {
 
     // If built in debug and no cert or key is provided, skip enabling tls.
     // Otherwise, tls is mandatory.
-    if cfg!(debug_assertions) && (tls_cert_path.eq("") || tls_key_path.eq("")) {
+    if cfg!(debug_assertions) && (tls_cert_path.is_empty() || tls_key_path.is_empty()) {
         return app_config;
     }
 
@@ -186,7 +186,7 @@ async fn rocket() -> _ {
     let hsts = Hsts::Enable(Duration::days(365));
 
     rocket::custom(app_config)
-        .attach(CORS)
+        .attach(Cors)
         .attach(Shield::default().enable(hsts))
         .manage(state)
         .mount(

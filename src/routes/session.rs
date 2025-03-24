@@ -33,10 +33,15 @@ pub async fn create_session(
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
+    let user_name = reqbody.username.clone();
+
     let session = Arc::new(Mutex::new(
-        match AppSession::open(&reqbody.username, &passphrase).await {
+        match AppSession::open(&user_name, &passphrase).await {
             Ok(a) => a,
-            Err(_) => return Err(RequestError::FailedToCreateUserSession),
+            Err(e) => {
+                error!("Failed to create user session: {}", e);
+                return Err(RequestError::FailedToCreateUserSession);
+            }
         },
     ));
 

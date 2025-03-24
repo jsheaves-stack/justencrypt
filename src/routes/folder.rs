@@ -42,9 +42,15 @@ pub async fn get_folder(
     .lock()
     .await;
 
-    Ok(rocket::serde::json::Json(
-        session.get_folder(folder_path).await.unwrap(),
-    ))
+    let folder_contents = match session.get_folder(folder_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            error!("Failed to get folder contents from db: {}", e);
+            return Err(RequestError::FailedToReadFolderContents);
+        }
+    };
+
+    Ok(Json(folder_contents))
 }
 
 #[put("/<folder_path..>")]
@@ -69,7 +75,13 @@ pub async fn create_folder(
     .lock()
     .await;
 
-    session.add_folder(folder_path).await.unwrap();
+    match session.add_folder(folder_path).await {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Failed to create StreamDecryptor: {}", e);
+            return Err(RequestError::FailedToCreateFolder);
+        }
+    }
 
     Ok(RequestSuccess::Created)
 }

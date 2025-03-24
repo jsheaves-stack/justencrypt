@@ -70,10 +70,16 @@ pub async fn put_file(
 
     let metadata = encryptor.get_file_encryption_metadata();
 
-    session
+    match session
         .add_file(file_path.clone(), encoded_file_name, metadata)
         .await
-        .unwrap();
+    {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Failed to add file to db: {}", e);
+            return Err(RequestError::FailedToAddFile);
+        }
+    };
 
     // Create a channel for transferring file data chunks with a specified buffer size.
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
@@ -190,10 +196,13 @@ pub async fn get_file(
     let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
     let encoded_file_path = session.get_user_path().join(encoded_file_name);
 
-    let metadata = session
-        .get_file_encryption_metadata(file_path)
-        .await
-        .unwrap();
+    let metadata = match session.get_file_encryption_metadata(file_path).await {
+        Ok(m) => m,
+        Err(e) => {
+            error!("Failed to get file encryption metadata for file: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
+    };
 
     // Initialize the stream decryptor for the requested file.
     let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {

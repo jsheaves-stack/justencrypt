@@ -70,14 +70,20 @@ pub struct FileEncryptionMetadata {
     pub tag_size: usize,
 }
 
+impl Default for FileEncryptionMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Clone for FileEncryptionMetadata {
     fn clone(&self) -> Self {
         Self {
             key: SecretKey::from_slice(self.key.unprotected_as_bytes()).unwrap(),
-            buffer_size: self.buffer_size.clone(),
-            nonce_size: self.nonce_size.clone(),
-            salt_size: self.salt_size.clone(),
-            tag_size: self.tag_size.clone(),
+            buffer_size: self.buffer_size,
+            nonce_size: self.nonce_size,
+            salt_size: self.salt_size,
+            tag_size: self.tag_size,
         }
     }
 }
@@ -98,7 +104,7 @@ impl FileEncryptionMetadata {
 
         let key_len = self.key.len();
         bytes.extend_from_slice(&(key_len as u64).to_le_bytes());
-        bytes.extend_from_slice(&self.key.unprotected_as_bytes());
+        bytes.extend_from_slice(self.key.unprotected_as_bytes());
 
         // Serialize the usize fields
         bytes.extend_from_slice(&self.buffer_size.to_le_bytes());

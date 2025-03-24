@@ -7,23 +7,7 @@ use rusqlite::{params, OptionalExtension};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, thiserror::Error)]
-pub enum DbError {
-    #[error("Database error: {0}")]
-    Rusqlite(#[from] rusqlite::Error),
-
-    #[error("Missing file name in path")]
-    MissingFileName,
-
-    #[error("Failed to convert path to str")]
-    InvalidPath,
-
-    #[error("Connection pool error: {0}")]
-    PoolError(#[from] r2d2::Error),
-
-    #[error("Thread join error: {0}")]
-    ThreadJoinError(String),
-}
+use crate::enums::db_error::DbError;
 
 pub fn create_user_db_connection(
     db_path: PathBuf,
@@ -101,13 +85,20 @@ fn get_folder_id_and_create_if_missing(
             _ => continue,
         };
 
-        let folder_id = db
+        let folder_id = match db
             .query_row(
                 "SELECT id FROM folders WHERE parent_folder_id = ?1 AND name = ?2",
                 params![current_id, name],
                 |row| row.get(0),
             )
-            .optional()?;
+            .optional()
+        {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Failed to get folder id from the provided path: {}", e);
+                return Err(DbError::FailedToGetFolderIdFromPath(e.to_string()));
+            }
+        };
 
         current_id = match folder_id {
             Some(id) => id,
@@ -137,15 +128,22 @@ pub fn get_folder_id(
             _ => continue,
         };
 
-        let maybe_id: Option<i32> = db
+        let folder_id = match db
             .query_row(
                 "SELECT id FROM folders WHERE parent_folder_id = ?1 AND name = ?2",
                 params![current_id, name],
                 |row| row.get(0),
             )
-            .optional()?;
+            .optional()
+        {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Failed to get folder id from the provided path: {}", e);
+                return Err(DbError::FailedToGetFolderIdFromPath(e.to_string()));
+            }
+        };
 
-        match maybe_id {
+        match folder_id {
             Some(id) => current_id = id,
             None => return Ok(None),
         }
@@ -158,11 +156,7 @@ pub fn add_file(
     db: &PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
     encoded_file_name: &str,
-    key: &[u8],
-    buffer_size: usize,
-    nonce_size: usize,
-    salt_size: usize,
-    tag_size: usize,
+    metadata: FileEncryptionMetadata,
 ) -> Result<(), DbError> {
     let path = Path::new(full_file_path.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
@@ -176,8 +170,7 @@ pub fn add_file(
         .map(|ext| ext.to_string_lossy())
         .unwrap_or_default();
 
-    let parent_folder_id =
-        get_folder_id_and_create_if_missing(&db, &parent_path.to_string_lossy())?;
+    let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
 
     db.execute(
         "INSERT INTO files 
@@ -188,15 +181,17 @@ pub fn add_file(
             file_name,
             encoded_file_name,
             file_extension,
-            key,
-            buffer_size,
-            nonce_size,
-            salt_size,
-            tag_size
+            metadata.key.unprotected_as_bytes(),
+            metadata.buffer_size,
+            metadata.nonce_size,
+            metadata.salt_size,
+            metadata.tag_size
         ],
-    )?;
-
-    Ok(())
+    ).map(|_| ())
+    .map_err(|e| {
+        error!("Failed to add file to the db: {}", e);
+        DbError::FailedToAddFileToDb(e.to_string())
+    })
 }
 
 pub fn get_file(
@@ -206,14 +201,14 @@ pub fn get_file(
     let path = Path::new(file_path_str.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
-    let parent_folder_id = get_folder_id(&db, parent_str)?.ok_or(DbError::MissingFileName)?;
+    let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::MissingFileName)?;
 
     let file_name = path
         .file_name()
         .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
 
-    let result = db.query_row(
+    let result = match db.query_row(
         "SELECT key, buffer_size, nonce_size, salt_size, tag_size
         FROM files
         WHERE parent_folder_id = ?1 AND name = ?2",
@@ -228,7 +223,13 @@ pub fn get_file(
                 tag_size: row.get(4)?,
             })
         },
-    )?;
+    ) {
+        Ok(f) => f,
+        Err(e) => {
+            error!("Failed to get file from the db: {}", e);
+            return Err(DbError::FailedToGetFileFromDb(e.to_string()));
+        }
+    };
 
     Ok(result)
 }
@@ -237,11 +238,7 @@ pub fn add_thumbnail(
     db: &PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
     encoded_name: &str,
-    key: &[u8],
-    buffer_size: usize,
-    nonce_size: usize,
-    salt_size: usize,
-    tag_size: usize,
+    metadata: FileEncryptionMetadata,
 ) -> Result<(), DbError> {
     let path = Path::new(full_file_path.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
@@ -250,8 +247,20 @@ pub fn add_thumbnail(
         .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
 
-    let parent_folder_id =
-        get_folder_id(&db, &parent_path.to_string_lossy())?.ok_or(DbError::MissingFileName)?;
+    let parent_folder_id = get_folder_id(db, &parent_path.to_string_lossy())
+        .map_err(|e| {
+            error!(
+                "Failed to get parent folder id for the provided path: {}",
+                e
+            );
+            DbError::FailedToGetFolderIdFromPath(e.to_string())
+        })?
+        .ok_or_else(|| {
+            error!("No folder id was returned from the db");
+            DbError::FailedToGetFolderIdFromPath(
+                "No folder id was returned from the db".to_string(),
+            )
+        })?;
 
     let file_id: i32 = db.query_row(
         "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
@@ -266,15 +275,18 @@ pub fn add_thumbnail(
         params![
             encoded_name,
             file_id,
-            key,
-            buffer_size,
-            nonce_size,
-            salt_size,
-            tag_size
+            metadata.key.unprotected_as_bytes(),
+            metadata.buffer_size,
+            metadata.nonce_size,
+            metadata.salt_size,
+            metadata.tag_size
         ],
-    )?;
-
-    Ok(())
+    )
+    .map(|_| ())
+    .map_err(|e| {
+        error!("Failed to add thumbnail file to the db: {}", e);
+        DbError::FailedToAddFileToDb(e.to_string())
+    })
 }
 
 pub fn get_thumbnail(
@@ -284,7 +296,21 @@ pub fn get_thumbnail(
     let path = Path::new(file_path_str.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
-    let parent_folder_id = get_folder_id(&db, parent_str)?.ok_or(DbError::MissingFileName)?;
+
+    let parent_folder_id = get_folder_id(db, parent_str)
+        .map_err(|e| {
+            error!(
+                "Failed to get parent folder id for the provided path: {}",
+                e
+            );
+            DbError::FailedToGetFolderIdFromPath(e.to_string())
+        })?
+        .ok_or_else(|| {
+            error!("No folder id was returned from the db");
+            DbError::FailedToGetFolderIdFromPath(
+                "No folder id was returned from the db".to_string(),
+            )
+        })?;
 
     let file_name = path
         .file_name()
@@ -297,7 +323,7 @@ pub fn get_thumbnail(
         |row| row.get(0),
     )?;
 
-    let result = db.query_row(
+    db.query_row(
         "SELECT key, buffer_size, nonce_size, salt_size, tag_size
         FROM thumbnails
         WHERE file_id = ?1",
@@ -312,9 +338,12 @@ pub fn get_thumbnail(
                 tag_size: row.get(4)?,
             })
         },
-    )?;
-
-    Ok(result)
+    )
+    .map(Ok)
+    .map_err(|e| {
+        error!("Failed to add thumbnail file to the db: {}", e);
+        DbError::FailedToAddFileToDb(e.to_string())
+    })?
 }
 
 #[derive(Deserialize, Serialize)]
@@ -363,6 +392,6 @@ pub fn add_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     path_str: &str,
 ) -> Result<(), DbError> {
-    get_folder_id_and_create_if_missing(&db, &path_str)?;
+    get_folder_id_and_create_if_missing(db, path_str)?;
     Ok(())
 }
