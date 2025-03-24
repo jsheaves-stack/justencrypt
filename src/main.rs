@@ -18,7 +18,7 @@ use routes::{
     user::{create_user, create_user_options, manifest_options},
 };
 use session::session::AppSession;
-use std::{collections::HashMap, env, sync::Arc};
+use std::{collections::HashMap, env, str::FromStr, sync::Arc};
 use web::fairings::Cors;
 
 mod db;
@@ -104,73 +104,69 @@ fn get_app_config() -> Figment {
             Limits::default()
                 .limit(
                     "form",
-                    env::var("JUSTENCRYPT_LIMITS_FORM")
-                        .unwrap_or_else(|_| "10MiB".into())
-                        .parse::<ByteUnit>()
-                        .unwrap(),
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_FORM").unwrap_or_else(|_| "10MiB".into()),
+                    )
+                    .unwrap(),
                 )
                 .limit(
                     "data-form",
-                    env::var("JUSTENCRYPT_LIMITS_DATA_FORM")
-                        .unwrap_or_else(|_| "10MiB".into())
-                        .parse::<ByteUnit>()
-                        .unwrap(),
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_DATA_FORM")
+                            .unwrap_or_else(|_| "10MiB".into()),
+                    )
+                    .unwrap(),
                 )
                 .limit(
                     "file",
-                    env::var("JUSTENCRYPT_LIMITS_FILE")
-                        .unwrap_or_else(|_| "64GiB".into())
-                        .parse::<ByteUnit>()
-                        .unwrap(),
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_FILE").unwrap_or_else(|_| "64GiB".into()),
+                    )
+                    .unwrap(),
                 )
                 .limit(
                     "json",
-                    env::var("JUSTENCRYPT_LIMITS_JSON")
-                        .unwrap_or_else(|_| "10MiB".into())
-                        .parse::<ByteUnit>()
-                        .unwrap(),
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_JSON").unwrap_or_else(|_| "10MiB".into()),
+                    )
+                    .unwrap(),
                 )
                 .limit(
                     "msgpack",
-                    env::var("JUSTENCRYPT_LIMITS_MSGPACK")
-                        .unwrap_or_else(|_| "1MiB".into())
-                        .parse::<ByteUnit>()
-                        .unwrap(),
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_MSGPACK").unwrap_or_else(|_| "1MiB".into()),
+                    )
+                    .unwrap(),
                 )
                 .limit(
                     "file/jpg",
-                    env::var("JUSTENCRYPT_LIMITS_FILE_JPG")
-                        .unwrap_or_else(|_| "10GiB".into())
-                        .parse::<ByteUnit>()
-                        .unwrap(),
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_FILE_JPG").unwrap_or_else(|_| "10GiB".into()),
+                    )
+                    .unwrap(),
                 )
                 .limit(
                     "bytes",
-                    env::var("JUSTENCRYPT_LIMITS_BYTES")
-                        .unwrap_or_else(|_| "10MiB".into())
-                        .parse::<ByteUnit>()
-                        .unwrap(),
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_BYTES").unwrap_or_else(|_| "10MiB".into()),
+                    )
+                    .unwrap(),
                 )
                 .limit(
                     "string",
-                    env::var("JUSTENCRYPT_LIMITS_STRING")
-                        .unwrap_or_else(|_| "10MiB".into())
-                        .parse::<ByteUnit>()
-                        .unwrap(),
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_STRING").unwrap_or_else(|_| "10MiB".into()),
+                    )
+                    .unwrap(),
                 ),
         ));
 
-    // If built in debug and no cert or key is provided, skip enabling tls.
-    // Otherwise, tls is mandatory.
-    if cfg!(debug_assertions) && (tls_cert_path.is_empty() || tls_key_path.is_empty()) {
-        return app_config;
+    // Only add TLS config if both paths are non-empty
+    if !tls_cert_path.is_empty() && !tls_key_path.is_empty() {
+        app_config.merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)))
+    } else {
+        app_config
     }
-
-    app_config
-        .to_owned()
-        .merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)));
-
-    app_config
 }
 
 #[launch]
