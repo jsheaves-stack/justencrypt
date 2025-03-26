@@ -211,7 +211,7 @@ pub async fn get_thumbnail(
             )
             .await
         {
-            Ok(_) => (),
+            Ok(_) => drop(session),
             Err(e) => {
                 error!("Failed to write salt and nonce chunks: {}", e);
                 return Err(RequestError::FailedToAddFile);
@@ -264,7 +264,16 @@ pub async fn get_thumbnail(
 
         Ok(thumbnail_buffer.into_inner())
     } else {
-        let thumbnail_metadata = session.get_thumbnail(file_path).await.unwrap();
+        let thumbnail_metadata = match session.get_thumbnail(file_path).await {
+            Ok(f) => {
+                drop(session);
+                f
+            }
+            Err(e) => {
+                error!("Failed to write encrypted chunk: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
         // Initialize the stream decryptor for the requested file.
         let mut decryptor = match StreamDecryptor::new(thumbnail_path, thumbnail_metadata).await {

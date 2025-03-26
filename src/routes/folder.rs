@@ -43,7 +43,10 @@ pub async fn get_folder(
     .await;
 
     let folder_contents = match session.get_folder(folder_path).await {
-        Ok(f) => f,
+        Ok(f) => {
+            drop(session);
+            f
+        }
         Err(e) => {
             error!("Failed to get folder contents from db: {}", e);
             return Err(RequestError::FailedToReadFolderContents);
@@ -76,7 +79,7 @@ pub async fn create_folder(
     .await;
 
     match session.add_folder(folder_path).await {
-        Ok(_) => (),
+        Ok(_) => drop(session),
         Err(e) => {
             error!("Failed to create StreamDecryptor: {}", e);
             return Err(RequestError::FailedToCreateFolder);

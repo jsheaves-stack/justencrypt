@@ -74,7 +74,7 @@ pub async fn put_file(
         .add_file(file_path.clone(), encoded_file_name, metadata)
         .await
     {
-        Ok(_) => (),
+        Ok(_) => drop(session),
         Err(e) => {
             error!("Failed to add file to db: {}", e);
             return Err(RequestError::FailedToAddFile);
@@ -197,7 +197,10 @@ pub async fn get_file(
     let encoded_file_path = session.get_user_path().join(encoded_file_name);
 
     let metadata = match session.get_file_encryption_metadata(file_path).await {
-        Ok(m) => m,
+        Ok(m) => {
+            drop(session);
+            m
+        }
         Err(e) => {
             error!("Failed to get file encryption metadata for file: {}", e);
             return Err(RequestError::FailedToProcessData);

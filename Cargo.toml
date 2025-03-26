@@ -12,7 +12,9 @@ license = "MIT"
 encryption = { path = "encryption" }
 rocket = { version = "0.5.1", features = ["json", "secrets", "tls"] }
 uuid = { version = "1.8.0", features = ["v4"] }
-rusqlite = { version = "0.34.0", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.34.0", features = [
+  "bundled-sqlcipher-vendored-openssl",
+] }
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.27.0"
 dotenv = "0.15.0"
