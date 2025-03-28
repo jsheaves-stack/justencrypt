@@ -1,5 +1,6 @@
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
+    web::forwarding_guards::AuthenticatedSession,
     AppState,
 };
 use encryption::{
@@ -9,7 +10,7 @@ use encryption::{
 use image::ImageFormat;
 use rocket::{
     get,
-    http::{ContentType, CookieJar},
+    http::ContentType,
     tokio::{
         self,
         fs::{self, File},
@@ -31,24 +32,15 @@ pub fn thumbnail_options(_file_path: PathBuf) -> Result<RequestSuccess, RequestE
 pub async fn get_thumbnail(
     file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
     state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    auth: AuthenticatedSession,
 ) -> Result<Vec<u8>, RequestError> {
-    // Read access to the active sessions map.
-    let active_sessions = state.active_sessions.read().await;
+    let permit = state
+        .thumbnail_semaphore
+        .acquire()
+        .await
+        .map_err(|_| RequestError::FailedToProcessData)?;
 
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
-
-    let mut session = match active_sessions.get(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    }
-    .lock()
-    .await;
-
+    let mut session = auth.session.lock().await;
     let user_path = session.get_user_path().clone();
     let cache_path = user_path.join(".cache");
 
@@ -192,6 +184,8 @@ pub async fn get_thumbnail(
             RequestError::FailedToProcessData
         })??;
 
+        drop(permit);
+
         // Initialize the stream encryptor for the file.
         let mut encryptor = match StreamEncryptor::new(thumbnail_path).await {
             Ok(e) => e,
@@ -213,7 +207,7 @@ pub async fn get_thumbnail(
         {
             Ok(_) => drop(session),
             Err(e) => {
-                error!("Failed to write salt and nonce chunks: {}", e);
+                error!("Failed to add thumbnail to db: {}", e);
                 return Err(RequestError::FailedToAddFile);
             }
         };
@@ -264,6 +258,8 @@ pub async fn get_thumbnail(
 
         Ok(thumbnail_buffer.into_inner())
     } else {
+        drop(permit);
+
         let thumbnail_metadata = match session.get_thumbnail(file_path).await {
             Ok(f) => {
                 drop(session);

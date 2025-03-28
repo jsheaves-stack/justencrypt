@@ -33,10 +33,10 @@ pub async fn create_user(reqbody: Json<CreateUser>) -> Result<RequestSuccess, Re
         Err(_) => String::from("./user_data"),
     };
 
-    let user_data_path = PathBuf::from("./user_data/");
+    let user_data_path = PathBuf::from(user_data);
 
     if !user_data_path.exists() {
-        match fs::create_dir(&user_data).await {
+        match fs::create_dir(&user_data_path).await {
             Ok(_) => (),
             Err(e) => {
                 error!("Failed to create user_data directory: {}", e);

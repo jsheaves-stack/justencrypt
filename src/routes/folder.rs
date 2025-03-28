@@ -1,11 +1,11 @@
-use rocket::{get, http::CookieJar, serde::json::Json, State};
+use rocket::{get, serde::json::Json};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::{
     db::db::File,
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppState,
+    web::forwarding_guards::AuthenticatedSession,
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -23,24 +23,9 @@ pub fn folder_options(_folder_path: PathBuf) -> Result<RequestSuccess, RequestEr
 #[get("/<folder_path..>")]
 pub async fn get_folder(
     folder_path: PathBuf, // The name/path of the folder being requested, extracted from the URL.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    auth: AuthenticatedSession,
 ) -> Result<Json<Vec<File>>, RequestError> {
-    // Read access to the active sessions map.
-    let active_sessions = state.active_sessions.read().await;
-
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
-
-    let mut session = match active_sessions.get(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    }
-    .lock()
-    .await;
+    let mut session = auth.session.lock().await;
 
     let folder_contents = match session.get_folder(folder_path).await {
         Ok(f) => {
@@ -59,24 +44,9 @@ pub async fn get_folder(
 #[put("/<folder_path..>")]
 pub async fn create_folder(
     folder_path: PathBuf, // The name/path of the folder being requested, extracted from the URL.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    // Lock the active sessions map for write access.
-    let active_sessions = state.active_sessions.read().await;
-
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
-
-    let mut session = match active_sessions.get(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    }
-    .lock()
-    .await;
+    let mut session = auth.session.lock().await;
 
     match session.add_folder(folder_path).await {
         Ok(_) => drop(session),

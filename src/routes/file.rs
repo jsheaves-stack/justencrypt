@@ -7,9 +7,7 @@ use encryption::{
 
 use rocket::{
     data::ByteUnit,
-    delete, get,
-    http::CookieJar,
-    put,
+    delete, get, put,
     response::stream::ByteStream,
     tokio::{
         self,
@@ -17,12 +15,12 @@ use rocket::{
         io::{AsyncReadExt, AsyncSeekExt, BufReader},
         sync::mpsc,
     },
-    Data, State,
+    Data,
 };
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppState,
+    web::forwarding_guards::AuthenticatedSession,
 };
 
 const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
@@ -36,25 +34,9 @@ pub fn file_options(_file_path: PathBuf) -> Result<RequestSuccess, RequestError>
 pub async fn put_file(
     file_path: PathBuf, // The path where the file should be stored, extracted from the URL.
     reqdata: Data<'_>,  // The raw data of the file being uploaded.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    // Lock the active sessions map for write access.
-    let active_sessions = state.active_sessions.read().await;
-
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
-
-    let mut session = match active_sessions.get(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    }
-    .lock()
-    .await;
-
+    let mut session = auth.session.lock().await;
     let user_path = session.get_user_path().clone();
     let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
     let encoded_file_path = user_path.join(encoded_file_name.clone());
@@ -174,24 +156,9 @@ pub async fn put_file(
 #[get("/<file_path..>")]
 pub async fn get_file(
     file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    auth: AuthenticatedSession,
 ) -> Result<ByteStream![Vec<u8>], RequestError> {
-    // Read access to the active sessions map.
-    let active_sessions = state.active_sessions.read().await;
-
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
-
-    let session = match active_sessions.get(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    }
-    .lock()
-    .await;
+    let session = auth.session.lock().await;
 
     let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
     let encoded_file_path = session.get_user_path().join(encoded_file_name);
@@ -298,24 +265,9 @@ pub async fn get_file(
 #[delete("/<file_path..>")]
 pub async fn delete_file(
     file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    // Lock the active sessions map for write access.
-    let active_sessions = state.active_sessions.read().await;
-
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
-
-    let session = match active_sessions.get(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    }
-    .lock()
-    .await;
+    let session = auth.session.lock().await;
 
     let file_name = get_encoded_file_name(file_path.clone()).unwrap();
     let full_file_path = session.get_user_path().join(&file_name);

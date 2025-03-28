@@ -5,15 +5,12 @@ use rocket::{
     launch,
     shield::{Hsts, Shield},
     time::Duration,
-    tokio::sync::{Mutex, RwLock},
+    tokio::sync::{Mutex, RwLock, Semaphore},
 };
 use routes::{
     file::{delete_file, file_options, get_file, put_file},
     folder::{create_folder, folder_options, get_folder},
-    session::{
-        check_session, check_session_options, create_session, create_session_options,
-        destroy_session, destroy_session_options,
-    },
+    session::{create_session, create_session_options, destroy_session, destroy_session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
     user::{create_user, create_user_options, manifest_options},
 };
@@ -33,6 +30,7 @@ extern crate serde;
 
 pub struct AppState {
     active_sessions: RwLock<HashMap<String, Arc<Mutex<AppSession>>>>,
+    thumbnail_semaphore: Arc<Semaphore>,
 }
 
 fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
@@ -177,6 +175,7 @@ async fn rocket() -> _ {
 
     let state = AppState {
         active_sessions: RwLock::default(),
+        thumbnail_semaphore: Arc::new(Semaphore::new(10)),
     };
 
     let hsts = Hsts::Enable(Duration::days(365));
@@ -203,10 +202,8 @@ async fn rocket() -> _ {
             routes![
                 create_session,
                 destroy_session,
-                check_session,
                 create_session_options,
                 destroy_session_options,
-                check_session_options
             ],
         )
 }
