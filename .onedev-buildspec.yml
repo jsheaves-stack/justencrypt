@@ -2,6 +2,14 @@ version: 39
 jobs:
 - name: build
   steps:
+  - !CommandStep
+    name: ls
+    runInContainer: false
+    interpreter: !DefaultInterpreter
+      commands: |
+        ls -la
+    useTTY: true
+    condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
   - !BuildImageStep
     name: docker-build
     buildPath: .
