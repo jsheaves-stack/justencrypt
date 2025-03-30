@@ -1,0 +1,13 @@
+version: 39
+jobs:
+- name: build
+  steps:
+  - !BuildImageStep
+    name: docker-build
+    output: !RegistryOutput
+      tags: latest
+    condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
+  retryCondition: never
+  maxRetries: 3
+  retryDelay: 30
+  timeout: 14400
