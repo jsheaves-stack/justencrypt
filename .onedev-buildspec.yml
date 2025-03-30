@@ -4,8 +4,7 @@ jobs:
   steps:
   - !BuildImageStep
     name: docker-build
-    buildPath: ./
-    dockerfile: ./Dockerfile
+    buildPath: .
     output: !RegistryOutput
       tags: latest
     condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
