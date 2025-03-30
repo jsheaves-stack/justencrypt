@@ -4,7 +4,8 @@ jobs:
   steps:
   - !CommandStep
     name: ls
-    runInContainer: false
+    runInContainer: true
+    image: alpine:latest
     interpreter: !DefaultInterpreter
       commands: |
         ls -la
