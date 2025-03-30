@@ -11,7 +11,7 @@ jobs:
   - !BuildImageStep
     name: Docker
     output: !RegistryOutput
-      tags: latest
+      tags: '@server@/@project_path@/@project_name@:latest'
     registryLogins:
     - registryUrl: '@server_url@'
       userName: '@job_token@'
