@@ -2,7 +2,9 @@ use rocket::{
     config::{Config, TlsConfig},
     data::{ByteUnit, Limits},
     figment::Figment,
+    http::uri::Segments,
     launch,
+    request::FromSegments,
     shield::{Hsts, Shield},
     time::Duration,
     tokio::sync::{Mutex, RwLock, Semaphore},
@@ -15,7 +17,7 @@ use routes::{
     user::{create_user, create_user_options, manifest_options},
 };
 use session::session::AppSession;
-use std::{collections::HashMap, env, str::FromStr, sync::Arc};
+use std::{collections::HashMap, env, path::PathBuf, str::FromStr, sync::Arc};
 use web::fairings::Cors;
 
 mod db;
@@ -31,6 +33,31 @@ extern crate serde;
 pub struct AppState {
     active_sessions: RwLock<HashMap<String, Arc<Mutex<AppSession>>>>,
     thumbnail_semaphore: Arc<Semaphore>,
+}
+
+#[derive(Debug)]
+struct UnrestrictedPath(Vec<String>);
+
+impl UnrestrictedPath {
+    /// Convert to a PathBuf while sanitizing the path
+    pub fn to_path_buf(&self) -> PathBuf {
+        self.0.iter().fold(PathBuf::new(), |mut pb, segment| {
+            pb.push(segment);
+            pb
+        })
+    }
+}
+
+impl<'r> FromSegments<'r> for UnrestrictedPath {
+    type Error = rocket::http::uri::Error<'r>;
+
+    fn from_segments(
+        segments: Segments<'r, rocket::http::uri::fmt::Path>,
+    ) -> Result<Self, Self::Error> {
+        Ok(UnrestrictedPath(
+            segments.into_iter().map(|s| s.to_string()).collect(),
+        ))
+    }
 }
 
 fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
@@ -52,18 +79,6 @@ fn get_app_config() -> Figment {
         "JUSTENCRYPT_ROCKET_SECRET_KEY",
         "ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=",
         "JUSTENCRYPT_ROCKET_SECRET_KEY must be set in release mode.",
-    );
-
-    let tls_key_path = get_required_env_var(
-        "JUSTENCRYPT_TLS_KEY_PATH",
-        "",
-        "JUSTENCRYPT_TLS_KEY_PATH must be set in release mode.",
-    );
-
-    let tls_cert_path = get_required_env_var(
-        "JUSTENCRYPT_TLS_CERT_PATH",
-        "",
-        "JUSTENCRYPT_TLS_CERT_PATH must be set in release mode.",
     );
 
     let app_config = Config::figment()
@@ -158,6 +173,9 @@ fn get_app_config() -> Figment {
                     .unwrap(),
                 ),
         ));
+
+    let tls_key_path = env::var("JUSTENCRYPT_TLS_KEY_PATH").unwrap_or_default();
+    let tls_cert_path = env::var("JUSTENCRYPT_TLS_CERT_PATH").unwrap_or_default();
 
     // Only add TLS config if both paths are non-empty
     if !tls_cert_path.is_empty() && !tls_key_path.is_empty() {

@@ -1,7 +1,7 @@
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     web::forwarding_guards::AuthenticatedSession,
-    AppState,
+    AppState, UnrestrictedPath,
 };
 use encryption::{
     get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
@@ -24,16 +24,17 @@ use std::{
 };
 
 #[options("/<_file_path..>")]
-pub fn thumbnail_options(_file_path: PathBuf) -> Result<RequestSuccess, RequestError> {
+pub fn thumbnail_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
 #[get("/<file_path..>")]
 pub async fn get_thumbnail(
-    file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
+    file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
     state: &State<AppState>, // Application state for accessing global resources like session management.
     auth: AuthenticatedSession,
 ) -> Result<Vec<u8>, RequestError> {
+    let file_path_buf = file_path.to_path_buf();
     let permit = state
         .thumbnail_semaphore
         .acquire()
@@ -54,15 +55,16 @@ pub async fn get_thumbnail(
         };
     }
 
-    let encoded_thumbnail_file_name =
-        PathBuf::from(get_encoded_file_name(Path::new(".cache").join(file_path.clone())).unwrap());
+    let encoded_thumbnail_file_name = PathBuf::from(
+        get_encoded_file_name(Path::new(".cache").join(file_path_buf.clone())).unwrap(),
+    );
 
     let thumbnail_path: PathBuf = cache_path.join(&encoded_thumbnail_file_name);
 
-    let thumbnail_extension = file_path.extension().unwrap();
+    let thumbnail_extension = file_path_buf.extension().unwrap();
 
     let metadata = match session
-        .get_file_encryption_metadata(file_path.clone())
+        .get_file_encryption_metadata(file_path_buf.clone())
         .await
     {
         Ok(m) => m,
@@ -76,7 +78,7 @@ pub async fn get_thumbnail(
         let content_type =
             ContentType::from_extension(thumbnail_extension.to_str().unwrap()).unwrap();
 
-        let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
+        let encoded_file_name = get_encoded_file_name(file_path_buf.clone()).unwrap();
         let encoded_file_path = user_path.join(encoded_file_name);
 
         // Initialize the stream decryptor for the requested file.
@@ -199,7 +201,7 @@ pub async fn get_thumbnail(
 
         match session
             .add_thumbnail(
-                file_path,
+                file_path_buf,
                 encoded_thumbnail_file_name.to_str().unwrap().to_string(),
                 thumbnail_metadata,
             )
@@ -260,7 +262,7 @@ pub async fn get_thumbnail(
     } else {
         drop(permit);
 
-        let thumbnail_metadata = match session.get_thumbnail(file_path).await {
+        let thumbnail_metadata = match session.get_thumbnail(file_path_buf).await {
             Ok(f) => {
                 drop(session);
                 f

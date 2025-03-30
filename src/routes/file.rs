@@ -1,4 +1,4 @@
-use std::{io::SeekFrom, path::PathBuf};
+use std::io::SeekFrom;
 
 use encryption::{
     get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
@@ -21,24 +21,26 @@ use rocket::{
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     web::forwarding_guards::AuthenticatedSession,
+    UnrestrictedPath,
 };
 
 const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
 
 #[options("/<_file_path..>")]
-pub fn file_options(_file_path: PathBuf) -> Result<RequestSuccess, RequestError> {
+pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
 #[put("/<file_path..>", data = "<reqdata>")]
 pub async fn put_file(
-    file_path: PathBuf, // The path where the file should be stored, extracted from the URL.
-    reqdata: Data<'_>,  // The raw data of the file being uploaded.
+    file_path: UnrestrictedPath, // The path where the file should be stored, extracted from the URL.
+    reqdata: Data<'_>,           // The raw data of the file being uploaded.
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     let mut session = auth.session.lock().await;
     let user_path = session.get_user_path().clone();
-    let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
+    let file_path_buf = file_path.to_path_buf();
+    let encoded_file_name = get_encoded_file_name(file_path_buf.clone()).unwrap();
     let encoded_file_path = user_path.join(encoded_file_name.clone());
 
     // Initialize the stream encryptor for the file.
@@ -53,7 +55,7 @@ pub async fn put_file(
     let metadata = encryptor.get_file_encryption_metadata();
 
     match session
-        .add_file(file_path.clone(), encoded_file_name, metadata)
+        .add_file(file_path_buf, encoded_file_name, metadata)
         .await
     {
         Ok(_) => drop(session),
@@ -155,15 +157,16 @@ pub async fn put_file(
 
 #[get("/<file_path..>")]
 pub async fn get_file(
-    file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
+    file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
     auth: AuthenticatedSession,
 ) -> Result<ByteStream![Vec<u8>], RequestError> {
+    let file_path_buf = file_path.to_path_buf();
     let session = auth.session.lock().await;
 
-    let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
+    let encoded_file_name = get_encoded_file_name(file_path_buf.clone()).unwrap();
     let encoded_file_path = session.get_user_path().join(encoded_file_name);
 
-    let metadata = match session.get_file_encryption_metadata(file_path).await {
+    let metadata = match session.get_file_encryption_metadata(file_path_buf).await {
         Ok(m) => {
             drop(session);
             m
@@ -264,12 +267,13 @@ pub async fn get_file(
 
 #[delete("/<file_path..>")]
 pub async fn delete_file(
-    file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
+    file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
+    let file_path_buf = file_path.to_path_buf();
     let session = auth.session.lock().await;
 
-    let file_name = get_encoded_file_name(file_path.clone()).unwrap();
+    let file_name = get_encoded_file_name(file_path_buf).unwrap();
     let full_file_path = session.get_user_path().join(&file_name);
 
     match fs::remove_file(&full_file_path).await {
