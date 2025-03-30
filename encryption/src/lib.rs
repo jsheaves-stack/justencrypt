@@ -161,23 +161,6 @@ pub fn get_encoded_file_name(file_path: PathBuf) -> Result<String, Box<dyn Error
     Ok(URL_SAFE.encode(hashed_file_path.as_ref()))
 }
 
-/// Encrypts `plaintext` using the provided `key`.
-fn _encrypt(
-    plaintext: &[u8],
-    key: SecretKey,
-) -> Result<Vec<u8>, orion::errors::UnknownCryptoError> {
-    // "seal" provides authenticated encryption (AES-GCM under the hood).
-    aead::seal(&key, plaintext)
-}
-
-/// Decrypts `ciphertext` using the provided `key`.
-fn _decrypt(
-    ciphertext: &[u8],
-    key: SecretKey,
-) -> Result<Vec<u8>, orion::errors::UnknownCryptoError> {
-    aead::open(&key, ciphertext)
-}
-
 // #[cfg(test)]
 // mod tests {
 //     use crate::{
