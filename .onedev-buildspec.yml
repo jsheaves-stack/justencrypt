@@ -12,6 +12,10 @@ jobs:
     name: Docker
     output: !RegistryOutput
       tags: latest
+    registryLogins:
+    - registryUrl: '@server_url@'
+      userName: '@job_token@'
+      passwordSecret: secret
     condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
   retryCondition: never
   maxRetries: 3
