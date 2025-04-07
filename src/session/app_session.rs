@@ -7,7 +7,7 @@ use rocket::tokio;
 use secrecy::SecretString;
 
 use crate::{
-    db::db::{self, File},
+    db::sqlite::{self, File},
     enums::db_error::DbError,
 };
 
@@ -33,7 +33,7 @@ impl AppSession {
 
             let user_db_path = user_path.join(format!("{user_name}.db"));
 
-            let db_pool = db::create_user_db_connection(user_db_path, passphrase)?;
+            let db_pool = sqlite::create_user_db_connection(user_db_path, passphrase)?;
 
             Ok(Self { user_path, db_pool })
         })
@@ -56,7 +56,7 @@ impl AppSession {
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
-            db::add_file(
+            sqlite::add_file(
                 &db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
                 &encoded_file_name,
@@ -74,7 +74,7 @@ impl AppSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
-            db::add_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+            sqlite::add_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
@@ -92,7 +92,7 @@ impl AppSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
-            db::add_thumbnail(
+            sqlite::add_thumbnail(
                 &db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
                 &encoded_name,
@@ -111,7 +111,7 @@ impl AppSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
-            db::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+            sqlite::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
@@ -126,7 +126,7 @@ impl AppSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
-            db::get_thumbnail(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+            sqlite::get_thumbnail(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
@@ -140,7 +140,7 @@ impl AppSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
-            db::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+            sqlite::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?

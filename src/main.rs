@@ -16,7 +16,7 @@ use routes::{
     thumbnail::{get_thumbnail, thumbnail_options},
     user::{create_user, create_user_options, manifest_options},
 };
-use session::session::AppSession;
+use session::app_session::AppSession;
 use std::{collections::HashMap, env, path::PathBuf, str::FromStr, sync::Arc};
 use web::fairings::Cors;
 

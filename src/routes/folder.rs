@@ -2,7 +2,7 @@ use rocket::{get, serde::json::Json};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::db::File,
+    db::sqlite::File,
     enums::{request_error::RequestError, request_success::RequestSuccess},
     web::forwarding_guards::AuthenticatedSession,
     UnrestrictedPath,
