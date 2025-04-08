@@ -69,6 +69,20 @@ impl AppSession {
         Ok(())
     }
 
+    pub async fn delete_file(&mut self, file_path: PathBuf) -> Result<(), DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::delete_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+
+        Ok(())
+    }
+
     pub async fn add_folder(&mut self, folder_path: PathBuf) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 

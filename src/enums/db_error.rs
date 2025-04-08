@@ -20,6 +20,9 @@ pub enum DbError {
     #[error("Failed to add file to db: {0}")]
     FailedToAddFileToDb(String),
 
+    #[error("Failed to delete file from db: {0}")]
+    FailedToDeleteFileFromDb(String),
+
     #[error("Failed to get folder id from the provided file path: {0}")]
     FailedToGetFolderIdFromPath(String),
 

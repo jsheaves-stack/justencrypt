@@ -194,6 +194,31 @@ pub fn add_file(
     })
 }
 
+pub fn delete_file(
+    db: &PooledConnection<SqliteConnectionManager>,
+    file_path_str: &str,
+) -> Result<(), DbError> {
+    let path = Path::new(file_path_str.trim_matches('/'));
+    let parent_path = path.parent().unwrap_or(Path::new(""));
+    let file_name = path
+        .file_name()
+        .ok_or(DbError::MissingFileName)?
+        .to_string_lossy();
+
+    let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
+
+    db.execute(
+        "DELETE FROM files 
+        WHERE parent_folder_id = ?1 AND name = ?2",
+        params![parent_folder_id, file_name],
+    )
+    .map(|_| ())
+    .map_err(|e| {
+        error!("Failed to delete file from the db: {}", e);
+        DbError::FailedToDeleteFileFromDb(e.to_string())
+    })
+}
+
 pub fn get_file(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,

@@ -271,23 +271,23 @@ pub async fn delete_file(
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.lock().await;
+    let mut session = auth.session.lock().await;
 
-    let file_name = get_encoded_file_name(file_path_buf).unwrap();
+    let file_name = get_encoded_file_name(file_path_buf.clone()).unwrap();
     let full_file_path = session.get_user_path().join(&file_name);
+
+    match session.delete_file(file_path_buf).await {
+        Ok(_) => drop(session),
+        Err(e) => {
+            error!("Failed to add file to db: {}", e);
+            return Err(RequestError::FailedToRemoveFile);
+        }
+    };
 
     match fs::remove_file(&full_file_path).await {
         Ok(_) => (),
         Err(e) => {
             error!("Failed to delete file: {}", e);
-            return Err(RequestError::FailedToRemoveFile);
-        }
-    };
-
-    match fs::remove_file(full_file_path.with_extension("meta")).await {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Failed to delete meta file: {}", e);
             return Err(RequestError::FailedToRemoveFile);
         }
     };
