@@ -16,7 +16,7 @@ use routes::{
     thumbnail::{get_thumbnail, thumbnail_options},
     user::{create_user, create_user_options, manifest_options},
 };
-use session::app_session::AppSession;
+use session::user_session::UserSession;
 use std::{collections::HashMap, env, path::PathBuf, str::FromStr, sync::Arc};
 use web::fairings::Cors;
 
@@ -31,7 +31,7 @@ extern crate rocket;
 extern crate serde;
 
 pub struct AppState {
-    active_sessions: RwLock<HashMap<String, Arc<Mutex<AppSession>>>>,
+    active_sessions: RwLock<HashMap<String, Arc<Mutex<UserSession>>>>,
     thumbnail_semaphore: Arc<Semaphore>,
 }
 

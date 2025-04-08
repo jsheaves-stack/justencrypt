@@ -11,12 +11,12 @@ use crate::{
     enums::db_error::DbError,
 };
 
-pub struct AppSession {
+pub struct UserSession {
     user_path: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
 }
 
-impl AppSession {
+impl UserSession {
     pub async fn open(user_name: &str, passphrase: &SecretString) -> Result<Self, DbError> {
         let user_name = user_name.to_owned();
         let passphrase = passphrase.clone();

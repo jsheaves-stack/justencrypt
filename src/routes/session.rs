@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppSession, AppState,
+    AppState, UserSession,
 };
 
 #[derive(Deserialize)]
@@ -36,7 +36,7 @@ pub async fn create_session(
     let user_name = reqbody.username.clone();
 
     let session = Arc::new(Mutex::new(
-        match AppSession::open(&user_name, &passphrase).await {
+        match UserSession::open(&user_name, &passphrase).await {
             Ok(a) => a,
             Err(e) => {
                 error!("Failed to create user session: {}", e);

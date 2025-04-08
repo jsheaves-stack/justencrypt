@@ -4,10 +4,10 @@ use rocket::{
     http::Status, outcome::Outcome, request::FromRequest, tokio::sync::Mutex, Request, State,
 };
 
-use crate::{enums::request_error::RequestError, session::app_session::AppSession, AppState};
+use crate::{enums::request_error::RequestError, session::user_session::UserSession, AppState};
 
 pub struct AuthenticatedSession {
-    pub session: Arc<Mutex<AppSession>>,
+    pub session: Arc<Mutex<UserSession>>,
 }
 
 #[rocket::async_trait]
