@@ -17,6 +17,9 @@ jobs:
       userName: '@job_token@'
       passwordSecret: publish_token
     condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
+  triggers:
+  - !BranchUpdateTrigger
+    projects: justencrypt
   retryCondition: never
   maxRetries: 3
   retryDelay: 30
