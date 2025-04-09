@@ -62,7 +62,7 @@ pub fn get_schema() -> &'static str {
         nonce_size INTEGER NOT NULL,
         salt_size INTEGER NOT NULL,
         tag_size INTEGER NOT NULL,
-        FOREIGN KEY (file_id) REFERENCES files(id),
+        FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
         UNIQUE(encoded_name)
       );
 
