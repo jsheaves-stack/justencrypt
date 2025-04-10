@@ -17,7 +17,6 @@ use routes::{
     folder::{create_folder, folder_options, get_folder},
     session::{create_session, create_session_options, destroy_session, destroy_session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
-    user::{create_user, create_user_options, manifest_options},
 };
 use session::user_session::UserSession;
 use std::{
@@ -250,10 +249,6 @@ async fn rocket() -> _ {
         .mount(
             "/folder",
             routes![get_folder, create_folder, folder_options],
-        )
-        .mount(
-            "/user",
-            routes![create_user, manifest_options, create_user_options],
         )
         .mount(
             "/session",
