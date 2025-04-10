@@ -35,11 +35,6 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
 
-            RequestError::UserAlreadyExists => Response::build()
-                .status(Status::Conflict)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
             RequestError::UnsupportedFileType => Response::build()
                 .status(Status::UnsupportedMediaType)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))

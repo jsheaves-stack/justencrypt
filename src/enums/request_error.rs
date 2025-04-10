@@ -17,9 +17,6 @@ pub enum RequestError {
     #[error("Failed to create user session")]
     FailedToCreateUserSession,
 
-    #[error("User already exists")]
-    UserAlreadyExists,
-
     #[error("Unsupported file type")]
     UnsupportedFileType,
 
