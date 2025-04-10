@@ -3,44 +3,24 @@ use std::{error::Error, path::PathBuf};
 use orion::{
     aead::streaming::{Nonce, StreamOpener},
     kdf::Salt,
-    kex::SecretKey,
 };
 use tokio::{
     fs::File,
     io::{AsyncReadExt, BufReader},
 };
 
-use crate::{
-    file_decryptor::FileDecryptor, Auth, DerivedKey, Encryptor, FileEncryptionMetadata, NONCE_SIZE,
-    SALT_SIZE,
-};
+use crate::{DerivedKey, FileEncryptionMetadata, NONCE_SIZE, SALT_SIZE};
 
 pub struct StreamDecryptor {
     opener: StreamOpener,
-    pub file_path: PathBuf,
+    file_path: PathBuf,
 }
 
-impl Encryptor for StreamDecryptor {}
-
 impl StreamDecryptor {
-    pub async fn new(file_path: PathBuf, derived_key: &DerivedKey) -> Result<Self, Box<dyn Error>> {
-        let key_file_path = file_path.with_extension("meta");
-
-        let auth = Auth::DerivedKey(
-            SecretKey::from_slice(derived_key.key.unprotected_as_bytes().to_vec().as_slice())
-                .unwrap(),
-            Salt::from_slice(derived_key.salt.as_ref().to_vec().as_slice()).unwrap(),
-        );
-
-        let mut file_encryption_metadata_decryptor =
-            FileDecryptor::new(&key_file_path, auth).await?;
-
-        let file_encryption_metadata_vec =
-            file_encryption_metadata_decryptor.decrypt_file().await?;
-
-        let file_encryption_metadata =
-            FileEncryptionMetadata::deserialize(&file_encryption_metadata_vec)?;
-
+    pub async fn new(
+        file_path: PathBuf,
+        metadata: FileEncryptionMetadata,
+    ) -> Result<Self, Box<dyn Error>> {
         let file = File::open(file_path.clone()).await?;
         let mut reader = BufReader::new(file);
 
@@ -52,15 +32,21 @@ impl StreamDecryptor {
 
         let nonce = Nonce::from_slice(&nonce_buf)?;
 
-        let opener = StreamOpener::new(
-            &SecretKey::from_slice(file_encryption_metadata.key.as_slice()).unwrap(),
-            &nonce,
-        )?;
+        let derived_key = DerivedKey {
+            key: metadata.key,
+            salt: Salt::from_slice(&salt_buf).unwrap(),
+        };
+
+        let opener = StreamOpener::new(&derived_key.key, &nonce)?;
 
         Ok(StreamDecryptor { opener, file_path })
     }
 
     pub async fn decrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         Ok(self.opener.open_chunk(data)?.0)
+    }
+
+    pub fn get_file_path(&self) -> PathBuf {
+        self.file_path.clone()
     }
 }

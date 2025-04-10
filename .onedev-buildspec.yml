@@ -2,21 +2,24 @@ version: 39
 jobs:
 - name: build
   steps:
-  - !CommandStep
-    name: ls
-    runInContainer: true
-    image: alpine:latest
-    interpreter: !DefaultInterpreter
-      commands: |
-        ls -la
-    useTTY: true
+  - !CheckoutStep
+    name: Checkout
+    cloneCredential: !DefaultCredential {}
+    withLfs: false
+    withSubmodules: false
     condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
   - !BuildImageStep
-    name: docker-build
-    buildPath: .
+    name: Docker
     output: !RegistryOutput
-      tags: latest
+      tags: '@server@/@project_path@/@project_name@:latest'
+    registryLogins:
+    - registryUrl: '@server_url@'
+      userName: '@job_token@'
+      passwordSecret: publish_token
     condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
+  triggers:
+  - !BranchUpdateTrigger
+    projects: justencrypt
   retryCondition: never
   maxRetries: 3
   retryDelay: 30

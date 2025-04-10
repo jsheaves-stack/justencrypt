@@ -1,8 +1,9 @@
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
     serde::json::Json,
+    tokio::sync::RwLock,
     State,
 };
 use secrecy::SecretString;
@@ -11,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppSession, AppState,
+    AppState, UserSession,
 };
 
 #[derive(Deserialize)]
@@ -32,29 +33,29 @@ pub async fn create_session(
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
-    let session = AppSession::open(&reqbody.username, &passphrase).await;
+    let user_name = reqbody.username.clone();
 
-    match session {
-        Ok(v) => {
-            let uuid = Uuid::new_v4().hyphenated().to_string();
+    let session = Arc::new(RwLock::new(
+        match UserSession::open(&user_name, &passphrase).await {
+            Ok(a) => a,
+            Err(e) => {
+                error!("Failed to create user session: {}", e);
+                return Err(RequestError::FailedToCreateUserSession);
+            }
+        },
+    ));
 
-            let mut cookie = Cookie::new("session_id", uuid.clone());
+    let uuid = Uuid::new_v4().hyphenated().to_string();
 
-            cookie.set_same_site(Some(SameSite::Strict));
+    let mut cookie = Cookie::new("session_id", uuid.clone());
 
-            cookies.add_private(cookie);
+    cookie.set_same_site(Some(SameSite::Strict));
 
-            let mut active_sessions = state.active_sessions.write().await;
+    cookies.add_private(cookie);
 
-            active_sessions.insert(uuid, *v);
+    state.active_sessions.write().await.insert(uuid, session);
 
-            Ok(RequestSuccess::NoContent)
-        }
-        Err(e) => {
-            error!("{}", e);
-            Err(RequestError::FailedToCreateUserSession)
-        }
-    }
+    Ok(RequestSuccess::NoContent)
 }
 
 #[options("/destroy")]
@@ -76,31 +77,6 @@ pub async fn destroy_session(
     };
 
     match active_sessions.remove(cookie.value()) {
-        Some(_) => Ok(RequestSuccess::NoContent),
-        None => Err(RequestError::MissingActiveSession),
-    }
-}
-
-#[options("/")]
-pub fn check_session_options() -> Result<RequestSuccess, RequestError> {
-    Ok(RequestSuccess::NoContent)
-}
-
-#[get("/")]
-pub async fn check_session(
-    state: &State<AppState>,
-    cookies: &CookieJar<'_>,
-) -> Result<RequestSuccess, RequestError> {
-    // Read access to the active sessions map.
-    let active_sessions = state.active_sessions.read().await;
-
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
-
-    match active_sessions.get(cookie.value()) {
         Some(_) => Ok(RequestSuccess::NoContent),
         None => Err(RequestError::MissingActiveSession),
     }

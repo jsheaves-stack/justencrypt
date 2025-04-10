@@ -3,14 +3,12 @@ use std::{error::Error, path::PathBuf};
 use orion::aead;
 use tokio::{fs::File, io::AsyncWriteExt};
 
-use crate::{Auth, DerivedKey, Encryptor};
+use crate::{derive_key_from_string, Auth, DerivedKey};
 
 pub struct FileEncryptor {
     file: File,
     derived_key: DerivedKey,
 }
-
-impl Encryptor for FileEncryptor {}
 
 impl FileEncryptor {
     pub async fn new(file_path: &PathBuf, auth: Auth) -> Result<Self, Box<dyn Error>> {
@@ -18,7 +16,7 @@ impl FileEncryptor {
 
         let (key, salt) = match auth {
             Auth::Passphrase(passphrase) => {
-                let key_salt = Self::derive_key_from_string(&passphrase)?;
+                let key_salt = derive_key_from_string(&passphrase)?;
 
                 (key_salt.key, key_salt.salt)
             }

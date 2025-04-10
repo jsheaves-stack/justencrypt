@@ -30,27 +30,7 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
 
-            RequestError::FailedToWriteUserManifest => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToReadUserManifest => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
             RequestError::FailedToCreateUserSession => Response::build()
-                .status(Status::NotFound)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::UserAlreadyExists => Response::build()
-                .status(Status::Conflict)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::UserDoesNotExist => Response::build()
                 .status(Status::NotFound)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
@@ -61,6 +41,21 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .ok(),
 
             RequestError::FailedToRemoveFile => Response::build()
+                .status(Status::InternalServerError)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::FailedToAddFile => Response::build()
+                .status(Status::InternalServerError)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::FailedToCreateFolder => Response::build()
+                .status(Status::InternalServerError)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::FailedToReadFolderContents => Response::build()
                 .status(Status::InternalServerError)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),

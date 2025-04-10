@@ -1,41 +1,31 @@
-# Start with a Rust base image
-FROM rust:1.82.0-slim-bullseye as builder
+FROM rust:alpine3.20 AS builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+ARG BUILD_MODE=static
+ENV OPENSSL_STATIC=1
 
-# Set the working directory in the container
+RUN apk add --no-cache \
+    build-base \
+    openssl-dev \
+    pkgconfig \
+    musl-dev \
+    linux-headers \
+    cmake \
+    perl
+
+RUN rustup target add x86_64-unknown-linux-musl
+
 WORKDIR /usr/src/justencrypt
-
-# Copy the entire project
 COPY . .
 
-# Build the project
-RUN cargo build --release
+RUN if [ "$BUILD_MODE" = "static" ]; then \
+    cargo build --release --target x86_64-unknown-linux-musl; \
+    else \
+    cargo build --release; \
+    fi
 
-# Start a new stage with a minimal image
-FROM debian:bullseye-slim
+RUN chmod +x /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libssl1.1 \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set the working directory in the container
-WORKDIR /usr/local/bin
-
-# Copy the built executable from the builder stage
-COPY --from=builder /usr/src/justencrypt/target/release/justencrypt .
-
-# Create a directory for user data
-RUN mkdir -p /usr/local/bin/user_data
-
-# Expose the port the app runs on
+FROM scratch
+COPY --from=builder /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt /justencrypt
 EXPOSE 8000
-
-# Command to run the application
-CMD ["./justencrypt"]
+CMD ["/justencrypt"]

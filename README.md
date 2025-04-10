@@ -2,8 +2,13 @@
 
 ## Requirements
 
-- Rust (latest stable version)
+- Rust
 - Cargo
+- Sqlcipher
+
+For static builds:
+- x86_64-unknown-linux-musl toolchain
+- Musl
 
 ## Installation & Setup
 
@@ -16,8 +21,14 @@
 
 2. Install dependencies:
 
+   Regular Build:
    ```sh
    cargo build --release
+   ```
+
+   Static build:
+   ```sh
+   cargo build --release --target x86_64-unknown-linux-musl
    ```
 
 3. Set up environment variables:

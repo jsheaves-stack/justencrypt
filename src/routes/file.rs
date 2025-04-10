@@ -1,109 +1,78 @@
-use std::{io::SeekFrom, path::PathBuf};
+use std::io::SeekFrom;
 
 use encryption::{
-    get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
-    DerivedKey, Salt, SecretKey, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, BUFFER_SIZE, NONCE_SIZE,
+    SALT_SIZE, TAG_SIZE,
 };
 
 use rocket::{
     data::ByteUnit,
-    delete, get,
-    http::CookieJar,
-    put,
+    delete, get, put,
     response::stream::ByteStream,
     tokio::{
         self,
-        fs::{self, File},
+        fs::File,
         io::{AsyncReadExt, AsyncSeekExt, BufReader},
         sync::mpsc,
     },
-    Data, State,
+    Data,
 };
+use uuid::Uuid;
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppState,
+    get_sharded_path, remove_sharded_path,
+    web::forwarding_guards::AuthenticatedSession,
+    UnrestrictedPath,
 };
 
 const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
 
 #[options("/<_file_path..>")]
-pub fn file_options(_file_path: PathBuf) -> Result<RequestSuccess, RequestError> {
+pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
 #[put("/<file_path..>", data = "<reqdata>")]
 pub async fn put_file(
-    file_path: PathBuf, // The path where the file should be stored, extracted from the URL.
-    reqdata: Data<'_>,  // The raw data of the file being uploaded.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    file_path: UnrestrictedPath, // The path where the file should be stored, extracted from the URL.
+    reqdata: Data<'_>,           // The raw data of the file being uploaded.
+    auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    // Lock the active sessions map for write access.
-    let mut active_sessions = state.active_sessions.write().await;
+    let session = auth.session.read().await;
 
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
-    };
+    let user_path = session.get_user_path().clone();
+    let encoded_file_name = Uuid::new_v4().to_string();
+    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name);
 
-    let session = match active_sessions.get_mut(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    };
-
-    let derived_key = DerivedKey {
-        salt: Salt::from_slice(session.manifest_key.salt.as_ref()).unwrap(),
-        key: SecretKey::from_slice(session.manifest_key.key.unprotected_as_bytes()).unwrap(),
-    };
-
-    // Process the file path to separate it into components.
-    let mut components = file_path
-        .iter()
-        .filter_map(|s| s.to_str())
-        .map(String::from)
-        .collect::<Vec<String>>();
-
-    // Extract the file name from the path and prepare the user's directory path.
-    let file_name = components.pop().unwrap();
-    let user_path = session.user_path.clone();
-
-    // Insert the file path into the user's manifest and update the manifest.
-    session.manifest.files.insert_path(
-        components.into_iter(),
-        file_name.clone(),
-        get_encoded_file_name(file_path.clone()).unwrap(),
-    );
-
-    match session.update_manifest().await {
-        Ok(_) => (),
+    // Initialize the stream encryptor for the file.
+    let mut encryptor = match StreamEncryptor::new(encoded_file_path).await {
+        Ok(e) => e,
         Err(e) => {
-            error!("Failed to write user manifest: {}", e);
-            return Err(RequestError::FailedToWriteUserManifest);
+            error!("Failed to create StreamEncryptor: {}", e);
+            return Err(RequestError::FailedToProcessData);
         }
     };
 
-    // Drop active_sessions to release the write lock so we're not holding onto it the entire time we're processing a file.
-    drop(active_sessions);
+    let metadata = encryptor.get_file_encryption_metadata();
+    let file_path_buf = file_path.to_path_buf();
+
+    match session
+        .add_file(file_path_buf, encoded_file_name, metadata)
+        .await
+    {
+        Ok(_) => drop(session),
+        Err(e) => {
+            error!("Failed to add file to db: {}", e);
+            return Err(RequestError::FailedToAddFile);
+        }
+    };
 
     // Create a channel for transferring file data chunks with a specified buffer size.
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
 
     // Spawn an async task to handle file encryption and writing.
     tokio::spawn(async move {
-        let encoded_file_name = get_encoded_file_name(file_path).unwrap();
-        let encoded_file_path = user_path.join(encoded_file_name);
-
-        // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(encoded_file_path, derived_key).await {
-            Ok(e) => e,
-            Err(e) => {
-                error!("Failed to create StreamEncryptor: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
-
         // Write encryption metadata (salt and nonce) to the file.
         match encryptor.write_salt_and_nonce().await {
             Ok(_) => (),
@@ -191,29 +160,34 @@ pub async fn put_file(
 
 #[get("/<file_path..>")]
 pub async fn get_file(
-    file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
+    auth: AuthenticatedSession,
 ) -> Result<ByteStream![Vec<u8>], RequestError> {
-    // Read access to the active sessions map.
-    let active_sessions = state.active_sessions.read().await;
+    let file_path_buf = file_path.to_path_buf();
+    let session = auth.session.read().await;
 
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
+    let user_path = session.get_user_path().clone();
+
+    let encoded_file_name = session
+        .get_encoded_file_name(file_path.to_path_buf())
+        .await
+        .unwrap();
+
+    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name);
+
+    let metadata = match session.get_file_encryption_metadata(file_path_buf).await {
+        Ok(m) => {
+            drop(session);
+            m
+        }
+        Err(e) => {
+            error!("Failed to get file encryption metadata for file: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
     };
-
-    let session = match active_sessions.get(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    };
-
-    let encoded_file_name = get_encoded_file_name(file_path.clone()).unwrap();
-    let encoded_file_path = session.user_path.join(encoded_file_name);
 
     // Initialize the stream decryptor for the requested file.
-    let mut decryptor = match StreamDecryptor::new(encoded_file_path, &session.manifest_key).await {
+    let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
         Ok(d) => d,
         Err(e) => {
             error!("Failed to create StreamDecryptor: {}", e);
@@ -222,7 +196,7 @@ pub async fn get_file(
     };
 
     // Open the encrypted file.
-    let input_file = match File::open(decryptor.file_path.clone()).await {
+    let input_file = match File::open(decryptor.get_file_path()).await {
         Ok(i) => i,
         Err(e) => {
             error!("Failed to open file: {}", e);
@@ -302,56 +276,34 @@ pub async fn get_file(
 
 #[delete("/<file_path..>")]
 pub async fn delete_file(
-    file_path: PathBuf, // The name/path of the file being requested, extracted from the URL.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
-    cookies: &CookieJar<'_>, // Cookies associated with the request, used for session management.
+    file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
+    auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    // Lock the active sessions map for write access.
-    let mut active_sessions = state.active_sessions.write().await;
+    let file_path_buf = file_path.to_path_buf();
+    let session = auth.session.read().await;
 
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
+    let user_path = session.get_user_path().clone();
+
+    let encoded_file_name = session
+        .get_encoded_file_name(file_path.to_path_buf())
+        .await
+        .unwrap();
+
+    let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name);
+
+    match session.delete_file(file_path_buf).await {
+        Ok(_) => drop(session),
+        Err(e) => {
+            error!("Failed to add file to db: {}", e);
+            return Err(RequestError::FailedToRemoveFile);
+        }
     };
 
-    let session = match active_sessions.get_mut(cookie.value()) {
-        Some(s) => s,
-        None => return Err(RequestError::MissingActiveSession),
-    };
-
-    let file_name = get_encoded_file_name(file_path.clone()).unwrap();
-    let full_file_path = session.user_path.join(&file_name);
-
-    match fs::remove_file(&full_file_path).await {
+    match remove_sharded_path(&user_path, &encoded_file_path).await {
         Ok(_) => (),
         Err(e) => {
             error!("Failed to delete file: {}", e);
             return Err(RequestError::FailedToRemoveFile);
-        }
-    };
-
-    match fs::remove_file(full_file_path.with_extension("meta")).await {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Failed to delete meta file: {}", e);
-            return Err(RequestError::FailedToRemoveFile);
-        }
-    };
-
-    match session.manifest.files.delete_item(file_path) {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Failed to delete file from manifest: {}", e);
-            return Err(RequestError::FailedToRemoveFile);
-        }
-    };
-
-    match session.update_manifest().await {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Failed to write user manifest: {}", e);
-            return Err(RequestError::FailedToWriteUserManifest);
         }
     };
 
