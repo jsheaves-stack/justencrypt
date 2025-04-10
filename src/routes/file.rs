@@ -39,7 +39,7 @@ pub async fn put_file(
     reqdata: Data<'_>,           // The raw data of the file being uploaded.
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    let session = auth.session.lock().await;
+    let session = auth.session.read().await;
 
     let user_path = session.get_user_path().clone();
     let encoded_file_name = Uuid::new_v4().to_string();
@@ -164,7 +164,7 @@ pub async fn get_file(
     auth: AuthenticatedSession,
 ) -> Result<ByteStream![Vec<u8>], RequestError> {
     let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.lock().await;
+    let session = auth.session.read().await;
 
     let user_path = session.get_user_path().clone();
 
@@ -280,7 +280,7 @@ pub async fn delete_file(
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.lock().await;
+    let session = auth.session.read().await;
 
     let user_path = session.get_user_path().clone();
 

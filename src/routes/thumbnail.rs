@@ -40,7 +40,7 @@ pub async fn get_thumbnail(
         .await
         .map_err(|_| RequestError::FailedToProcessData)?;
 
-    let session = auth.session.lock().await;
+    let session = auth.session.read().await;
     let user_path = session.get_user_path().clone();
     let cache_path = user_path.join(".cache");
 

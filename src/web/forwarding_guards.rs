@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use rocket::{
-    http::Status, outcome::Outcome, request::FromRequest, tokio::sync::Mutex, Request, State,
+    http::Status, outcome::Outcome, request::FromRequest, tokio::sync::RwLock, Request, State,
 };
 
 use crate::{enums::request_error::RequestError, session::user_session::UserSession, AppState};
 
 pub struct AuthenticatedSession {
-    pub session: Arc<Mutex<UserSession>>,
+    pub session: Arc<RwLock<UserSession>>,
 }
 
 #[rocket::async_trait]

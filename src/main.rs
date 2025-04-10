@@ -9,7 +9,7 @@ use rocket::{
     time::Duration,
     tokio::{
         fs,
-        sync::{Mutex, RwLock, Semaphore},
+        sync::{RwLock, Semaphore},
     },
 };
 use routes::{
@@ -40,7 +40,7 @@ extern crate rocket;
 extern crate serde;
 
 pub struct AppState {
-    active_sessions: RwLock<HashMap<String, Arc<Mutex<UserSession>>>>,
+    active_sessions: RwLock<HashMap<String, Arc<RwLock<UserSession>>>>,
     thumbnail_semaphore: Arc<Semaphore>,
 }
 

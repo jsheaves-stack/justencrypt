@@ -3,7 +3,7 @@ use std::{str::FromStr, sync::Arc};
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
     serde::json::Json,
-    tokio::sync::Mutex,
+    tokio::sync::RwLock,
     State,
 };
 use secrecy::SecretString;
@@ -35,7 +35,7 @@ pub async fn create_session(
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
     let user_name = reqbody.username.clone();
 
-    let session = Arc::new(Mutex::new(
+    let session = Arc::new(RwLock::new(
         match UserSession::open(&user_name, &passphrase).await {
             Ok(a) => a,
             Err(e) => {
