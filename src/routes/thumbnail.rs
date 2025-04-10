@@ -1,11 +1,12 @@
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
+    get_sharded_path,
     web::forwarding_guards::AuthenticatedSession,
     AppState, UnrestrictedPath,
 };
 use encryption::{
-    get_encoded_file_name, stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
-    BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+    stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, BUFFER_SIZE, NONCE_SIZE,
+    SALT_SIZE, TAG_SIZE,
 };
 use image::ImageFormat;
 use rocket::{
@@ -18,10 +19,8 @@ use rocket::{
     },
     State,
 };
-use std::{
-    io::Cursor,
-    path::{Path, PathBuf},
-};
+use std::io::Cursor;
+use uuid::Uuid;
 
 #[options("/<_file_path..>")]
 pub fn thumbnail_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
@@ -41,7 +40,7 @@ pub async fn get_thumbnail(
         .await
         .map_err(|_| RequestError::FailedToProcessData)?;
 
-    let mut session = auth.session.lock().await;
+    let session = auth.session.lock().await;
     let user_path = session.get_user_path().clone();
     let cache_path = user_path.join(".cache");
 
@@ -55,13 +54,22 @@ pub async fn get_thumbnail(
         };
     }
 
-    let encoded_thumbnail_file_name = PathBuf::from(
-        get_encoded_file_name(Path::new(".cache").join(file_path_buf.clone())).unwrap(),
-    );
-
-    let thumbnail_path: PathBuf = cache_path.join(&encoded_thumbnail_file_name);
-
     let thumbnail_extension = file_path_buf.extension().unwrap();
+
+    let encoded_thumbnail_file_name = match session
+        .get_encoded_thumbnail_file_name(file_path.to_path_buf())
+        .await
+    {
+        Ok(e) => e,
+        Err(e) => {
+            error!("Failed to get encoded thumbnail file name: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
+    }
+    .unwrap_or(Uuid::new_v4().to_string());
+
+    let encoded_thumbnail_file_path =
+        get_sharded_path(cache_path.clone(), &encoded_thumbnail_file_name);
 
     let metadata = match session
         .get_file_encryption_metadata(file_path_buf.clone())
@@ -74,12 +82,22 @@ pub async fn get_thumbnail(
         }
     };
 
-    if !thumbnail_path.exists() {
+    if !encoded_thumbnail_file_path.exists() {
         let content_type =
             ContentType::from_extension(thumbnail_extension.to_str().unwrap()).unwrap();
 
-        let encoded_file_name = get_encoded_file_name(file_path_buf.clone()).unwrap();
-        let encoded_file_path = user_path.join(encoded_file_name);
+        let encoded_file_name = match session.get_encoded_file_name(file_path_buf.clone()).await {
+            Ok(e) => e,
+            Err(e) => {
+                error!("Failed to get encoded file name: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
+
+        let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name);
+
+        let encoded_thumbnail_file_path =
+            get_sharded_path(cache_path, &encoded_thumbnail_file_name);
 
         // Initialize the stream decryptor for the requested file.
         let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
@@ -189,7 +207,7 @@ pub async fn get_thumbnail(
         drop(permit);
 
         // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(thumbnail_path).await {
+        let mut encryptor = match StreamEncryptor::new(encoded_thumbnail_file_path).await {
             Ok(e) => e,
             Err(e) => {
                 error!("Failed to create StreamEncryptor: {}", e);
@@ -202,7 +220,7 @@ pub async fn get_thumbnail(
         match session
             .add_thumbnail(
                 file_path_buf,
-                encoded_thumbnail_file_name.to_str().unwrap().to_string(),
+                encoded_thumbnail_file_name,
                 thumbnail_metadata,
             )
             .await
@@ -268,19 +286,20 @@ pub async fn get_thumbnail(
                 f
             }
             Err(e) => {
-                error!("Failed to write encrypted chunk: {}", e);
+                error!("Failed to get thumbnail encryption metadata from db: {}", e);
                 return Err(RequestError::FailedToProcessData);
             }
         };
 
         // Initialize the stream decryptor for the requested file.
-        let mut decryptor = match StreamDecryptor::new(thumbnail_path, thumbnail_metadata).await {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to create StreamDecryptor: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
+        let mut decryptor =
+            match StreamDecryptor::new(encoded_thumbnail_file_path, thumbnail_metadata).await {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to create StreamDecryptor: {}", e);
+                    return Err(RequestError::FailedToProcessData);
+                }
+            };
 
         // Open the encrypted file.
         let input_file = match File::open(decryptor.get_file_path()).await {

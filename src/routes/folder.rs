@@ -26,7 +26,7 @@ pub async fn get_folder(
     auth: AuthenticatedSession,
 ) -> Result<Json<Vec<File>>, RequestError> {
     let folder_path_buf = folder_path.to_path_buf();
-    let mut session = auth.session.lock().await;
+    let session = auth.session.lock().await;
 
     let folder_contents = match session.get_folder(folder_path_buf).await {
         Ok(f) => {
@@ -48,7 +48,7 @@ pub async fn create_folder(
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     let folder_path_buf = folder_path.to_path_buf();
-    let mut session = auth.session.lock().await;
+    let session = auth.session.lock().await;
 
     match session.add_folder(folder_path_buf).await {
         Ok(_) => drop(session),

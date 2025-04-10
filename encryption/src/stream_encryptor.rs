@@ -6,7 +6,7 @@ use orion::{
     kex::SecretKey,
 };
 use tokio::{
-    fs::{File, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::AsyncWriteExt,
 };
 
@@ -33,6 +33,10 @@ impl StreamEncryptor {
             salt_size: SALT_SIZE,
             tag_size: TAG_SIZE,
         };
+
+        let file_path_parts = file_path.parent().unwrap();
+
+        fs::create_dir_all(file_path_parts).await?;
 
         let file = OpenOptions::new()
             .write(true)

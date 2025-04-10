@@ -45,8 +45,20 @@ impl UserSession {
         self.user_path.clone()
     }
 
+    pub async fn get_encoded_file_name(&self, file_path: PathBuf) -> Result<String, DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::get_encoded_file_name(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+    }
+
     pub async fn add_file(
-        &mut self,
+        &self,
         file_path: PathBuf,
         encoded_file_name: String,
         metadata: FileEncryptionMetadata,
@@ -69,7 +81,7 @@ impl UserSession {
         Ok(())
     }
 
-    pub async fn delete_file(&mut self, file_path: PathBuf) -> Result<(), DbError> {
+    pub async fn delete_file(&self, file_path: PathBuf) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
         tokio::task::spawn_blocking(move || {
@@ -83,11 +95,12 @@ impl UserSession {
         Ok(())
     }
 
-    pub async fn add_folder(&mut self, folder_path: PathBuf) -> Result<(), DbError> {
+    pub async fn add_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
+
             sqlite::add_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
@@ -97,7 +110,7 @@ impl UserSession {
     }
 
     pub async fn add_thumbnail(
-        &mut self,
+        &self,
         file_path: PathBuf,
         encoded_name: String,
         metadata: FileEncryptionMetadata,
@@ -106,6 +119,7 @@ impl UserSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
+
             sqlite::add_thumbnail(
                 &db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
@@ -119,12 +133,13 @@ impl UserSession {
         Ok(())
     }
 
-    pub async fn get_folder(&mut self, folder_path: PathBuf) -> Result<Vec<File>, DbError> {
+    pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<File>, DbError> {
         let db_pool = self.db_pool.clone();
         let folder_path = folder_path.clone();
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
+
             sqlite::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
@@ -132,7 +147,7 @@ impl UserSession {
     }
 
     pub async fn get_thumbnail(
-        &mut self,
+        &self,
         file_path: PathBuf,
     ) -> Result<FileEncryptionMetadata, DbError> {
         let db_pool = self.db_pool.clone();
@@ -140,7 +155,26 @@ impl UserSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
+
             sqlite::get_thumbnail(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+    }
+
+    pub async fn get_encoded_thumbnail_file_name(
+        &self,
+        file_path: PathBuf,
+    ) -> Result<Option<String>, DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::get_encoded_thumbnail_file_name(
+                &db,
+                file_path.to_str().ok_or(DbError::InvalidPath)?,
+            )
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
@@ -154,6 +188,7 @@ impl UserSession {
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
+
             sqlite::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await

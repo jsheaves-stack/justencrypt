@@ -152,6 +152,87 @@ pub fn get_folder_id(
     Ok(Some(current_id))
 }
 
+pub fn get_encoded_file_name(
+    db: &PooledConnection<SqliteConnectionManager>,
+    full_file_path: &str,
+) -> Result<String, DbError> {
+    let path = Path::new(full_file_path.trim_matches('/'));
+    let parent_path = path.parent().unwrap_or(Path::new(""));
+    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
+    let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::MissingFileName)?;
+
+    let file_name = path
+        .file_name()
+        .ok_or(DbError::MissingFileName)?
+        .to_string_lossy();
+
+    let result = match db.query_row(
+        "SELECT encoded_name FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+        params![parent_folder_id, file_name],
+        |row| row.get(0),
+    ) {
+        Ok(f) => f,
+        Err(e) => {
+            error!("Failed to get encoded file name from the db: {}", e);
+            return Err(DbError::FailedToGetFileFromDb(e.to_string()));
+        }
+    };
+
+    Ok(result)
+}
+
+pub fn get_encoded_thumbnail_file_name(
+    db: &PooledConnection<SqliteConnectionManager>,
+    full_file_path: &str,
+) -> Result<Option<String>, DbError> {
+    let path = Path::new(full_file_path.trim_matches('/'));
+    let parent_path = path.parent().unwrap_or(Path::new(""));
+    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
+
+    let parent_folder_id = get_folder_id(db, parent_str)
+        .map_err(|e| {
+            error!(
+                "Failed to get parent folder id for the provided path: {}",
+                e
+            );
+            DbError::FailedToGetFolderIdFromPath(e.to_string())
+        })?
+        .ok_or_else(|| {
+            error!("No folder id was returned from the db");
+            DbError::FailedToGetFolderIdFromPath(
+                "No folder id was returned from the db".to_string(),
+            )
+        })?;
+
+    let file_name = path
+        .file_name()
+        .ok_or(DbError::MissingFileName)?
+        .to_string_lossy();
+
+    let file_id: i32 = db.query_row(
+        "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+        params![parent_folder_id, file_name],
+        |row| row.get(0),
+    )?;
+
+    let result = db
+        .query_row(
+            "SELECT encoded_name FROM thumbnails WHERE file_id = ?1",
+            params![file_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| {
+            error!(
+                "Failed to get encoded thumbnail file name from the db: {}",
+                e
+            );
+            DbError::FailedToGetFileFromDb(e.to_string())
+        })?;
+
+    Ok(result)
+}
+
 pub fn add_file(
     db: &PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
@@ -208,8 +289,7 @@ pub fn delete_file(
     let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
 
     db.execute(
-        "DELETE FROM files 
-        WHERE parent_folder_id = ?1 AND name = ?2",
+        "DELETE FROM files WHERE parent_folder_id = ?1 AND name = ?2",
         params![parent_folder_id, file_name],
     )
     .map(|_| ())

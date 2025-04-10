@@ -7,7 +7,10 @@ use rocket::{
     request::FromSegments,
     shield::{Hsts, Shield},
     time::Duration,
-    tokio::sync::{Mutex, RwLock, Semaphore},
+    tokio::{
+        fs,
+        sync::{Mutex, RwLock, Semaphore},
+    },
 };
 use routes::{
     file::{delete_file, file_options, get_file, put_file},
@@ -17,7 +20,14 @@ use routes::{
     user::{create_user, create_user_options, manifest_options},
 };
 use session::user_session::UserSession;
-use std::{collections::HashMap, env, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    env,
+    error::Error,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 use web::fairings::Cors;
 
 mod db;
@@ -58,6 +68,36 @@ impl<'r> FromSegments<'r> for UnrestrictedPath {
             segments.into_iter().map(|s| s.to_string()).collect(),
         ))
     }
+}
+
+async fn remove_sharded_path(base_path: &Path, file_path: &Path) -> Result<(), Box<dyn Error>> {
+    fs::remove_file(file_path).await?;
+
+    let mut current_dir = file_path.parent();
+
+    while let Some(dir) = current_dir {
+        if dir == base_path {
+            break;
+        }
+
+        if fs::read_dir(dir).await?.next_entry().await?.is_none() {
+            fs::remove_dir(dir).await?;
+        } else {
+            break;
+        }
+        current_dir = dir.parent();
+    }
+    Ok(())
+}
+
+fn get_sharded_path(mut user_path: PathBuf, file_name: &String) -> PathBuf {
+    if file_name.len() >= 4 {
+        user_path.push(&file_name[0..2]);
+        user_path.push(&file_name[2..4]);
+    }
+    user_path.push(file_name);
+
+    user_path
 }
 
 fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
