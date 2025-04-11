@@ -135,7 +135,6 @@ impl UserSession {
 
     pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<File>, DbError> {
         let db_pool = self.db_pool.clone();
-        let folder_path = folder_path.clone();
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;
@@ -151,7 +150,6 @@ impl UserSession {
         file_path: PathBuf,
     ) -> Result<FileEncryptionMetadata, DbError> {
         let db_pool = self.db_pool.clone();
-        let file_path = file_path.clone();
 
         tokio::task::spawn_blocking(move || {
             let db = db_pool.get()?;

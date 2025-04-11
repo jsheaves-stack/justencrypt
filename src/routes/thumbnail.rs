@@ -54,7 +54,7 @@ pub async fn get_thumbnail(
         };
     }
 
-    let thumbnail_extension = file_path_buf.extension().unwrap();
+    let thumbnail_extension = file_path_buf.extension().unwrap_or_default();
 
     let encoded_thumbnail_file_name = match session
         .get_encoded_thumbnail_file_name(file_path.to_path_buf())
@@ -84,7 +84,7 @@ pub async fn get_thumbnail(
 
     if !encoded_thumbnail_file_path.exists() {
         let content_type =
-            ContentType::from_extension(thumbnail_extension.to_str().unwrap()).unwrap();
+            ContentType::from_extension(thumbnail_extension.to_str().unwrap_or_default()).unwrap();
 
         let encoded_file_name = match session.get_encoded_file_name(file_path_buf.clone()).await {
             Ok(e) => e,

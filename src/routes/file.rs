@@ -168,10 +168,13 @@ pub async fn get_file(
 
     let user_path = session.get_user_path().clone();
 
-    let encoded_file_name = session
-        .get_encoded_file_name(file_path.to_path_buf())
-        .await
-        .unwrap();
+    let encoded_file_name = match session.get_encoded_file_name(file_path.to_path_buf()).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("Failed to get encoded file name from db: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
+    };
 
     let encoded_file_path = get_sharded_path(user_path, &encoded_file_name);
 
@@ -284,10 +287,13 @@ pub async fn delete_file(
 
     let user_path = session.get_user_path().clone();
 
-    let encoded_file_name = session
-        .get_encoded_file_name(file_path.to_path_buf())
-        .await
-        .unwrap();
+    let encoded_file_name = match session.get_encoded_file_name(file_path.to_path_buf()).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("Failed to get encoded file name from db: {}", e);
+            return Err(RequestError::FailedToProcessData);
+        }
+    };
 
     let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name);
 
