@@ -230,9 +230,14 @@ async fn rocket() -> _ {
 
     let app_config = get_app_config();
 
+    let workers: u16 = app_config.extract_inner("workers").unwrap();
+    let semaphore_tickets = ((workers as usize * 7) / 10).max(1);
+
+    println!("{:?}", semaphore_tickets);
+
     let state = AppState {
         active_sessions: RwLock::default(),
-        thumbnail_semaphore: Arc::new(Semaphore::new(10)),
+        thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
     };
 
     let hsts = Hsts::Enable(Duration::days(365));
