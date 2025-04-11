@@ -233,8 +233,6 @@ async fn rocket() -> _ {
     let workers: u16 = app_config.extract_inner("workers").unwrap();
     let semaphore_tickets = ((workers as usize * 7) / 10).max(1);
 
-    println!("{:?}", semaphore_tickets);
-
     let state = AppState {
         active_sessions: RwLock::default(),
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
