@@ -161,125 +161,108 @@ pub fn get_encoded_file_name(file_path: PathBuf) -> Result<String, Box<dyn Error
     Ok(URL_SAFE.encode(hashed_file_path.as_ref()))
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use crate::{
-//         file_decryptor::FileDecryptor, file_encryptor::FileEncryptor,
-//         stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
-//     };
+#[cfg(test)]
+mod tests {
+    use crate::{
+        file_decryptor::FileDecryptor, file_encryptor::FileEncryptor,
+        stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
+    };
 
-//     use super::*;
+    use super::*;
 
-//     #[tokio::test]
-//     async fn test_derive_key_from_string() {
-//         let passphrase = SecretString::new("securepassword123".to_string());
-//         let result = derive_key_from_string(&passphrase);
+    #[tokio::test]
+    async fn test_derive_key_from_string() {
+        let passphrase = SecretString::new("securepassword123".to_string());
+        let result = derive_key_from_string(&passphrase);
 
-//         assert!(result.is_ok());
+        assert!(result.is_ok());
 
-//         let derived_key = result.unwrap();
-//         assert_eq!(derived_key.key.unprotected_as_bytes().len(), KEY_LENGTH);
-//         assert_eq!(derived_key.salt.as_ref().len(), SALT_SIZE);
-//     }
+        let derived_key = result.unwrap();
+        assert_eq!(derived_key.key.unprotected_as_bytes().len(), KEY_LENGTH);
+        assert_eq!(derived_key.salt.as_ref().len(), SALT_SIZE);
+    }
 
-//     #[tokio::test]
-//     async fn test_file_encryption_decryption() {
-//         use tokio::fs;
+    #[tokio::test]
+    async fn test_file_encryption_decryption() {
+        use tokio::fs;
 
-//         let temp_file_path = PathBuf::from("./test_file.enc");
-//         let passphrase = SecretString::new("securepassword123".to_string());
+        let temp_file_path = PathBuf::from("./test_file.enc");
+        let passphrase = SecretString::new("securepassword123".to_string());
 
-//         let mut encryptor =
-//             FileEncryptor::new(&temp_file_path, Auth::Passphrase(passphrase.clone()))
-//                 .await
-//                 .unwrap();
+        let mut encryptor =
+            FileEncryptor::new(&temp_file_path, Auth::Passphrase(passphrase.clone()))
+                .await
+                .unwrap();
 
-//         let data = b"This is test data";
+        let data = b"This is test data";
 
-//         encryptor.encrypt_file(data).await.unwrap();
+        encryptor.encrypt_file(data).await.unwrap();
 
-//         let mut decryptor = FileDecryptor::new(&temp_file_path, Auth::Passphrase(passphrase))
-//             .await
-//             .unwrap();
+        let mut decryptor = FileDecryptor::new(&temp_file_path, Auth::Passphrase(passphrase))
+            .await
+            .unwrap();
 
-//         let decrypted_data = decryptor.decrypt_file().await.unwrap();
+        let decrypted_data = decryptor.decrypt_file().await.unwrap();
 
-//         assert_eq!(decrypted_data, data);
+        assert_eq!(decrypted_data, data);
 
-//         // Clean up
-//         fs::remove_file(temp_file_path).await.unwrap();
-//     }
+        // Clean up
+        fs::remove_file(temp_file_path).await.unwrap();
+    }
 
-//     #[tokio::test]
-//     async fn test_metadata_serialization_deserialization() {
-//         let metadata = FileEncryptionMetadata {
-//             key: vec![1, 2, 3, 4, 5],
-//             buffer_size: 16384,
-//             nonce_size: 24,
-//             salt_size: 32,
-//             tag_size: 16,
-//         };
+    #[tokio::test]
+    async fn test_metadata_serialization_deserialization() {
+        let metadata = FileEncryptionMetadata {
+            key: SecretKey::generate(32).unwrap(),
+            buffer_size: 16384,
+            nonce_size: 24,
+            salt_size: 32,
+            tag_size: 16,
+        };
 
-//         let serialized = metadata.serialize();
-//         let deserialized = FileEncryptionMetadata::deserialize(&serialized).unwrap();
+        let serialized = metadata.serialize();
+        let deserialized = FileEncryptionMetadata::deserialize(&serialized).unwrap();
 
-//         assert_eq!(metadata.key, deserialized.key);
-//         assert_eq!(metadata.buffer_size, deserialized.buffer_size);
-//         assert_eq!(metadata.nonce_size, deserialized.nonce_size);
-//         assert_eq!(metadata.salt_size, deserialized.salt_size);
-//         assert_eq!(metadata.tag_size, deserialized.tag_size);
-//     }
+        assert_eq!(metadata.key, deserialized.key);
+        assert_eq!(metadata.buffer_size, deserialized.buffer_size);
+        assert_eq!(metadata.nonce_size, deserialized.nonce_size);
+        assert_eq!(metadata.salt_size, deserialized.salt_size);
+        assert_eq!(metadata.tag_size, deserialized.tag_size);
+    }
 
-//     #[tokio::test]
-//     async fn test_stream_encryption_decryption() {
-//         use tokio::fs;
+    #[tokio::test]
+    async fn test_stream_encryption_decryption() {
+        use tokio::fs;
 
-//         let temp_file_path = PathBuf::from("./test_stream.enc");
-//         let passphrase = SecretString::new("securepassword123".to_string());
+        let temp_file_path = PathBuf::from("./test_stream.enc");
 
-//         let encryptor_derived_key = derive_key_from_string(&passphrase).unwrap();
+        let mut stream_encryptor = StreamEncryptor::new(temp_file_path.clone()).await.unwrap();
 
-//         let salt =
-//             Salt::from_slice(encryptor_derived_key.salt.as_ref().to_vec().as_slice()).unwrap();
-//         let key = SecretKey::from_slice(encryptor_derived_key.key.unprotected_as_bytes()).unwrap();
+        let metadata = stream_encryptor.get_file_encryption_metadata();
 
-//         let encoded_file_name = get_encoded_file_name(temp_file_path.clone()).unwrap();
-//         let encoded_file_path = PathBuf::from(encoded_file_name.clone());
+        let data = b"This is a test stream chunk.";
 
-//         let mut stream_encryptor =
-//             StreamEncryptor::new(encoded_file_path.clone(), encryptor_derived_key)
-//                 .await
-//                 .unwrap();
+        stream_encryptor.write_salt_and_nonce().await.unwrap();
 
-//         let data = b"This is a test stream chunk.";
+        let encrypted_chunk = stream_encryptor.encrypt_chunk(data).await.unwrap();
 
-//         stream_encryptor.write_salt_and_nonce().await.unwrap();
+        stream_encryptor
+            .write_chunk(encrypted_chunk.clone())
+            .await
+            .unwrap();
 
-//         let encrypted_chunk = stream_encryptor.encrypt_chunk(data).await.unwrap();
+        let mut stream_decryptor = StreamDecryptor::new(temp_file_path.clone(), metadata)
+            .await
+            .unwrap();
 
-//         stream_encryptor
-//             .write_chunk(encrypted_chunk.clone())
-//             .await
-//             .unwrap();
+        let decrypted_chunk = stream_decryptor
+            .decrypt_chunk(&encrypted_chunk)
+            .await
+            .unwrap();
 
-//         let decryptor_derived_key = DerivedKey { salt, key };
+        assert_eq!(decrypted_chunk, data);
 
-//         let mut stream_decryptor =
-//             StreamDecryptor::new(encoded_file_path.clone(), &decryptor_derived_key)
-//                 .await
-//                 .unwrap();
-
-//         let decrypted_chunk = stream_decryptor
-//             .decrypt_chunk(&encrypted_chunk)
-//             .await
-//             .unwrap();
-
-//         assert_eq!(decrypted_chunk, data);
-
-//         // Clean up
-//         fs::remove_file(encoded_file_path.clone()).await.unwrap();
-//         fs::remove_file(encoded_file_path.with_extension("meta"))
-//             .await
-//             .unwrap();
-//     }
-// }
+        // Clean up
+        fs::remove_file(temp_file_path.clone()).await.unwrap();
+    }
+}
