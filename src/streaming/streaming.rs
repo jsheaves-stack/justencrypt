@@ -21,7 +21,6 @@ pub async fn decrypt_stream_to_vec<R: AsyncReadExt + AsyncSeekExt + Unpin>(
             })?;
     }
 
-    // Use a stack-allocated buffer as BUFFER_SIZE + TAG_SIZE is reasonably small.
     let mut encrypted_buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
     let mut decrypted_data_accumulator = Vec::new();
 
@@ -32,7 +31,7 @@ pub async fn decrypt_stream_to_vec<R: AsyncReadExt + AsyncSeekExt + Unpin>(
         })?;
 
         if bytes_read == 0 {
-            break; // End of file
+            break;
         }
 
         let decrypted_chunk = decryptor
@@ -44,7 +43,6 @@ pub async fn decrypt_stream_to_vec<R: AsyncReadExt + AsyncSeekExt + Unpin>(
             })?;
 
         if decrypted_chunk.is_empty() {
-            // Decryptor signals end of meaningful plaintext, even if padding/tag bytes were read.
             break;
         }
         decrypted_data_accumulator.extend_from_slice(&decrypted_chunk);
@@ -59,7 +57,7 @@ pub async fn encrypt_source_to_encryptor<R: AsyncReadExt + Unpin>(
     mut source_reader: R,
     encryptor: &mut StreamEncryptor,
 ) -> Result<(), RequestError> {
-    let mut plaintext_buffer = [0u8; BUFFER_SIZE]; // Stack-allocated buffer
+    let mut plaintext_buffer = [0u8; BUFFER_SIZE];
 
     loop {
         let bytes_read = source_reader
@@ -71,7 +69,7 @@ pub async fn encrypt_source_to_encryptor<R: AsyncReadExt + Unpin>(
             })?;
 
         if bytes_read == 0 {
-            break; // End of source data
+            break;
         }
 
         let encrypted_chunk = encryptor

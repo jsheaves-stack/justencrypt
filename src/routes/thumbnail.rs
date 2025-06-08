@@ -15,7 +15,7 @@ use rocket::{
     tokio::{
         self,
         fs::{self, File},
-        io::BufReader, // Removed AsyncReadExt, AsyncSeekExt, SeekFrom as they are encapsulated
+        io::BufReader,
     },
     State,
 };
@@ -238,13 +238,8 @@ pub async fn get_thumbnail(
 
         let reader = BufReader::new(input_file);
 
-        // Use the helper function to decrypt the cached thumbnail
-        let decrypted_file_buffer = decrypt_stream_to_vec(
-            reader, // BufReader<File> implements AsyncReadExt + AsyncSeekExt
-            &mut decryptor,
-            (SALT_SIZE + NONCE_SIZE) as u64, // Safe conversion
-        )
-        .await?;
+        let decrypted_file_buffer =
+            decrypt_stream_to_vec(reader, &mut decryptor, (SALT_SIZE + NONCE_SIZE) as u64).await?;
 
         Ok(decrypted_file_buffer)
     }
