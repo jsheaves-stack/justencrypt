@@ -33,6 +33,7 @@ mod db;
 mod enums;
 mod routes;
 mod session;
+mod streaming;
 mod web;
 
 #[macro_use]

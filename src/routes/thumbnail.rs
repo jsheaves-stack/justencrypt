@@ -1,12 +1,12 @@
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     get_sharded_path,
+    streaming::streaming::{decrypt_stream_to_vec, encrypt_source_to_encryptor},
     web::forwarding_guards::AuthenticatedSession,
     AppState, UnrestrictedPath,
 };
 use encryption::{
-    stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, BUFFER_SIZE, NONCE_SIZE,
-    SALT_SIZE, TAG_SIZE,
+    stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, NONCE_SIZE, SALT_SIZE,
 };
 use image::ImageFormat;
 use rocket::{
@@ -15,7 +15,7 @@ use rocket::{
     tokio::{
         self,
         fs::{self, File},
-        io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom},
+        io::BufReader, // Removed AsyncReadExt, AsyncSeekExt, SeekFrom as they are encapsulated
     },
     State,
 };
@@ -117,52 +117,10 @@ pub async fn get_thumbnail(
             }
         };
 
-        let mut reader = BufReader::new(input_file);
+        let reader = BufReader::new(input_file);
 
-        let salt_nonce_size = (SALT_SIZE + NONCE_SIZE).try_into().unwrap();
-
-        // Skip the encryption metadata (salt and nonce) at the beginning of the file.
-        match reader.seek(SeekFrom::Start(salt_nonce_size)).await {
-            Ok(_) => (),
-            Err(e) => {
-                error!("Failed to seek in file: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
-
-        let mut file_buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
-        let mut decrypted_file_buffer = Vec::new();
-
-        loop {
-            let chunk_size = match reader.read(&mut file_buffer).await {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("Failed to read file: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
-
-            // Break the loop if end of file is reached.
-            if chunk_size == 0 {
-                break;
-            }
-
-            // Decrypt the current chunk.
-            let decrypted_chunk = match decryptor.decrypt_chunk(&file_buffer[..chunk_size]).await {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to decrypt file chunk: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
-
-            // Break the loop if the decrypted chunk is empty.
-            if decrypted_chunk.is_empty() {
-                break;
-            }
-
-            decrypted_file_buffer.extend_from_slice(&decrypted_chunk);
-        }
+        let decrypted_file_buffer =
+            decrypt_stream_to_vec(reader, &mut decryptor, (SALT_SIZE + NONCE_SIZE) as u64).await?;
 
         let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
             let mut thumbnail_buffer = Cursor::new(Vec::new());
@@ -241,40 +199,8 @@ pub async fn get_thumbnail(
             }
         };
 
-        let mut encryption_file_buffer = [0u8; BUFFER_SIZE];
-
-        loop {
-            let chunk_size = match thumbnail_buffer.read(&mut encryption_file_buffer).await {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("Failed to read file: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
-
-            if chunk_size == 0 {
-                break;
-            }
-
-            let encrypted_chunk = match encryptor
-                .encrypt_chunk(&encryption_file_buffer[..chunk_size])
-                .await
-            {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to encrypt chunk: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
-
-            match encryptor.write_chunk(encrypted_chunk).await {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Failed to write encrypted chunk: {}", e);
-                    return Err(RequestError::FailedToWriteData);
-                }
-            }
-        }
+        // Use the helper function to encrypt and write the thumbnail data
+        encrypt_source_to_encryptor(&mut thumbnail_buffer, &mut encryptor).await?;
 
         Ok(thumbnail_buffer.into_inner())
     } else {
@@ -310,51 +236,15 @@ pub async fn get_thumbnail(
             }
         };
 
-        let mut reader = BufReader::new(input_file);
+        let reader = BufReader::new(input_file);
 
-        let salt_nonce_size = (SALT_SIZE + NONCE_SIZE).try_into().unwrap();
-
-        // Skip the encryption metadata (salt and nonce) at the beginning of the file.
-        match reader.seek(SeekFrom::Start(salt_nonce_size)).await {
-            Ok(_) => (),
-            Err(e) => {
-                error!("Failed to seek in file: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
-
-        let mut file_buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
-        let mut decrypted_file_buffer = Vec::new();
-
-        loop {
-            let chunk_size = match reader.read(&mut file_buffer).await {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("Failed to read file: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
-
-            // Break the loop if end of file is reached.
-            if chunk_size == 0 {
-                break;
-            }
-
-            // Decrypt the current chunk.
-            let decrypted_chunk = match decryptor.decrypt_chunk(&file_buffer[..chunk_size]).await {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to decrypt file chunk: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
-
-            if decrypted_chunk.is_empty() {
-                break;
-            }
-
-            decrypted_file_buffer.extend_from_slice(&decrypted_chunk);
-        }
+        // Use the helper function to decrypt the cached thumbnail
+        let decrypted_file_buffer = decrypt_stream_to_vec(
+            reader, // BufReader<File> implements AsyncReadExt + AsyncSeekExt
+            &mut decryptor,
+            (SALT_SIZE + NONCE_SIZE) as u64, // Safe conversion
+        )
+        .await?;
 
         Ok(decrypted_file_buffer)
     }
