@@ -199,7 +199,6 @@ pub async fn get_thumbnail(
             }
         };
 
-        // Use the helper function to encrypt and write the thumbnail data
         encrypt_source_to_encryptor(&mut thumbnail_buffer, &mut encryptor).await?;
 
         Ok(thumbnail_buffer.into_inner())
