@@ -34,6 +34,24 @@ pub async fn get_thumbnail(
     auth: AuthenticatedSession,
 ) -> Result<Vec<u8>, RequestError> {
     let file_path_buf = file_path.to_path_buf();
+
+    let thumbnail_extension = file_path_buf.extension().unwrap_or_default();
+
+    let content_type =
+        ContentType::from_extension(thumbnail_extension.to_str().unwrap_or_default()).unwrap();
+
+    let image_format = match content_type {
+        _ if content_type == ContentType::JPEG => ImageFormat::Jpeg,
+        _ if content_type == ContentType::PNG => ImageFormat::Png,
+        _ if content_type == ContentType::GIF => ImageFormat::Gif,
+        _ if content_type == ContentType::WEBP => ImageFormat::WebP,
+        _ if content_type == ContentType::AVIF => ImageFormat::Avif,
+        _ => {
+            error!("Unsupported image format: {:?}", content_type);
+            return Err(RequestError::UnsupportedFileType);
+        }
+    };
+    
     let permit = state
         .thumbnail_semaphore
         .acquire()
@@ -53,8 +71,6 @@ pub async fn get_thumbnail(
             }
         };
     }
-
-    let thumbnail_extension = file_path_buf.extension().unwrap_or_default();
 
     let encoded_thumbnail_file_name = match session
         .get_encoded_thumbnail_file_name(file_path.to_path_buf())
@@ -83,9 +99,6 @@ pub async fn get_thumbnail(
     };
 
     if !encoded_thumbnail_file_path.exists() {
-        let content_type =
-            ContentType::from_extension(thumbnail_extension.to_str().unwrap_or_default()).unwrap();
-
         let encoded_file_name = match session.get_encoded_file_name(file_path_buf.clone()).await {
             Ok(e) => e,
             Err(e) => {
@@ -130,18 +143,6 @@ pub async fn get_thumbnail(
 
         let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
             let mut thumbnail_buffer = Cursor::new(Vec::new());
-
-            let image_format = match content_type {
-                _ if content_type == ContentType::JPEG => ImageFormat::Jpeg,
-                _ if content_type == ContentType::PNG => ImageFormat::Png,
-                _ if content_type == ContentType::GIF => ImageFormat::Gif,
-                _ if content_type == ContentType::WEBP => ImageFormat::WebP,
-                _ if content_type == ContentType::AVIF => ImageFormat::Avif,
-                _ => {
-                    error!("Unsupported image format: {:?}", content_type);
-                    return Err(RequestError::UnsupportedFileType);
-                }
-            };
 
             let img =
                 image::load_from_memory_with_format(&decrypted_original_image_data, image_format)
