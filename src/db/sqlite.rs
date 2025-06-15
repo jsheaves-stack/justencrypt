@@ -254,9 +254,18 @@ pub fn add_file(
     let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
 
     db.execute(
-        "INSERT INTO files 
-        (parent_folder_id, name, encoded_name, file_extension, key, buffer_size, nonce_size, salt_size, tag_size) 
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        r#"INSERT INTO files
+            (parent_folder_id, name, encoded_name, file_extension, key, buffer_size, nonce_size, salt_size, tag_size)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           ON CONFLICT(parent_folder_id, name) DO UPDATE SET
+             encoded_name = excluded.encoded_name,
+             file_extension = excluded.file_extension,
+             key = excluded.key,
+             buffer_size = excluded.buffer_size,
+             nonce_size = excluded.nonce_size,
+             salt_size = excluded.salt_size,
+             tag_size = excluded.tag_size
+        "#,
         params![
             parent_folder_id,
             file_name,
@@ -270,7 +279,7 @@ pub fn add_file(
         ],
     ).map(|_| ())
     .map_err(|e| {
-        error!("Failed to add file to the db: {}", e);
+        error!("Failed to add or update file in the db: {}", e);
         DbError::FailedToAddFileToDb(e.to_string())
     })
 }
