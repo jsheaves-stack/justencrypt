@@ -28,6 +28,8 @@ use crate::{
 
 const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
 
+const MPSC_CHANNEL_CAPACITY: usize = 2;
+
 #[options("/<_file_path..>")]
 pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
@@ -69,7 +71,7 @@ pub async fn put_file(
     };
 
     // Create a channel for transferring file data chunks with a specified buffer size.
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE);
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(MPSC_CHANNEL_CAPACITY);
 
     // Spawn an async task to handle file encryption and writing.
     tokio::spawn(async move {
@@ -78,7 +80,7 @@ pub async fn put_file(
             Ok(_) => (),
             Err(e) => {
                 error!("Failed to write salt and nonce chunks: {}", e);
-                return Err(RequestError::FailedToWriteData);
+                return;
             }
         };
 
@@ -88,7 +90,7 @@ pub async fn put_file(
                 Ok(d) => d,
                 Err(e) => {
                     error!("Failed to encrypt chunk: {}", e);
-                    return Err(RequestError::FailedToProcessData);
+                    return;
                 }
             };
 
@@ -96,24 +98,25 @@ pub async fn put_file(
                 Ok(_) => (),
                 Err(e) => {
                     error!("Failed to write encrypted chunk: {}", e);
-                    return Err(RequestError::FailedToWriteData);
+                    return;
                 }
             }
         }
-
-        Ok(())
     });
 
     // Buffer to store data chunks read from the request.
-    let mut buffer = [0u8; BUFFER_SIZE];
+    let mut read_buffer = [0u8; BUFFER_SIZE];
 
     // Open the request data stream with a limit.
     let mut data_stream = reqdata.open(ByteUnit::from(STREAM_LIMIT));
-    let mut current_size = 0;
+    let mut current_buffer_fill = 0;
 
     loop {
         // Read a chunk of data from the stream.
-        let chunk_size = match data_stream.read(&mut buffer[current_size..]).await {
+        let bytes_read = match data_stream
+            .read(&mut read_buffer[current_buffer_fill..])
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
                 error!("Failed to read chunk from data stream: {}", e);
@@ -122,36 +125,29 @@ pub async fn put_file(
         };
 
         // Break the loop if no more data is available.
-        if chunk_size == 0 {
-            if current_size == 0 {
-                break;
-            }
-
-            // Send the last chunk of data if not empty.
-            match tx.send(buffer[..current_size].to_vec()).await {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Failed to send buffer through channel: {}", e);
+        if bytes_read == 0 {
+            if current_buffer_fill > 0 {
+                if tx
+                    .send(read_buffer[..current_buffer_fill].to_vec())
+                    .await
+                    .is_err()
+                {
+                    error!("Failed to send final data chunk: channel closed prematurely.");
                     return Err(RequestError::FailedToProcessData);
                 }
-            };
-
-            current_size = 0;
+            }
+            break;
         }
 
-        current_size += chunk_size;
+        current_buffer_fill += bytes_read;
 
         // If the buffer is full, send it through the channel and reset the current size.
-        if current_size >= BUFFER_SIZE {
-            match tx.send(buffer[..BUFFER_SIZE].to_vec()).await {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Failed to send buffer through channel: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
-
-            current_size -= BUFFER_SIZE;
+        if current_buffer_fill == BUFFER_SIZE {
+            if tx.send(read_buffer.to_vec()).await.is_err() {
+                error!("Failed to send data chunk: channel closed prematurely.");
+                return Err(RequestError::FailedToProcessData);
+            }
+            current_buffer_fill = 0;
         }
     }
 
@@ -221,33 +217,34 @@ pub async fn get_file(
     };
 
     // Create an unbounded channel for streaming decrypted file chunks.
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(BUFFER_SIZE + TAG_SIZE);
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(MPSC_CHANNEL_CAPACITY);
 
     // Spawn an async task to read, decrypt, and send file chunks.
     tokio::spawn(async move {
-        let mut buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
+        let mut encrypted_read_buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
 
         // Loop to read and decrypt the file in chunks.
         loop {
-            let chunk_size = match reader.read(&mut buffer).await {
+            let bytes_read = match reader.read(&mut encrypted_read_buffer).await {
                 Ok(f) => f,
                 Err(e) => {
-                    error!("Failed to read file: {}", e);
-                    return Err(RequestError::FailedToProcessData);
+                    error!("Failed to read encrypted file chunk: {}", e);
+                    return;
                 }
             };
 
-            // Break the loop if end of file is reached.
-            if chunk_size == 0 {
+            if bytes_read == 0 {
                 break;
             }
 
-            // Decrypt the current chunk.
-            let decrypted_chunk = match decryptor.decrypt_chunk(&buffer[..chunk_size]).await {
+            let decrypted_chunk = match decryptor
+                .decrypt_chunk(&encrypted_read_buffer[..bytes_read])
+                .await
+            {
                 Ok(d) => d,
                 Err(e) => {
                     error!("Failed to decrypt file chunk: {}", e);
-                    return Err(RequestError::FailedToProcessData);
+                    return;
                 }
             };
 
@@ -257,16 +254,13 @@ pub async fn get_file(
             }
 
             // Send the decrypted chunk for streaming.
-            match tx.send(decrypted_chunk).await {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Failed to send file chunk through channel: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
+            if tx.send(decrypted_chunk).await.is_err() {
+                info!(
+                    "Failed to send decrypted chunk: channel closed (client likely disconnected)."
+                );
+                return;
+            }
         }
-
-        Ok(())
     });
 
     // Stream the decrypted file chunks as they become available.

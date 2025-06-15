@@ -1,7 +1,7 @@
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     get_sharded_path,
-    streaming::streaming::{decrypt_stream_to_vec, encrypt_source_to_encryptor},
+    streaming::streaming::{decrypt_stream_to_writer, encrypt_source_to_encryptor},
     web::forwarding_guards::AuthenticatedSession,
     AppState, UnrestrictedPath,
 };
@@ -119,8 +119,14 @@ pub async fn get_thumbnail(
 
         let reader = BufReader::new(input_file);
 
-        let decrypted_file_buffer =
-            decrypt_stream_to_vec(reader, &mut decryptor, (SALT_SIZE + NONCE_SIZE) as u64).await?;
+        let mut decrypted_original_image_data = Vec::new();
+        decrypt_stream_to_writer(
+            reader,
+            &mut decryptor,
+            &mut decrypted_original_image_data,
+            (SALT_SIZE + NONCE_SIZE) as u64,
+        )
+        .await?;
 
         let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
             let mut thumbnail_buffer = Cursor::new(Vec::new());
@@ -137,8 +143,9 @@ pub async fn get_thumbnail(
                 }
             };
 
-            let img = image::load_from_memory_with_format(&decrypted_file_buffer, image_format)
-                .map_err(|e| {
+            let img =
+                image::load_from_memory_with_format(&decrypted_original_image_data, image_format)
+                    .map_err(|e| {
                     error!("Failed to decode image: {}", e);
                     RequestError::FailedToProcessData
                 })?;
@@ -237,9 +244,15 @@ pub async fn get_thumbnail(
 
         let reader = BufReader::new(input_file);
 
-        let decrypted_file_buffer =
-            decrypt_stream_to_vec(reader, &mut decryptor, (SALT_SIZE + NONCE_SIZE) as u64).await?;
+        let mut decrypted_thumbnail_data = Vec::new();
+        decrypt_stream_to_writer(
+            reader,
+            &mut decryptor,
+            &mut decrypted_thumbnail_data,
+            (SALT_SIZE + NONCE_SIZE) as u64,
+        )
+        .await?;
 
-        Ok(decrypted_file_buffer)
+        Ok(decrypted_thumbnail_data)
     }
 }

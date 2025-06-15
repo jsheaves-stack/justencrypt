@@ -2,15 +2,19 @@ use crate::enums::request_error::RequestError;
 use encryption::{
     stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, BUFFER_SIZE, TAG_SIZE,
 };
-use rocket::tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+use rocket::tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
-/// Reads from an encrypted stream, decrypts it, and collects all data into a Vec<u8>.
+/// Reads from an encrypted stream, decrypts it, and writes all data to the provided `writer`.
 /// Skips `skip_offset` bytes at the beginning of the reader (e.g., for salt and nonce).
-pub async fn decrypt_stream_to_vec<R: AsyncReadExt + AsyncSeekExt + Unpin>(
+pub async fn decrypt_stream_to_writer<
+    R: AsyncReadExt + AsyncSeekExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+>(
     mut reader: R,
     decryptor: &mut StreamDecryptor,
+    mut writer: W,
     skip_offset: u64,
-) -> Result<Vec<u8>, RequestError> {
+) -> Result<(), RequestError> {
     if skip_offset > 0 {
         reader
             .seek(SeekFrom::Start(skip_offset))
@@ -22,7 +26,6 @@ pub async fn decrypt_stream_to_vec<R: AsyncReadExt + AsyncSeekExt + Unpin>(
     }
 
     let mut encrypted_buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
-    let mut decrypted_data_accumulator = Vec::new();
 
     loop {
         let bytes_read = reader.read(&mut encrypted_buffer[..]).await.map_err(|e| {
@@ -45,9 +48,12 @@ pub async fn decrypt_stream_to_vec<R: AsyncReadExt + AsyncSeekExt + Unpin>(
         if decrypted_chunk.is_empty() {
             break;
         }
-        decrypted_data_accumulator.extend_from_slice(&decrypted_chunk);
+        writer.write_all(&decrypted_chunk).await.map_err(|e| {
+            error!("Failed to write decrypted chunk to output stream: {}", e);
+            RequestError::FailedToWriteData
+        })?;
     }
-    Ok(decrypted_data_accumulator)
+    Ok(())
 }
 
 /// Reads plaintext data from `source_reader`, encrypts it chunk by chunk,
