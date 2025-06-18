@@ -14,6 +14,8 @@ pub fn create_user_db_connection(
     password: SecretString,
 ) -> Result<Pool<SqliteConnectionManager>, DbError> {
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
+        conn.busy_timeout(Duration::from_millis(10000))?;
+
         let key_sql = format!("PRAGMA key = '{}';", password.expose_secret());
         let mut stmt = conn.prepare(&key_sql)?;
         let mut result_rows = stmt.query([])?;
@@ -34,7 +36,6 @@ pub fn create_user_db_connection(
             }
         }
 
-        conn.busy_timeout(Duration::from_millis(10000))?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(get_schema())
     });
