@@ -473,8 +473,8 @@ pub fn get_thumbnail(
     )
     .map(Ok)
     .map_err(|e| {
-        error!("Failed to add thumbnail file to the db: {}", e);
-        DbError::FailedToAddFileToDb(e.to_string())
+        error!("Failed to get thumbnail file from the db: {}", e);
+        DbError::FailedToGetFileFromDb(e.to_string())
     })?
 }
 
