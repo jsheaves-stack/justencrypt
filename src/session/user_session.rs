@@ -18,6 +18,11 @@ pub struct UserSession {
 
 impl UserSession {
     pub async fn open(user_name: &str, passphrase: &SecretString) -> Result<Self, DbError> {
+        // Validate user_name to prevent path traversal
+        if user_name.is_empty() || user_name.contains(['/', '\\', '.']) || user_name.len() > 64 {
+            return Err(DbError::InvalidInput("Invalid user name format or length.".to_string()));
+        }
+
         let user_name = user_name.to_owned();
         let passphrase = passphrase.clone();
 

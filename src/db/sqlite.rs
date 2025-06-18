@@ -1,11 +1,11 @@
-use std::path::{Component, Path, PathBuf};
-
 use encryption::{FileEncryptionMetadata, SecretKey};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, OptionalExtension};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use crate::enums::db_error::DbError;
 
@@ -14,11 +14,28 @@ pub fn create_user_db_connection(
     password: SecretString,
 ) -> Result<Pool<SqliteConnectionManager>, DbError> {
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
-        conn.execute_batch(&format!(
-            "PRAGMA key = '{}'; PRAGMA foreign_keys = ON;",
-            password.expose_secret()
-        ))?;
+        let key_sql = format!("PRAGMA key = '{}';", password.expose_secret());
+        let mut stmt = conn.prepare(&key_sql)?;
+        let mut result_rows = stmt.query([])?;
 
+        // Iterate through any rows returned to consume them.
+        while let Some(_row) = result_rows.next()? {}
+
+        match conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get::<_, String>(0)) {
+            Ok(mode) => {
+                if mode.to_lowercase() != "wal" {
+                    warn!("Attempted to set WAL journal_mode, but current mode is: {}. This might impact concurrency.", mode);
+                } else {
+                    info!("SQLite journal_mode set to WAL.");
+                }
+            }
+            Err(e) => {
+                warn!("Failed to set/query journal_mode to WAL: {}. Performance under load might be affected.",e);
+            }
+        }
+
+        conn.busy_timeout(Duration::from_millis(10000))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(get_schema())
     });
 

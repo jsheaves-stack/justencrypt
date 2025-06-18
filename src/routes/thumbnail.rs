@@ -47,11 +47,10 @@ pub async fn get_thumbnail(
         _ if content_type == ContentType::WEBP => ImageFormat::WebP,
         _ if content_type == ContentType::AVIF => ImageFormat::Avif,
         _ => {
-            error!("Unsupported image format: {:?}", content_type);
             return Err(RequestError::UnsupportedFileType);
         }
     };
-    
+
     let permit = state
         .thumbnail_semaphore
         .acquire()
