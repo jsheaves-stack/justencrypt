@@ -126,15 +126,14 @@ pub async fn put_file(
 
         // Break the loop if no more data is available.
         if bytes_read == 0 {
-            if current_buffer_fill > 0 {
-                if tx
+            if current_buffer_fill > 0
+                && tx
                     .send(read_buffer[..current_buffer_fill].to_vec())
                     .await
                     .is_err()
-                {
-                    error!("Failed to send final data chunk: channel closed prematurely.");
-                    return Err(RequestError::FailedToProcessData);
-                }
+            {
+                error!("Failed to send final data chunk: channel closed prematurely.");
+                return Err(RequestError::FailedToProcessData);
             }
             break;
         }
