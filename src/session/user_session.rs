@@ -10,6 +10,7 @@ use crate::{
     db::sqlite::{self, File},
     enums::db_error::DbError,
 };
+use serde::{Deserialize, Serialize};
 
 pub struct UserSession {
     user_path: PathBuf,
@@ -116,6 +117,99 @@ impl UserSession {
         Ok(())
     }
 
+    pub async fn delete_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::delete_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+
+        Ok(())
+    }
+
+    pub async fn delete_folder_by_id(&self, folder_id: i32) -> Result<(), DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::delete_folder_by_id(&db, folder_id)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+
+        Ok(())
+    }
+
+    pub async fn delete_file_by_id(&self, file_id: i32) -> Result<(), DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::delete_file_by_id(&db, file_id)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+
+        Ok(())
+    }
+
+    pub async fn get_folder_id(&self, folder_path: PathBuf) -> Result<Option<i32>, DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::get_folder_id(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+    }
+
+    pub async fn get_files_in_folder(&self, folder_id: i32) -> Result<Vec<EncodedFile>, DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::get_files_in_folder(&db, folder_id)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+    }
+
+    pub async fn get_child_folders(&self, folder_id: i32) -> Result<Vec<ChildFolder>, DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::get_child_folders(&db, folder_id)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+    }
+
+    pub async fn get_encoded_thumbnail_file_name_by_file_id(
+        &self,
+        file_id: i32,
+    ) -> Result<Option<String>, DbError> {
+        let db_pool = self.db_pool.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::get_encoded_thumbnail_file_name_by_file_id(&db, file_id)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+    }
+
     pub async fn add_thumbnail(
         &self,
         file_path: PathBuf,
@@ -219,4 +313,15 @@ impl UserSession {
 
         Ok(())
     }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct EncodedFile {
+    pub id: i32,
+    pub encoded_name: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ChildFolder {
+    pub id: i32,
 }

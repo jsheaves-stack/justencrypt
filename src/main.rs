@@ -14,7 +14,7 @@ use rocket::{
 };
 use routes::{
     file::{delete_file, file_options, get_file, move_file, put_file},
-    folder::{create_folder, folder_options, get_folder},
+    folder::{create_folder, delete_folder, folder_options, get_folder},
     session::{create_session, create_session_options, destroy_session, destroy_session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
 };
@@ -252,7 +252,7 @@ async fn rocket() -> _ {
         .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
         .mount(
             "/folder",
-            routes![get_folder, create_folder, folder_options],
+            routes![get_folder, create_folder, folder_options, delete_folder],
         )
         .mount(
             "/session",

@@ -14,7 +14,7 @@ pub fn create_user_db_connection(
     password: SecretString,
 ) -> Result<Pool<SqliteConnectionManager>, DbError> {
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
-        conn.busy_timeout(Duration::from_millis(10000))?;
+        conn.busy_timeout(Duration::from_millis(60000))?;
 
         let key_sql = format!("PRAGMA key = '{}';", password.expose_secret());
         let mut stmt = conn.prepare(&key_sql)?;
@@ -520,6 +520,14 @@ pub fn get_folder(
     Ok(entries)
 }
 
+pub fn delete_folder(
+    db: &PooledConnection<SqliteConnectionManager>,
+    path_str: &str,
+) -> Result<(), DbError> {
+    let folder_id = get_folder_id(db, path_str)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+    delete_folder_by_id(db, folder_id)
+}
+
 pub fn add_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     path_str: &str,
@@ -563,4 +571,85 @@ pub fn move_file(
     })?;
 
     Ok(())
+}
+
+pub fn get_files_in_folder(
+    db: &PooledConnection<SqliteConnectionManager>,
+    folder_id: i32,
+) -> Result<Vec<crate::session::user_session::EncodedFile>, DbError> {
+    let mut stmt = db.prepare("SELECT id, encoded_name FROM files WHERE parent_folder_id = ?1")?;
+    let mut rows = stmt.query(params![folder_id])?;
+
+    let mut files = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        files.push(crate::session::user_session::EncodedFile {
+            id: row.get(0)?,
+            encoded_name: row.get(1)?,
+        });
+    }
+
+    Ok(files)
+}
+
+pub fn get_child_folders(
+    db: &PooledConnection<SqliteConnectionManager>,
+    folder_id: i32,
+) -> Result<Vec<crate::session::user_session::ChildFolder>, DbError> {
+    let mut stmt = db.prepare("SELECT id FROM folders WHERE parent_folder_id = ?1")?;
+    let mut rows = stmt.query(params![folder_id])?;
+
+    let mut folders = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        folders.push(crate::session::user_session::ChildFolder { id: row.get(0)? });
+    }
+
+    Ok(folders)
+}
+
+pub fn get_encoded_thumbnail_file_name_by_file_id(
+    db: &PooledConnection<SqliteConnectionManager>,
+    file_id: i32,
+) -> Result<Option<String>, DbError> {
+    let result = db
+        .query_row(
+            "SELECT encoded_name FROM thumbnails WHERE file_id = ?1",
+            params![file_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| {
+            error!(
+                "Failed to get encoded thumbnail file name from the db: {}",
+                e
+            );
+            DbError::FailedToGetFileFromDb(e.to_string())
+        })?;
+
+    Ok(result)
+}
+
+pub fn delete_file_by_id(
+    db: &PooledConnection<SqliteConnectionManager>,
+    file_id: i32,
+) -> Result<(), DbError> {
+    db.execute("DELETE FROM files WHERE id = ?1", params![file_id])
+        .map(|_| ())
+        .map_err(|e| {
+            error!("Failed to delete file from the db: {}", e);
+            DbError::FailedToDeleteFileFromDb(e.to_string())
+        })
+}
+
+pub fn delete_folder_by_id(
+    db: &PooledConnection<SqliteConnectionManager>,
+    folder_id: i32,
+) -> Result<(), DbError> {
+    db.execute("DELETE FROM folders WHERE id = ?1", params![folder_id])
+        .map(|_| ())
+        .map_err(|e| {
+            error!("Failed to delete folder from the db: {}", e);
+            DbError::FailedToDeleteFileFromDb(e.to_string())
+        })
 }
