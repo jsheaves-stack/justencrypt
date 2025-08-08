@@ -527,3 +527,40 @@ pub fn add_folder(
     get_folder_id_and_create_if_missing(db, path_str)?;
     Ok(())
 }
+
+pub fn move_file(
+    db: &PooledConnection<SqliteConnectionManager>,
+    file_path_str: &str,
+    destination_folder_str: &str,
+) -> Result<(), DbError> {
+    let path = Path::new(file_path_str.trim_matches('/'));
+    let file_name = path
+        .file_name()
+        .ok_or(DbError::MissingFileName)?
+        .to_string_lossy();
+
+    let current_parent_path = path.parent().unwrap_or(Path::new(""));
+    let current_parent_folder_id = get_folder_id(db, &current_parent_path.to_string_lossy())?
+        .ok_or(DbError::MissingFileName)?;
+
+    let destination_folder_id = get_folder_id_and_create_if_missing(db, destination_folder_str)?;
+
+    db.execute(
+        "UPDATE files SET parent_folder_id = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
+        params![destination_folder_id, current_parent_folder_id, file_name],
+    )
+    .map(|rows_affected| {
+        if rows_affected == 0 {
+            error!(
+                "No file found to move from parent folder {} with name {}",
+                current_parent_folder_id, file_name
+            );
+        }
+    })
+    .map_err(|e| {
+        error!("Failed to move file in the db: {}", e);
+        DbError::FailedToAddFileToDb(e.to_string())
+    })?;
+
+    Ok(())
+}

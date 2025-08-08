@@ -4,6 +4,7 @@ use encryption::{
     stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, BUFFER_SIZE, NONCE_SIZE,
     SALT_SIZE, TAG_SIZE,
 };
+use rocket::serde::{json::Json, Deserialize};
 
 use rocket::{
     data::ByteUnit,
@@ -33,6 +34,11 @@ const MPSC_CHANNEL_CAPACITY: usize = 2;
 #[options("/<_file_path..>")]
 pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
+}
+
+#[derive(Deserialize)]
+pub struct MoveFileRequest {
+    destination_folder: String,
 }
 
 #[put("/<file_path..>", data = "<reqdata>")]
@@ -153,6 +159,30 @@ pub async fn put_file(
     Ok(RequestSuccess::Created)
 }
 
+#[patch("/<file_path..>", data = "<move_file_request>")]
+pub async fn move_file(
+    file_path: UnrestrictedPath,
+    move_file_request: Json<MoveFileRequest>,
+    auth: AuthenticatedSession,
+) -> Result<RequestSuccess, RequestError> {
+    let file_path_buf = file_path.to_path_buf();
+    let destination_folder = move_file_request.into_inner().destination_folder;
+    let session = auth.session.read().await;
+
+    match session.move_file(file_path_buf, destination_folder).await {
+        Ok(_) => {
+            drop(session);
+            Ok(RequestSuccess::NoContent)
+        }
+        Err(e) => {
+            error!("Failed to move file: {}", e);
+
+            Err(match e {
+                _ => RequestError::FailedToProcessData,
+            })
+        }
+    }
+}
 #[get("/<file_path..>")]
 pub async fn get_file(
     file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.

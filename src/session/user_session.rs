@@ -20,7 +20,9 @@ impl UserSession {
     pub async fn open(user_name: &str, passphrase: &SecretString) -> Result<Self, DbError> {
         // Validate user_name to prevent path traversal
         if user_name.is_empty() || user_name.contains(['/', '\\', '.']) || user_name.len() > 64 {
-            return Err(DbError::InvalidInput("Invalid user name format or length.".to_string()));
+            return Err(DbError::InvalidInput(
+                "Invalid user name format or length.".to_string(),
+            ));
         }
 
         let user_name = user_name.to_owned();
@@ -196,5 +198,25 @@ impl UserSession {
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+    }
+
+    pub async fn move_file(
+        &self,
+        file_path: PathBuf,
+        destination_folder: String,
+    ) -> Result<(), DbError> {
+        let db_pool = self.db_pool.clone();
+
+        let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+
+            sqlite::move_file(&db, &file_path_str, &destination_folder)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+
+        Ok(())
     }
 }
