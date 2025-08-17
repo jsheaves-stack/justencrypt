@@ -74,10 +74,10 @@ impl UserSession {
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
-            let db = db_pool.get()?;
+            let mut db = db_pool.get()?;
 
             sqlite::add_file(
-                &db,
+                &mut db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
                 &encoded_file_name,
                 metadata,
@@ -93,9 +93,9 @@ impl UserSession {
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
-            let db = db_pool.get()?;
+            let mut db = db_pool.get()?;
 
-            sqlite::delete_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+            sqlite::delete_file(&mut db, file_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
@@ -107,9 +107,9 @@ impl UserSession {
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
-            let db = db_pool.get()?;
+            let mut db = db_pool.get()?;
 
-            sqlite::add_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+            sqlite::add_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
@@ -219,10 +219,10 @@ impl UserSession {
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
-            let db = db_pool.get()?;
+            let mut db = db_pool.get()?;
 
             sqlite::add_thumbnail(
-                &db,
+                &mut db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
                 &encoded_name,
                 metadata,
@@ -304,9 +304,9 @@ impl UserSession {
         let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
 
         task::spawn_blocking(move || {
-            let db = db_pool.get()?;
+            let mut db = db_pool.get()?;
 
-            sqlite::move_file(&db, &file_path_str, &destination_folder)
+            sqlite::move_file(&mut db, &file_path_str, &destination_folder)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;

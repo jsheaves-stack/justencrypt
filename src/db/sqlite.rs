@@ -1,7 +1,7 @@
 use encryption::{FileEncryptionMetadata, SecretKey};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
@@ -91,12 +91,12 @@ pub fn get_schema() -> &'static str {
 }
 
 fn get_folder_id_and_create_if_missing(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
 ) -> Result<i32, DbError> {
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
-    let tx = db.unchecked_transaction()?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     for component in path.components() {
         let name = match component {
@@ -256,7 +256,7 @@ pub fn get_encoded_thumbnail_file_name(
 }
 
 pub fn add_file(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
     encoded_file_name: &str,
     metadata: FileEncryptionMetadata,
@@ -273,10 +273,9 @@ pub fn add_file(
         .map(|ext| ext.to_string_lossy())
         .unwrap_or_default();
 
-    let parent_folder_id =
-        get_folder_id_and_create_if_missing(&db, &parent_path.to_string_lossy())?;
+    let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
 
-    let tx = db.unchecked_transaction()?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     tx.execute(
         r#"INSERT INTO files
@@ -314,7 +313,7 @@ pub fn add_file(
 }
 
 pub fn delete_file(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
 ) -> Result<(), DbError> {
     let path = Path::new(file_path_str.trim_matches('/'));
@@ -326,7 +325,7 @@ pub fn delete_file(
 
     let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
 
-    let tx = db.unchecked_transaction()?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     tx.execute(
         "DELETE FROM files WHERE parent_folder_id = ?1 AND name = ?2",
@@ -384,7 +383,7 @@ pub fn get_file(
 }
 
 pub fn add_thumbnail(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
     encoded_name: &str,
     metadata: FileEncryptionMetadata,
@@ -417,7 +416,7 @@ pub fn add_thumbnail(
         |row| row.get(0),
     )?;
 
-    let tx = db.unchecked_transaction()?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     tx.execute(
         "INSERT OR IGNORE INTO thumbnails 
@@ -552,7 +551,7 @@ pub fn delete_folder(
 }
 
 pub fn add_folder(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     path_str: &str,
 ) -> Result<(), DbError> {
     get_folder_id_and_create_if_missing(db, path_str)?;
@@ -560,7 +559,7 @@ pub fn add_folder(
 }
 
 pub fn move_file(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
     destination_folder_str: &str,
 ) -> Result<(), DbError> {
@@ -576,7 +575,7 @@ pub fn move_file(
 
     let destination_folder_id = get_folder_id_and_create_if_missing(db, destination_folder_str)?;
 
-    let tx = db.unchecked_transaction()?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     tx.execute(
         "UPDATE files SET parent_folder_id = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
