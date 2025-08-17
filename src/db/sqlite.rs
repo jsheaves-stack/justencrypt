@@ -103,6 +103,8 @@ fn get_folder_id_and_create_if_missing(
             _ => continue,
         };
 
+        println!("Checking if folder exists: {:?}", name);
+
         let folder_id = match db
             .query_row(
                 "SELECT id FROM folders WHERE parent_folder_id = ?1 AND name = ?2",
@@ -118,11 +120,13 @@ fn get_folder_id_and_create_if_missing(
             }
         };
 
+        println!("Adding folder if missing: {:?}", folder_path_str);
+
         current_id = match folder_id {
             Some(id) => id,
             None => {
                 db.execute(
-                    "INSERT INTO folders (parent_folder_id, name) VALUES (?1, ?2)",
+                    "INSERT OR IGNORE INTO folders (parent_folder_id, name) VALUES (?1, ?2)",
                     params![current_id, name],
                 )?;
                 db.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?
@@ -145,6 +149,8 @@ pub fn get_folder_id(
             Component::Normal(name) => name.to_string_lossy().to_string(),
             _ => continue,
         };
+
+        println!("Removing folder id: {:?} {:?}", current_id, name);
 
         let folder_id = match db
             .query_row(
@@ -271,8 +277,10 @@ pub fn add_file(
 
     let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
 
+    println!("Adding file {:?} to folder {:?}", file_name, parent_path);
+
     db.execute(
-        r#"INSERT INTO files
+        r#"INSERT OR IGNORE INTO files
             (parent_folder_id, name, encoded_name, file_extension, key, buffer_size, nonce_size, salt_size, tag_size)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
            ON CONFLICT(parent_folder_id, name) DO UPDATE SET
@@ -298,6 +306,7 @@ pub fn add_file(
     ).map(|_| ())
     .map_err(|e| {
         error!("Failed to add or update file in the db: {}", e);
+        println!("Failed to add file {:?} to folder {:?}", file_name, parent_path);
         DbError::FailedToAddFileToDb(e.to_string())
     })
 }
@@ -401,7 +410,7 @@ pub fn add_thumbnail(
     )?;
 
     db.execute(
-        "INSERT INTO thumbnails 
+        "INSERT OR IGNORE INTO thumbnails 
         (encoded_name, file_id, key, buffer_size, nonce_size, salt_size, tag_size) 
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
@@ -595,14 +604,14 @@ pub fn get_files_in_folder(
 pub fn get_child_folders(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_id: i32,
-) -> Result<Vec<crate::session::user_session::ChildFolder>, DbError> {
+) -> Result<Vec<i32>, DbError> {
     let mut stmt = db.prepare("SELECT id FROM folders WHERE parent_folder_id = ?1")?;
     let mut rows = stmt.query(params![folder_id])?;
 
     let mut folders = Vec::new();
 
     while let Some(row) = rows.next()? {
-        folders.push(crate::session::user_session::ChildFolder { id: row.get(0)? });
+        folders.push(row.get(0)?);
     }
 
     Ok(folders)

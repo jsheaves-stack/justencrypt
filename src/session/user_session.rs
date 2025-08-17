@@ -183,7 +183,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
     }
 
-    pub async fn get_child_folders(&self, folder_id: i32) -> Result<Vec<ChildFolder>, DbError> {
+    pub async fn get_child_folders(&self, folder_id: i32) -> Result<Vec<i32>, DbError> {
         let db_pool = self.db_pool.clone();
 
         tokio::task::spawn_blocking(move || {
@@ -315,13 +315,8 @@ impl UserSession {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct EncodedFile {
     pub id: i32,
     pub encoded_name: String,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct ChildFolder {
-    pub id: i32,
 }

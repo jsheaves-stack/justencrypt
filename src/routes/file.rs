@@ -177,9 +177,7 @@ pub async fn move_file(
         Err(e) => {
             error!("Failed to move file: {}", e);
 
-            Err(match e {
-                _ => RequestError::FailedToProcessData,
-            })
+            Err(RequestError::FailedToProcessData)
         }
     }
 }
