@@ -144,8 +144,10 @@ pub async fn delete_folder(
             folder_stack.push(child_folder_id);
         }
 
-        if let Err(e) = session.delete_folder_by_id(current_folder_id).await {
-            error!("Failed to delete folder by id: {}", e);
+        if current_folder_id != folder_id.unwrap() {
+            if let Err(e) = session.delete_folder_by_id(current_folder_id).await {
+                error!("Failed to delete folder by id: {}", e);
+            }
         }
     }
 

@@ -96,6 +96,7 @@ fn get_folder_id_and_create_if_missing(
 ) -> Result<i32, DbError> {
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
+    let tx = db.unchecked_transaction()?;
 
     for component in path.components() {
         let name = match component {
@@ -103,9 +104,7 @@ fn get_folder_id_and_create_if_missing(
             _ => continue,
         };
 
-        println!("Checking if folder exists: {:?}", name);
-
-        let folder_id = match db
+        let folder_id = match tx
             .query_row(
                 "SELECT id FROM folders WHERE parent_folder_id = ?1 AND name = ?2",
                 params![current_id, name],
@@ -120,19 +119,20 @@ fn get_folder_id_and_create_if_missing(
             }
         };
 
-        println!("Adding folder if missing: {:?}", folder_path_str);
-
         current_id = match folder_id {
             Some(id) => id,
             None => {
-                db.execute(
+                tx.execute(
                     "INSERT OR IGNORE INTO folders (parent_folder_id, name) VALUES (?1, ?2)",
                     params![current_id, name],
                 )?;
-                db.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?
+
+                tx.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?
             }
         };
     }
+
+    tx.commit()?;
 
     Ok(current_id)
 }
@@ -149,8 +149,6 @@ pub fn get_folder_id(
             Component::Normal(name) => name.to_string_lossy().to_string(),
             _ => continue,
         };
-
-        println!("Removing folder id: {:?} {:?}", current_id, name);
 
         let folder_id = match db
             .query_row(
@@ -275,12 +273,13 @@ pub fn add_file(
         .map(|ext| ext.to_string_lossy())
         .unwrap_or_default();
 
-    let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
+    let parent_folder_id =
+        get_folder_id_and_create_if_missing(&db, &parent_path.to_string_lossy())?;
 
-    println!("Adding file {:?} to folder {:?}", file_name, parent_path);
+    let tx = db.unchecked_transaction()?;
 
-    db.execute(
-        r#"INSERT OR IGNORE INTO files
+    tx.execute(
+        r#"INSERT INTO files
             (parent_folder_id, name, encoded_name, file_extension, key, buffer_size, nonce_size, salt_size, tag_size)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
            ON CONFLICT(parent_folder_id, name) DO UPDATE SET
@@ -306,9 +305,12 @@ pub fn add_file(
     ).map(|_| ())
     .map_err(|e| {
         error!("Failed to add or update file in the db: {}", e);
-        println!("Failed to add file {:?} to folder {:?}", file_name, parent_path);
         DbError::FailedToAddFileToDb(e.to_string())
-    })
+    })?;
+
+    tx.commit()?;
+
+    Ok(())
 }
 
 pub fn delete_file(
@@ -324,7 +326,9 @@ pub fn delete_file(
 
     let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
 
-    db.execute(
+    let tx = db.unchecked_transaction()?;
+
+    tx.execute(
         "DELETE FROM files WHERE parent_folder_id = ?1 AND name = ?2",
         params![parent_folder_id, file_name],
     )
@@ -332,7 +336,11 @@ pub fn delete_file(
     .map_err(|e| {
         error!("Failed to delete file from the db: {}", e);
         DbError::FailedToDeleteFileFromDb(e.to_string())
-    })
+    })?;
+
+    tx.commit()?;
+
+    Ok(())
 }
 
 pub fn get_file(
@@ -409,7 +417,9 @@ pub fn add_thumbnail(
         |row| row.get(0),
     )?;
 
-    db.execute(
+    let tx = db.unchecked_transaction()?;
+
+    tx.execute(
         "INSERT OR IGNORE INTO thumbnails 
         (encoded_name, file_id, key, buffer_size, nonce_size, salt_size, tag_size) 
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -427,7 +437,11 @@ pub fn add_thumbnail(
     .map_err(|e| {
         error!("Failed to add thumbnail file to the db: {}", e);
         DbError::FailedToAddFileToDb(e.to_string())
-    })
+    })?;
+
+    tx.commit()?;
+
+    Ok(())
 }
 
 pub fn get_thumbnail(
@@ -562,7 +576,9 @@ pub fn move_file(
 
     let destination_folder_id = get_folder_id_and_create_if_missing(db, destination_folder_str)?;
 
-    db.execute(
+    let tx = db.unchecked_transaction()?;
+
+    tx.execute(
         "UPDATE files SET parent_folder_id = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
         params![destination_folder_id, current_parent_folder_id, file_name],
     )
@@ -578,6 +594,8 @@ pub fn move_file(
         error!("Failed to move file in the db: {}", e);
         DbError::FailedToAddFileToDb(e.to_string())
     })?;
+
+    tx.commit()?;
 
     Ok(())
 }
