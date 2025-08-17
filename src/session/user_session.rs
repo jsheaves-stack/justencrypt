@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 use encryption::FileEncryptionMetadata;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::tokio;
+use rocket::tokio::task;
 use secrecy::SecretString;
 
 use crate::{
@@ -29,7 +29,7 @@ impl UserSession {
         let user_name = user_name.to_owned();
         let passphrase = passphrase.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let user_data_path = env::var("JUSTENCRYPT_USER_DATA_PATH")
                 .unwrap_or_else(|_| String::from("./user_data"));
 
@@ -56,7 +56,7 @@ impl UserSession {
     pub async fn get_encoded_file_name(&self, file_path: PathBuf) -> Result<String, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_encoded_file_name(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -73,7 +73,7 @@ impl UserSession {
     ) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::add_file(
@@ -92,7 +92,7 @@ impl UserSession {
     pub async fn delete_file(&self, file_path: PathBuf) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::delete_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -106,7 +106,7 @@ impl UserSession {
     pub async fn add_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::add_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -120,7 +120,7 @@ impl UserSession {
     pub async fn delete_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::delete_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -134,7 +134,7 @@ impl UserSession {
     pub async fn delete_folder_by_id(&self, folder_id: i32) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::delete_folder_by_id(&db, folder_id)
@@ -148,7 +148,7 @@ impl UserSession {
     pub async fn delete_file_by_id(&self, file_id: i32) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::delete_file_by_id(&db, file_id)
@@ -162,7 +162,7 @@ impl UserSession {
     pub async fn get_folder_id(&self, folder_path: PathBuf) -> Result<Option<i32>, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_folder_id(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -174,7 +174,7 @@ impl UserSession {
     pub async fn get_files_in_folder(&self, folder_id: i32) -> Result<Vec<EncodedFile>, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_files_in_folder(&db, folder_id)
@@ -186,7 +186,7 @@ impl UserSession {
     pub async fn get_child_folders(&self, folder_id: i32) -> Result<Vec<i32>, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_child_folders(&db, folder_id)
@@ -201,7 +201,7 @@ impl UserSession {
     ) -> Result<Option<String>, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_encoded_thumbnail_file_name_by_file_id(&db, file_id)
@@ -218,7 +218,7 @@ impl UserSession {
     ) -> Result<(), DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::add_thumbnail(
@@ -237,7 +237,7 @@ impl UserSession {
     pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<File>, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -252,7 +252,7 @@ impl UserSession {
     ) -> Result<FileEncryptionMetadata, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_thumbnail(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -267,7 +267,7 @@ impl UserSession {
     ) -> Result<Option<String>, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_encoded_thumbnail_file_name(
@@ -285,7 +285,7 @@ impl UserSession {
     ) -> Result<FileEncryptionMetadata, DbError> {
         let db_pool = self.db_pool.clone();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -303,7 +303,7 @@ impl UserSession {
 
         let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let db = db_pool.get()?;
 
             sqlite::move_file(&db, &file_path_str, &destination_folder)
