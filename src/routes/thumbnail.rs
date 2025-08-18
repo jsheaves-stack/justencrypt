@@ -1,7 +1,7 @@
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     get_sharded_path,
-    streaming::streaming::{decrypt_stream_to_writer, encrypt_source_to_encryptor},
+    streaming::encryption_streaming::{decrypt_stream_to_writer, encrypt_source_to_encryptor},
     web::forwarding_guards::AuthenticatedSession,
     AppState, UnrestrictedPath,
 };

@@ -7,7 +7,7 @@ use rocket::tokio::task;
 use secrecy::SecretString;
 
 use crate::{
-    db::sqlite::{self, File},
+    db::sqlite::{self, FolderEntry},
     enums::db_error::DbError,
 };
 use serde::{Deserialize, Serialize};
@@ -234,7 +234,7 @@ impl UserSession {
         Ok(())
     }
 
-    pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<File>, DbError> {
+    pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<FolderEntry>, DbError> {
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
@@ -292,6 +292,25 @@ impl UserSession {
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+    }
+
+    pub async fn rename_file(
+        &self,
+        file_path: PathBuf,
+        new_file_name: String,
+    ) -> Result<(), DbError> {
+        let db_pool = self.db_pool.clone();
+        let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
+
+        task::spawn_blocking(move || {
+            let mut db = db_pool.get()?;
+
+            sqlite::rename_file(&mut db, &file_path_str, &new_file_name)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+
+        Ok(())
     }
 
     pub async fn move_file(

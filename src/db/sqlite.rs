@@ -501,7 +501,7 @@ pub fn get_thumbnail(
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct File {
+pub struct FolderEntry {
     is_file: bool,
     file_extension: Option<String>,
     file_name: String,
@@ -510,7 +510,7 @@ pub struct File {
 pub fn get_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
-) -> Result<Vec<File>, DbError> {
+) -> Result<Vec<FolderEntry>, DbError> {
     let folder_id =
         get_folder_id(db, folder_path_str)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
 
@@ -520,7 +520,7 @@ pub fn get_folder(
     let mut folder_rows = folder_stmt.query(params![folder_id])?;
 
     while let Some(row) = folder_rows.next()? {
-        entries.push(File {
+        entries.push(FolderEntry {
             is_file: false,
             file_extension: None,
             file_name: row.get(0)?,
@@ -532,7 +532,7 @@ pub fn get_folder(
     let mut file_rows = file_stmt.query(params![folder_id])?;
 
     while let Some(row) = file_rows.next()? {
-        entries.push(File {
+        entries.push(FolderEntry {
             is_file: true,
             file_extension: row.get(1)?,
             file_name: row.get(0)?,
@@ -555,6 +555,42 @@ pub fn add_folder(
     path_str: &str,
 ) -> Result<(), DbError> {
     get_folder_id_and_create_if_missing(db, path_str)?;
+    Ok(())
+}
+
+pub fn rename_file(
+    db: &mut PooledConnection<SqliteConnectionManager>,
+    file_path_str: &str,
+    new_file_name_str: &str,
+) -> Result<(), DbError> {
+    let path = Path::new(file_path_str.trim_matches('/'));
+    let original_file_name = path
+        .file_name()
+        .ok_or(DbError::MissingFileName)?
+        .to_string_lossy();
+
+    let current_parent_path = path.parent().unwrap_or(Path::new(""));
+    let current_parent_folder_id = get_folder_id(db, &current_parent_path.to_string_lossy())?
+        .ok_or(DbError::MissingFileName)?;
+
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+    tx.execute(
+        "UPDATE files SET name = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
+        params![
+            new_file_name_str,
+            current_parent_folder_id,
+            original_file_name
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| {
+        error!("Failed to rename file in the db: {}", e);
+        DbError::FailedToUpdateFileInDb(e.to_string())
+    })?;
+
+    tx.commit()?;
+
     Ok(())
 }
 
@@ -581,14 +617,7 @@ pub fn move_file(
         "UPDATE files SET parent_folder_id = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
         params![destination_folder_id, current_parent_folder_id, file_name],
     )
-    .map(|rows_affected| {
-        if rows_affected == 0 {
-            error!(
-                "No file found to move from parent folder {} with name {}",
-                current_parent_folder_id, file_name
-            );
-        }
-    })
+    .map(|_| ())
     .map_err(|e| {
         error!("Failed to move file in the db: {}", e);
         DbError::FailedToAddFileToDb(e.to_string())

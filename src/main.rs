@@ -13,7 +13,7 @@ use rocket::{
     },
 };
 use routes::{
-    file::{delete_file, file_options, get_file, move_file, put_file},
+    file::{delete_file, file_options, get_file, patch_file, put_file},
     folder::{create_folder, delete_folder, folder_options, get_folder},
     session::{create_session, create_session_options, destroy_session, destroy_session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
@@ -247,7 +247,7 @@ async fn rocket() -> _ {
         .manage(state)
         .mount(
             "/file",
-            routes![get_file, put_file, delete_file, file_options, move_file],
+            routes![get_file, put_file, delete_file, file_options, patch_file],
         )
         .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
         .mount(

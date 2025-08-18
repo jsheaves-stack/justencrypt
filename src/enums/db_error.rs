@@ -2,7 +2,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum DbError {
-    #[error("Database error: {0}")]
+    #[error("Generic database error: {0}")]
     Rusqlite(#[from] rusqlite::Error),
 
     #[error("Missing file name in path")]
@@ -20,10 +20,10 @@ pub enum DbError {
     #[error("Thread join error: {0}")]
     ThreadJoinError(String),
 
-    #[error("Failed to add file to db: {0}")]
+    #[error("Failed to add file to the db: {0}")]
     FailedToAddFileToDb(String),
 
-    #[error("Failed to delete file from db: {0}")]
+    #[error("Failed to delete file from the db: {0}")]
     FailedToDeleteFileFromDb(String),
 
     #[error("Failed to get folder id from the provided file path: {0}")]
@@ -31,6 +31,9 @@ pub enum DbError {
 
     #[error("Failed to get file from the db: {0}")]
     FailedToGetFileFromDb(String),
+
+    #[error("Failed to update file in the db: {0}")]
+    FailedToUpdateFileInDb(String),
 
     #[error("User does not exist")]
     UserDoesNotExist,

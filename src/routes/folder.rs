@@ -2,7 +2,7 @@ use rocket::{delete, get, serde::json::Json};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::sqlite::File,
+    db::sqlite::FolderEntry,
     enums::{request_error::RequestError, request_success::RequestSuccess},
     get_sharded_path, remove_sharded_path,
     web::forwarding_guards::AuthenticatedSession,
@@ -25,7 +25,7 @@ pub fn folder_options(_folder_path: UnrestrictedPath) -> Result<RequestSuccess, 
 pub async fn get_folder(
     folder_path: UnrestrictedPath, // The name/path of the folder being requested, extracted from the URL.
     auth: AuthenticatedSession,
-) -> Result<Json<Vec<File>>, RequestError> {
+) -> Result<Json<Vec<FolderEntry>>, RequestError> {
     let folder_path_buf = folder_path.to_path_buf();
     let session = auth.session.read().await;
 

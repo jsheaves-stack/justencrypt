@@ -36,11 +36,6 @@ pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, Requ
     Ok(RequestSuccess::NoContent)
 }
 
-#[derive(Deserialize)]
-pub struct MoveFileRequest {
-    destination_folder: String,
-}
-
 #[put("/<file_path..>", data = "<reqdata>")]
 pub async fn put_file(
     file_path: UnrestrictedPath, // The path where the file should be stored, extracted from the URL.
@@ -159,28 +154,53 @@ pub async fn put_file(
     Ok(RequestSuccess::Created)
 }
 
-#[patch("/<file_path..>", data = "<move_file_request>")]
-pub async fn move_file(
+#[derive(Deserialize)]
+pub struct PatchFileRequest {
+    parent_folder_path: Option<String>,
+    file_name: Option<String>,
+}
+
+#[patch("/<file_path..>", data = "<patch_file_request>")]
+pub async fn patch_file(
     file_path: UnrestrictedPath,
-    move_file_request: Json<MoveFileRequest>,
+    patch_file_request: Json<PatchFileRequest>,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     let file_path_buf = file_path.to_path_buf();
-    let destination_folder = move_file_request.into_inner().destination_folder;
     let session = auth.session.read().await;
 
-    match session.move_file(file_path_buf, destination_folder).await {
-        Ok(_) => {
-            drop(session);
-            Ok(RequestSuccess::NoContent)
-        }
-        Err(e) => {
-            error!("Failed to move file: {}", e);
+    let updates = patch_file_request.into_inner();
 
-            Err(RequestError::FailedToProcessData)
+    if let Some(parent_folder_path) = updates.parent_folder_path {
+        match session
+            .move_file(file_path_buf.clone(), parent_folder_path)
+            .await
+        {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to move file: {}", e);
+
+                return Err(RequestError::FailedToProcessData);
+            }
         }
-    }
+    };
+
+    if let Some(new_file_name) = updates.file_name {
+        match session.rename_file(file_path_buf, new_file_name).await {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to move file: {}", e);
+
+                return Err(RequestError::FailedToProcessData);
+            }
+        }
+    };
+
+    drop(session);
+
+    Ok(RequestSuccess::NoContent)
 }
+
 #[get("/<file_path..>")]
 pub async fn get_file(
     file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.

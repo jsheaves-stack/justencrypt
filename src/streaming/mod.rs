@@ -1,1 +1,1 @@
-pub mod streaming;
+pub mod encryption_streaming;
