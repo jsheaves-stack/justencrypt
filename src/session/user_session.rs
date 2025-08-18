@@ -121,9 +121,9 @@ impl UserSession {
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
-            let db = db_pool.get()?;
+            let mut db = db_pool.get()?;
 
-            sqlite::delete_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+            sqlite::delete_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
@@ -135,9 +135,9 @@ impl UserSession {
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
-            let db = db_pool.get()?;
+            let mut db = db_pool.get()?;
 
-            sqlite::delete_folder_by_id(&db, folder_id)
+            sqlite::delete_folder_by_id(&mut db, folder_id)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
@@ -149,9 +149,9 @@ impl UserSession {
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
-            let db = db_pool.get()?;
+            let mut db = db_pool.get()?;
 
-            sqlite::delete_file_by_id(&db, file_id)
+            sqlite::delete_file_by_id(&mut db, file_id)
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;

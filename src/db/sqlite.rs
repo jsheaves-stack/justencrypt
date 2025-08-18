@@ -543,7 +543,7 @@ pub fn get_folder(
 }
 
 pub fn delete_folder(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     path_str: &str,
 ) -> Result<(), DbError> {
     let folder_id = get_folder_id(db, path_str)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
@@ -657,25 +657,37 @@ pub fn get_encoded_thumbnail_file_name_by_file_id(
 }
 
 pub fn delete_file_by_id(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     file_id: i32,
 ) -> Result<(), DbError> {
-    db.execute("DELETE FROM files WHERE id = ?1", params![file_id])
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+    tx.execute("DELETE FROM files WHERE id = ?1", params![file_id])
         .map(|_| ())
         .map_err(|e| {
             error!("Failed to delete file from the db: {}", e);
             DbError::FailedToDeleteFileFromDb(e.to_string())
-        })
+        })?;
+
+    tx.commit()?;
+
+    Ok(())
 }
 
 pub fn delete_folder_by_id(
-    db: &PooledConnection<SqliteConnectionManager>,
+    db: &mut PooledConnection<SqliteConnectionManager>,
     folder_id: i32,
 ) -> Result<(), DbError> {
-    db.execute("DELETE FROM folders WHERE id = ?1", params![folder_id])
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+    tx.execute("DELETE FROM folders WHERE id = ?1", params![folder_id])
         .map(|_| ())
         .map_err(|e| {
             error!("Failed to delete folder from the db: {}", e);
             DbError::FailedToDeleteFileFromDb(e.to_string())
-        })
+        })?;
+
+    tx.commit()?;
+
+    Ok(())
 }
