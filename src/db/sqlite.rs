@@ -15,13 +15,7 @@ pub fn create_user_db_connection(
 ) -> Result<Pool<SqliteConnectionManager>, DbError> {
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
         conn.busy_timeout(Duration::from_millis(60000))?;
-
-        let key_sql = format!("PRAGMA key = '{}';", password.expose_secret());
-        let mut stmt = conn.prepare(&key_sql)?;
-        let mut result_rows = stmt.query([])?;
-
-        // Iterate through any rows returned to consume them.
-        while let Some(_row) = result_rows.next()? {}
+        conn.pragma_update(None, "key", password.expose_secret())?;
 
         match conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get::<_, String>(0)) {
             Ok(mode) => {
