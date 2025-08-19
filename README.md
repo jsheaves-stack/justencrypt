@@ -52,7 +52,8 @@ The API uses environment variables for configuration. Below are the required var
 | `JUSTENCRYPT_PORT`                     | The port Rocket will listen on. Default: `8000`. |
 | `JUSTENCRYPT_WORKERS`                  | Number of worker threads for handling requests. Default: `16`. |
 | `JUSTENCRYPT_KEEP_ALIVE`               | Keep-alive timeout in seconds. Default: `5`. |
-| `JUSTENCRYPT_LOG_LEVEL`                | Logging level for Rocket. Options: `normal`, `critical`, etc. Default: `critical`. |
+| `JUSTENCRYPT_ROCKET_LOG_LEVEL`         | Logging level for Rocket. Options: `Off`, `Debug`, `Normal`, `Critical`. Default: `Critical`. |
+| `JUSTENCRYPT_LOG_LEVEL`                | Logging level for JustEncrypt. Options: `Off`, `Trace`, `Debug`, `Info`, `Warn`, `Error`. Default: `Warn`. |
 | `JUSTENCRYPT_ROCKET_SECRET_KEY`        | Required for securing private cookies. A suitable 256-bit base64 key can be generated using OpenSSL: `openssl rand -base64 32`. Required in release mode. |
 | `JUSTENCRYPT_TLS_KEY_PATH`             | The path to the tls key file. Required in release mode. |
 | `JUSTENCRYPT_TLS_CERT_PATH`            | The path to the tls cert file. Required in release mode. |
@@ -73,7 +74,8 @@ JUSTENCRYPT_ADDRESS=0.0.0.0
 JUSTENCRYPT_PORT=8000
 JUSTENCRYPT_WORKERS=16
 JUSTENCRYPT_KEEP_ALIVE=5
-JUSTENCRYPT_LOG_LEVEL=critical
+JUSTENCRYPT_ROCKET_LOG_LEVEL=Critical
+JUSTENCRYPT_LOG_LEVEL=Warn
 JUSTENCRYPT_ROCKET_SECRET_KEY=your_generated_secret_key
 JUSTENCRYPT_TLS_KEY_PATH=./default.key
 JUSTENCRYPT_TLS_CERT_PATH=./default.crt

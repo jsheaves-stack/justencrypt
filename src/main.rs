@@ -1,3 +1,4 @@
+use log::LevelFilter;
 use rocket::{
     config::{Config, TlsConfig},
     data::{ByteUnit, Limits},
@@ -23,6 +24,7 @@ use std::{
     collections::HashMap,
     env,
     error::Error,
+    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -149,10 +151,6 @@ fn get_app_config() -> Figment {
                 .parse::<u64>()
                 .unwrap_or(5),
         ))
-        .merge((
-            "log_level",
-            env::var("JUSTENCRYPT_LOG_LEVEL").unwrap_or_else(|_| "critical".into()),
-        ))
         .merge(("secret_key", secret_key))
         .merge((
             "limits",
@@ -236,9 +234,37 @@ fn get_app_config() -> Figment {
 
 #[launch]
 async fn rocket() -> _ {
-    trace!("Entering main::rocket launch function.");
     dotenv::dotenv().ok();
-    trace!("Loaded .env file.");
+
+    let app_log_level = env::var("JUSTENCRYPT_LOG_LEVEL").unwrap_or_else(|_| "Warn".into());
+    let rocket_log_level_str =
+        env::var("JUSTENCRYPT_ROCKET_LOG_LEVEL").unwrap_or_else(|_| "Critical".into());
+
+    let rocket_log_level = match rocket_log_level_str.as_str() {
+        "Off" => LevelFilter::Off,
+        "Debug" => LevelFilter::Debug,
+        "Critical" => LevelFilter::Error,
+        _ => LevelFilter::Info,
+    };
+
+    env_logger::Builder::new()
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "[{time} {level} {file}:{line}] {msg}",
+                time = buf.timestamp(),
+                level = record.level(),
+                file = record.file().unwrap_or("unknown"),
+                line = record.line().unwrap_or(0),
+                msg = record.args()
+            )
+        })
+        .filter_level(LevelFilter::from_str(&app_log_level).unwrap_or(LevelFilter::Error))
+        .filter_module("rocket", rocket_log_level)
+        .init();
+
+    trace!("Loaded .env file and initialized logger.");
+    trace!("Entering main::rocket launch function.");
 
     let app_config = get_app_config();
     trace!("Application configuration loaded.");
