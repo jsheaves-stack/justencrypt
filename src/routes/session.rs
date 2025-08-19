@@ -2,6 +2,7 @@ use std::{str::FromStr, sync::Arc};
 
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
+    options, post,
     serde::json::Json,
     tokio::sync::RwLock,
     State,
@@ -23,6 +24,7 @@ pub struct CreateSession {
 
 #[options("/create")]
 pub fn create_session_options() -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route::session::create_session_options");
     Ok(RequestSuccess::NoContent)
 }
 
@@ -32,12 +34,17 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route::session::create_session");
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
     let user_name = reqbody.username.clone();
 
+    trace!("Attempting to open user session for user: {}", user_name);
     let session = Arc::new(RwLock::new(
         match UserSession::open(&user_name, &passphrase).await {
-            Ok(a) => a,
+            Ok(a) => {
+                trace!("User session opened successfully.");
+                a
+            }
             Err(e) => {
                 error!("Failed to create user session: {}", e);
                 return Err(RequestError::FailedToCreateUserSession);
@@ -46,20 +53,23 @@ pub async fn create_session(
     ));
 
     let uuid = Uuid::new_v4().hyphenated().to_string();
+    trace!("Generated new session UUID: {}", uuid);
 
     let mut cookie = Cookie::new("session_id", uuid.clone());
-
     cookie.set_same_site(Some(SameSite::Strict));
-
     cookies.add_private(cookie);
+    trace!("Session cookie added to jar.");
 
     state.active_sessions.write().await.insert(uuid, session);
+    trace!("Session added to active sessions map.");
 
+    trace!("Exiting route::session::create_session successfully.");
     Ok(RequestSuccess::NoContent)
 }
 
 #[options("/destroy")]
 pub fn destroy_session_options() -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route::session::destroy_session_options");
     Ok(RequestSuccess::NoContent)
 }
 
@@ -68,16 +78,35 @@ pub async fn destroy_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route::session::destroy_session");
     let mut active_sessions = state.active_sessions.write().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
     let cookie = match cookies.get_private("session_id") {
-        Some(c) => c,
-        None => return Err(RequestError::MissingSessionId),
+        Some(c) => {
+            trace!("Found session_id cookie.");
+            c
+        }
+        None => {
+            trace!("session_id cookie not found.");
+            return Err(RequestError::MissingSessionId);
+        }
     };
 
-    match active_sessions.remove(cookie.value()) {
-        Some(_) => Ok(RequestSuccess::NoContent),
-        None => Err(RequestError::MissingActiveSession),
-    }
+    let result = match active_sessions.remove(cookie.value()) {
+        Some(_) => {
+            trace!("Removed active session with ID: {}", cookie.value());
+            Ok(RequestSuccess::NoContent)
+        }
+        None => {
+            trace!(
+                "Session ID {} not found in active sessions.",
+                cookie.value()
+            );
+            Err(RequestError::MissingActiveSession)
+        }
+    };
+
+    trace!("Exiting route::session::destroy_session.");
+    result
 }

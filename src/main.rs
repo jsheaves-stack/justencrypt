@@ -115,11 +115,13 @@ fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> Strin
 }
 
 fn get_app_config() -> Figment {
+    trace!("Entering config::get_app_config");
     let secret_key = get_required_env_var(
         "JUSTENCRYPT_ROCKET_SECRET_KEY",
         "ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=",
         "JUSTENCRYPT_ROCKET_SECRET_KEY must be set in release mode.",
     );
+    trace!("Secret key loaded.");
 
     let app_config = Config::figment()
         .merge((
@@ -213,34 +215,52 @@ fn get_app_config() -> Figment {
                     .unwrap(),
                 ),
         ));
+    trace!("Merged standard and limits configuration from environment variables.");
 
     let tls_key_path = env::var("JUSTENCRYPT_TLS_KEY_PATH").unwrap_or_default();
     let tls_cert_path = env::var("JUSTENCRYPT_TLS_CERT_PATH").unwrap_or_default();
 
     // Only add TLS config if both paths are non-empty
     if !tls_cert_path.is_empty() && !tls_key_path.is_empty() {
+        trace!(
+            "TLS paths provided, merging TLS configuration. Cert: {}, Key: {}",
+            tls_cert_path,
+            tls_key_path
+        );
         app_config.merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)))
     } else {
+        trace!("No TLS paths provided, skipping TLS configuration.");
         app_config
     }
 }
 
 #[launch]
 async fn rocket() -> _ {
+    trace!("Entering main::rocket launch function.");
     dotenv::dotenv().ok();
+    trace!("Loaded .env file.");
 
     let app_config = get_app_config();
+    trace!("Application configuration loaded.");
 
     let workers: u16 = app_config.extract_inner("workers").unwrap();
     let semaphore_tickets = ((workers as usize * 7) / 10).max(1);
+    trace!(
+        "Calculated thumbnail semaphore tickets: {} (from {} workers)",
+        semaphore_tickets,
+        workers
+    );
 
     let state = AppState {
         active_sessions: RwLock::default(),
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
     };
+    trace!("AppState initialized.");
 
     let hsts = Hsts::Enable(Duration::days(365));
+    trace!("HSTS enabled.");
 
+    trace!("Building Rocket instance...");
     rocket::custom(app_config)
         .attach(Cors)
         .attach(Shield::default().enable(hsts))
