@@ -18,7 +18,7 @@ pub struct GetFolder {
 
 #[options("/<folder_path..>")]
 pub fn folder_options(folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [OPTIONS /folder{:?}]", folder_path);
+    trace!("Entering route [OPTIONS /folder{}]", folder_path);
     Ok(RequestSuccess::NoContent)
 }
 
@@ -27,7 +27,7 @@ pub async fn get_folder(
     folder_path: UnrestrictedPath, // The name/path of the folder being requested, extracted from the URL.
     auth: AuthenticatedSession,
 ) -> Result<Json<Vec<FolderEntry>>, RequestError> {
-    trace!("Entering route [GET /folder{:?}]", folder_path);
+    trace!("Entering route [GET /folder{}]", folder_path);
     let folder_path_buf = folder_path.to_path_buf();
     let session = auth.session.read().await;
 
@@ -43,7 +43,7 @@ pub async fn get_folder(
         }
     };
 
-    trace!("Exiting route [GET /folder{:?}] successfully.", folder_path);
+    trace!("Exiting route [GET /folder{}] successfully.", folder_path);
     Ok(Json(folder_contents))
 }
 
@@ -52,7 +52,7 @@ pub async fn create_folder(
     folder_path: UnrestrictedPath, // The name/path of the folder being requested, extracted from the URL.
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PUT /folder{:?}]", folder_path);
+    trace!("Entering route [PUT /folder{}]", folder_path);
     let folder_path_buf = folder_path.to_path_buf();
     let session = auth.session.read().await;
 
@@ -67,7 +67,7 @@ pub async fn create_folder(
         }
     }
 
-    trace!("Exiting route [PUT /folder{:?}] successfully.", folder_path);
+    trace!("Exiting route [PUT /folder{}] successfully.", folder_path);
     Ok(RequestSuccess::Created)
 }
 
@@ -76,7 +76,7 @@ pub async fn delete_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [DELETE /folder{:?}]", folder_path);
+    trace!("Entering route [DELETE /folder{}]", folder_path);
     let folder_path_buf = folder_path.to_path_buf();
     let session = auth.session.write().await;
 
@@ -193,7 +193,7 @@ pub async fn delete_folder(
     drop(session);
 
     trace!(
-        "Exiting route [DELETE /folder{:?}] successfully.",
+        "Exiting route [DELETE /folder{}] successfully.",
         folder_path
     );
     Ok(RequestSuccess::NoContent)

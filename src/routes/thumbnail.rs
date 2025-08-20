@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 #[options("/<file_path..>")]
 pub fn thumbnail_options(file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [OPTIONS /thumbnail{:?}]", file_path);
+    trace!("Entering route [OPTIONS /thumbnail{}]", file_path);
     Ok(RequestSuccess::NoContent)
 }
 
@@ -35,7 +35,7 @@ pub async fn get_thumbnail(
     state: &State<AppState>, // Application state for accessing global resources like session management.
     auth: AuthenticatedSession,
 ) -> Result<Vec<u8>, RequestError> {
-    trace!("Entering route [GET /thumbnail{:?}]", file_path);
+    trace!("Entering route [GET /thumbnail{}]", file_path);
     let file_path_buf = file_path.to_path_buf();
 
     let thumbnail_extension = file_path_buf.extension().unwrap_or_default();
@@ -232,7 +232,7 @@ pub async fn get_thumbnail(
         trace!("Encrypted and wrote thumbnail to cache.");
 
         trace!(
-            "Exiting route [GET /thumbnail{:?}] after generating new thumbnail successfully.",
+            "Exiting route [GET /thumbnail{}] after generating new thumbnail successfully.",
             file_path
         );
         Ok(thumbnail_buffer.into_inner())
@@ -285,7 +285,7 @@ pub async fn get_thumbnail(
         trace!("Decrypted thumbnail data from cache.");
 
         trace!(
-            "Exiting route [GET /thumbnail{:?}] with cached thumbnail successfully.",
+            "Exiting route [GET /thumbnail{}] with cached thumbnail successfully.",
             file_path
         );
         Ok(decrypted_thumbnail_data)

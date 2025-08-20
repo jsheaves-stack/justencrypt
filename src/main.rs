@@ -24,6 +24,7 @@ use std::{
     collections::HashMap,
     env,
     error::Error,
+    fmt,
     io::Write,
     path::{Path, PathBuf},
     str::FromStr,
@@ -69,6 +70,12 @@ impl<'r> FromSegments<'r> for UnrestrictedPath {
         Ok(UnrestrictedPath(
             segments.into_iter().map(|s| s.to_string()).collect(),
         ))
+    }
+}
+
+impl fmt::Display for UnrestrictedPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "/{}", self.0.join("/"))
     }
 }
 
