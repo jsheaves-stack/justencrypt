@@ -31,9 +31,9 @@ const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
 
 const MPSC_CHANNEL_CAPACITY: usize = 2;
 
-#[options("/<_file_path..>")]
-pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route::files::file_options");
+#[options("/<file_path..>")]
+pub fn file_options(file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route [OPTIONS /file{:?}]", file_path);
     Ok(RequestSuccess::NoContent)
 }
 
@@ -43,7 +43,7 @@ pub async fn put_file(
     reqdata: Data<'_>,           // The raw data of the file being uploaded.
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route::files::put_file for path: {:?}", file_path);
+    trace!("Entering route [PUT /file{:?}]", file_path);
     let session = auth.session.read().await;
 
     let user_path = session.get_user_path().clone();
@@ -175,7 +175,7 @@ pub async fn put_file(
         }
     }
 
-    trace!("Exiting route::files::put_file successfully.");
+    trace!("Exiting route [PUT /file{:?}] successfully.", file_path);
     Ok(RequestSuccess::Created)
 }
 
@@ -191,10 +191,7 @@ pub async fn patch_file(
     patch_file_request: Json<PatchFileRequest>,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!(
-        "Entering route::files::patch_file for path: {:?}",
-        file_path
-    );
+    trace!("Entering route [PATCH /file{:?}]", file_path);
     let file_path_buf = file_path.to_path_buf();
     let session = auth.session.read().await;
 
@@ -229,7 +226,7 @@ pub async fn patch_file(
     };
 
     drop(session);
-    trace!("Exiting route::files::patch_file successfully.");
+    trace!("Exiting route [PATCH /file{:?}] successfully.", file_path);
     Ok(RequestSuccess::NoContent)
 }
 
@@ -238,7 +235,7 @@ pub async fn get_file(
     file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
     auth: AuthenticatedSession,
 ) -> Result<ByteStream![Vec<u8>], RequestError> {
-    trace!("Entering route::files::get_file for path: {:?}", file_path);
+    trace!("Entering route [GET /file{:?}]", file_path);
     let file_path_buf = file_path.to_path_buf();
     let session = auth.session.read().await;
 
@@ -370,10 +367,7 @@ pub async fn delete_file(
     file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!(
-        "Entering route::files::delete_file for path: {:?}",
-        file_path
-    );
+    trace!("Entering route [DELETE /file{:?}]", file_path);
     let file_path_buf = file_path.to_path_buf();
     let session = auth.session.read().await;
 
@@ -410,6 +404,6 @@ pub async fn delete_file(
         }
     };
 
-    trace!("Exiting route::files::delete_file successfully.");
+    trace!("Exiting route [DELETE /file{:?}] successfully.", file_path);
     Ok(RequestSuccess::NoContent)
 }

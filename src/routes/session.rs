@@ -34,7 +34,7 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route::session::create_session");
+    trace!("Entering route [POST /session/create]");
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
     let user_name = reqbody.username.clone();
 
@@ -63,13 +63,13 @@ pub async fn create_session(
     state.active_sessions.write().await.insert(uuid, session);
     trace!("Session added to active sessions map.");
 
-    trace!("Exiting route::session::create_session successfully.");
+    trace!("Exiting route [POST /session/create] successfully.");
     Ok(RequestSuccess::NoContent)
 }
 
 #[options("/destroy")]
 pub fn destroy_session_options() -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route::session::destroy_session_options");
+    trace!("Entering route [OPTIONS /session/destroy]");
     Ok(RequestSuccess::NoContent)
 }
 
@@ -78,7 +78,7 @@ pub async fn destroy_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route::session::destroy_session");
+    trace!("Entering route [POST /session/destroy]");
     let mut active_sessions = state.active_sessions.write().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
@@ -107,6 +107,6 @@ pub async fn destroy_session(
         }
     };
 
-    trace!("Exiting route::session::destroy_session.");
+    trace!("Exiting route [POST /session/destroy] successfully.");
     result
 }
