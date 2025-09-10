@@ -43,6 +43,10 @@ jobs:
   triggers:
   - !BranchUpdateTrigger
     projects: justencrypt
+  jobDependencies:
+  - jobName: Test
+    requireSuccessful: true
+    artifacts: '**'
   retryCondition: never
   maxRetries: 3
   retryDelay: 30
