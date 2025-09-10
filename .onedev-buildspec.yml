@@ -11,8 +11,8 @@ jobs:
     optional: false
   - !BuildImageStep
     name: Test
-    output: !RegistryOutput
-      tags: t:t
+    output: !OCIOutput
+      destPath: .
     moreOptions: --target test
     condition: SUCCESSFUL
     optional: false
