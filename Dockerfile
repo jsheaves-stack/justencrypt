@@ -29,3 +29,6 @@ FROM scratch
 COPY --from=builder /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt /justencrypt
 EXPOSE 8000
 CMD ["/justencrypt"]
+
+FROM rust:alpine3.20 AS test
+RUN cargo test
