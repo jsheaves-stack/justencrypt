@@ -11,8 +11,8 @@ jobs:
     name: Run Docker Test Build
     image: docker:24.0
     commands: |
-    	set -e
-    	docker build --target test .
+      set -e
+      docker build --target test .
   retryCondition: never
   maxRetries: 3
   retryDelay: 30
