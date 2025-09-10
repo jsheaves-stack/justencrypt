@@ -31,4 +31,6 @@ EXPOSE 8000
 CMD ["/justencrypt"]
 
 FROM rust:alpine3.20 AS test
+WORKDIR /usr/src/justencrypt
+COPY . .
 RUN cargo test
