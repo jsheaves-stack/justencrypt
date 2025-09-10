@@ -25,7 +25,7 @@ RUN if [ "$BUILD_MODE" = "static" ]; then \
 
 RUN chmod +x /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt
 
-FROM scratch
+FROM scratch AS release
 COPY --from=builder /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt /justencrypt
 EXPOSE 8000
 CMD ["/justencrypt"]
