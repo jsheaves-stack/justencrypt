@@ -9,6 +9,13 @@ jobs:
     withSubmodules: false
     condition: SUCCESSFUL
     optional: false
+  - !BuildImageStep
+    name: Test
+    output: !RegistryOutput
+      tags: t:t
+    moreOptions: --target test
+    condition: SUCCESSFUL
+    optional: false
   retryCondition: never
   maxRetries: 3
   retryDelay: 30
@@ -30,6 +37,7 @@ jobs:
     - registryUrl: '@server_url@'
       userName: '@job_token@'
       passwordSecret: publish_token
+    moreOptions: --target release
     condition: SUCCESSFUL
     optional: false
   triggers:
