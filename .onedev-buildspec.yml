@@ -7,15 +7,12 @@ jobs:
     cloneCredential: !DefaultCredential {}
     withLfs: false
     withSubmodules: false
-    condition: SUCCESSFUL
-    optional: false
-  - !BuildImageStep
-    name: Test
-    output: !OCIOutput
-      destPath: .
-    moreOptions: --target test
-    condition: SUCCESSFUL
-    optional: false
+  - !ShellScriptStep
+    name: Run Docker Test Build
+    image: docker:24.0
+    commands: |
+      set -e
+      docker build --target test .
   retryCondition: never
   maxRetries: 3
   retryDelay: 30
