@@ -1,5 +1,18 @@
-version: 39
+version: 40
 jobs:
+- name: Test
+  steps:
+  - !CheckoutStep
+    name: Checkout
+    cloneCredential: !DefaultCredential {}
+    withLfs: false
+    withSubmodules: false
+    condition: SUCCESSFUL
+    optional: false
+  retryCondition: never
+  maxRetries: 3
+  retryDelay: 30
+  timeout: 14400
 - name: build
   steps:
   - !CheckoutStep
@@ -7,7 +20,8 @@ jobs:
     cloneCredential: !DefaultCredential {}
     withLfs: false
     withSubmodules: false
-    condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
+    condition: SUCCESSFUL
+    optional: false
   - !BuildImageStep
     name: Docker
     output: !RegistryOutput
@@ -16,7 +30,8 @@ jobs:
     - registryUrl: '@server_url@'
       userName: '@job_token@'
       passwordSecret: publish_token
-    condition: ALL_PREVIOUS_STEPS_WERE_SUCCESSFUL
+    condition: SUCCESSFUL
+    optional: false
   triggers:
   - !BranchUpdateTrigger
     projects: justencrypt
