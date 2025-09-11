@@ -1,6 +1,6 @@
 version: 40
 jobs:
-- name: Test
+- name: test
   steps:
   - !CheckoutStep
     name: Checkout
@@ -60,7 +60,7 @@ jobs:
   - !BranchUpdateTrigger
     projects: justencrypt
   jobDependencies:
-  - jobName: Test
+  - jobName: test
     requireSuccessful: true
     artifacts: '**'
   retryCondition: never
