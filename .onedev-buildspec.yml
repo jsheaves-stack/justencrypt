@@ -2,19 +2,19 @@ version: 40
 jobs:
 - name: Test
   steps:
-  - !SetupCacheStep
-    name: Cargo Cache
-    key: '@property:cache_key@'
-    paths:
-    - ./target
-    uploadStrategy: UPLOAD_IF_NOT_HIT
-    condition: SUCCESSFUL
-    optional: false
   - !CheckoutStep
     name: Checkout
     cloneCredential: !DefaultCredential {}
     withLfs: false
     withSubmodules: false
+    condition: SUCCESSFUL
+    optional: false
+  - !SetupCacheStep
+    name: Cargo Cache
+    key: '@property:cache_key@'
+    paths:
+    - ./target
+    uploadStrategy: UPLOAD_IF_CHANGED
     condition: SUCCESSFUL
     optional: false
   - !BuildImageStep
@@ -35,6 +35,14 @@ jobs:
     cloneCredential: !DefaultCredential {}
     withLfs: false
     withSubmodules: false
+    condition: SUCCESSFUL
+    optional: false
+  - !SetupCacheStep
+    name: Cargo Cache
+    key: '@property:cache_key@'
+    paths:
+    - ./target
+    uploadStrategy: UPLOAD_IF_NOT_HIT
     condition: SUCCESSFUL
     optional: false
   - !BuildImageStep
