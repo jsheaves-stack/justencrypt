@@ -9,19 +9,19 @@ jobs:
     withSubmodules: false
     condition: SUCCESSFUL
     optional: false
+  - !BuildImageStep
+    name: Test
+    output: !OCIOutput
+      destPath: .
+    moreOptions: --target test
+    condition: SUCCESSFUL
+    optional: false
   - !SetupCacheStep
     name: Cargo Cache
     key: '@property:cache_key@'
     paths:
     - ./target
     uploadStrategy: UPLOAD_IF_CHANGED
-    condition: SUCCESSFUL
-    optional: false
-  - !BuildImageStep
-    name: Test
-    output: !OCIOutput
-      destPath: .
-    moreOptions: --target test
     condition: SUCCESSFUL
     optional: false
   retryCondition: never
