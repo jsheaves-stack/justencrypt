@@ -11,8 +11,6 @@ jobs:
     optional: false
   - !BuildImageStep
     name: Test
-    output: !OCIOutput
-      destPath: .
     moreOptions: --target test
     condition: SUCCESSFUL
     optional: false
