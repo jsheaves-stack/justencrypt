@@ -16,7 +16,7 @@ COPY . .
 
 FROM prepare AS test
 WORKDIR /usr/src/justencrypt
-RUN cargo test --target x86_64-unknown-linux-musl
+RUN cargo test --target x86_64-unknown-linux-musl --release
 
 FROM prepare AS build
 WORKDIR /usr/src/justencrypt
@@ -25,7 +25,7 @@ RUN chmod +x /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/juste
 
 FROM prepare AS test_and_build
 WORKDIR /usr/src/justencrypt
-RUN cargo test --target x86_64-unknown-linux-musl
+RUN cargo test --target x86_64-unknown-linux-musl --release
 RUN cargo build --release --target x86_64-unknown-linux-musl
 RUN chmod +x /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt
 
