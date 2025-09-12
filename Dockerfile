@@ -17,11 +17,8 @@ RUN rustup target add x86_64-unknown-linux-musl
 WORKDIR /usr/src/justencrypt
 COPY . .
 
-RUN if [ "$BUILD_MODE" = "static" ]; then \
-    cargo build --release --target x86_64-unknown-linux-musl; \
-    else \
-    cargo build --release; \
-    fi
+RUN cargo test --target x86_64-unknown-linux-musl
+RUN cargo build --release --target x86_64-unknown-linux-musl
 
 RUN chmod +x /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt
 
