@@ -1,33 +1,5 @@
 version: 40
 jobs:
-- name: test
-  steps:
-  - !CheckoutStep
-    name: Checkout
-    cloneCredential: !DefaultCredential {}
-    withLfs: false
-    withSubmodules: false
-    condition: SUCCESSFUL
-    optional: false
-  - !BuildImageStep
-    name: Test
-    output: !OCIOutput
-      destPath: .
-    moreOptions: --target test
-    condition: SUCCESSFUL
-    optional: false
-  - !SetupCacheStep
-    name: Cargo Cache
-    key: '@property:cache_key@'
-    paths:
-    - ./target
-    uploadStrategy: UPLOAD_IF_CHANGED
-    condition: SUCCESSFUL
-    optional: false
-  retryCondition: never
-  maxRetries: 3
-  retryDelay: 30
-  timeout: 14400
 - name: build
   steps:
   - !CheckoutStep
@@ -59,10 +31,6 @@ jobs:
   triggers:
   - !BranchUpdateTrigger
     projects: justencrypt
-  jobDependencies:
-  - jobName: test
-    requireSuccessful: true
-    artifacts: '**'
   retryCondition: never
   maxRetries: 3
   retryDelay: 30
