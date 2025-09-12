@@ -432,6 +432,10 @@ mod tests {
             .await
             .expect("Failed to create temp dir");
 
+        std::env::set_var(
+            "JUSTENCRYPT_ROCKET_SECRET_KEY",
+            "BlN4QMqM8+wmRLPNRn10X/ZwmM58tEcCOgeY8cuMsB8=",
+        );
         std::env::set_var("JUSTENCRYPT_USER_DATA_PATH", "/tmp/");
 
         let state = AppState {
@@ -490,8 +494,6 @@ mod tests {
 
         let (session_id, cookie) = create_test_session(client.rocket(), temp_user).await;
 
-        print!("{:?}", &cookie);
-
         let file_path = "test_file.txt";
         let file_content = "Hello, world!";
 
@@ -503,6 +505,62 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), Status::Created);
+
+        let state = client.rocket().state::<AppState>().unwrap();
+        let session_guard = state.active_sessions.read().await;
+        let session = session_guard.get(&session_id).unwrap().clone();
+        let session = session.read().await;
+
+        let file_entry = Some(
+            session
+                .get_encoded_file_name(file_path.into())
+                .await
+                .unwrap(),
+        );
+
+        assert!(file_entry.is_some());
+
+        let encoded_file_name = file_entry.map(|f| f).unwrap();
+        let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name);
+
+        assert!(tokio::fs::metadata(sharded_path).await.is_ok());
+
+        cleanup(temp_dir).await;
+    }
+
+    #[rocket::async_test]
+    async fn test_get_file() {
+        let (rocket, temp_dir, temp_user) = setup().await;
+
+        let client = Client::tracked(rocket)
+            .await
+            .expect("Failed to create client");
+
+        let (session_id, cookie) = create_test_session(client.rocket(), temp_user).await;
+
+        let file_path = "test_file.txt";
+        let file_content = "Hello, world!";
+
+        let response = client
+            .put(format!("/file/{}", file_path))
+            .private_cookie(cookie.clone())
+            .body(file_content)
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Created);
+
+        let response = client
+            .get(format!("/file/{}", file_path))
+            .private_cookie(cookie)
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+
+        let body = response.into_string().await.unwrap();
+        println!("{:?}", body);
+        assert_eq!(body, file_content);
 
         let state = client.rocket().state::<AppState>().unwrap();
         let session_guard = state.active_sessions.read().await;
