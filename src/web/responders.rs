@@ -31,7 +31,7 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .ok(),
 
             RequestError::FailedToCreateUserSession => Response::build()
-                .status(Status::NotFound)
+                .status(Status::Forbidden)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
 
@@ -57,6 +57,11 @@ impl<'r> Responder<'r, 'static> for RequestError {
 
             RequestError::FailedToReadFolderContents => Response::build()
                 .status(Status::InternalServerError)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::PasswordDoesNotMeetRequirements => Response::build()
+                .status(Status::BadRequest)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
         };

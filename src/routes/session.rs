@@ -10,11 +10,14 @@ use rocket::{
 use secrecy::SecretString;
 use serde::Deserialize;
 use uuid::Uuid;
+use zxcvbn::{zxcvbn, Score};
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     AppState, UserSession,
 };
+
+const MINIMUM_PASSWORD_SECURITY_SCORE: Score = Score::Three;
 
 #[derive(Deserialize)]
 pub struct CreateSession {
@@ -35,6 +38,23 @@ pub async fn create_session(
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [POST /session/create]");
+
+    let password_security_estimate = zxcvbn(reqbody.password.as_str(), &[]).score();
+
+    trace!("Validating password security score.");
+
+    if password_security_estimate < MINIMUM_PASSWORD_SECURITY_SCORE {
+        trace!(
+            "Password score {} does not meet minimum required score {}.",
+            password_security_estimate,
+            MINIMUM_PASSWORD_SECURITY_SCORE
+        );
+
+        return Err(RequestError::PasswordDoesNotMeetRequirements);
+    }
+
+    trace!("Password meets requirements.");
+
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
     let user_name = reqbody.username.clone();
 

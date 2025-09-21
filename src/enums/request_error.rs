@@ -8,6 +8,9 @@ pub enum RequestError {
     #[error("Failed to find an active session for this session id")]
     MissingActiveSession,
 
+    #[error("Password does not meet security requirements")]
+    PasswordDoesNotMeetRequirements,
+
     #[error("Failed to process data")]
     FailedToProcessData,
 
