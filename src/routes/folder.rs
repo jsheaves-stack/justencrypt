@@ -1,5 +1,4 @@
 use rocket::{delete, get, options, put, serde::json::Json};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     db::sqlite::FolderEntry,
@@ -8,13 +7,6 @@ use crate::{
     web::forwarding_guards::AuthenticatedSession,
     UnrestrictedPath,
 };
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GetFolder {
-    is_file: bool,
-    file_extension: Option<String>,
-    file_name: String,
-}
 
 #[options("/<folder_path..>")]
 pub fn folder_options(folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
