@@ -9,6 +9,7 @@ use rocket::{
 };
 use secrecy::SecretString;
 use serde::Deserialize;
+use std::env;
 use uuid::Uuid;
 use zxcvbn::{zxcvbn, Score};
 
@@ -16,8 +17,6 @@ use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     AppState, UserSession,
 };
-
-const MINIMUM_PASSWORD_SECURITY_SCORE: Score = Score::Three;
 
 #[derive(Deserialize)]
 pub struct CreateSession {
@@ -39,15 +38,29 @@ pub async fn create_session(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [POST /session/create]");
 
+    let score_str =
+        env::var("JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE").unwrap_or_else(|_| "4".to_string());
+
+    let score_num = score_str.parse::<u8>().unwrap_or(4);
+
+    let minimum_password_security_score = match score_num {
+        0 => Score::Zero,
+        1 => Score::One,
+        2 => Score::Two,
+        3 => Score::Three,
+        4 => Score::Four,
+        _ => Score::Three,
+    };
+
     let password_security_estimate = zxcvbn(reqbody.password.as_str(), &[]).score();
 
     trace!("Validating password security score.");
 
-    if password_security_estimate < MINIMUM_PASSWORD_SECURITY_SCORE {
+    if password_security_estimate < minimum_password_security_score {
         trace!(
             "Password score {} does not meet minimum required score {}.",
             password_security_estimate,
-            MINIMUM_PASSWORD_SECURITY_SCORE
+            minimum_password_security_score
         );
 
         return Err(RequestError::PasswordDoesNotMeetRequirements);
