@@ -1,12 +1,13 @@
 use encryption::{FileEncryptionMetadata, SecretKey};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+use crate::db::migrations;
 use crate::enums::db_error::DbError;
 
 pub fn create_user_db_connection(
@@ -17,12 +18,31 @@ pub fn create_user_db_connection(
         "Entering sqlite::create_user_db_connection with db_path: {:?}",
         db_path
     );
+
+    {
+        let mut conn = Connection::open(&db_path)?;
+
+        conn.pragma_update(None, "key", password.expose_secret())?;
+
+        trace!("Running one-time database migrations...");
+
+        match migrations::get_migrations().to_latest(&mut conn) {
+            Ok(_) => trace!("Migrations are up to date."),
+            Err(e) => {
+                error!("{}", e);
+                return Err(DbError::MissingFileName);
+            }
+        };
+    }
+
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
         trace!("Initializing new DB connection.");
         conn.busy_timeout(Duration::from_millis(60000))?;
         trace!("Setting PRAGMA key.");
         conn.pragma_update(None, "key", password.expose_secret())?;
         trace!("PRAGMA key set successfully.");
+
+        conn.query_row("SELECT 1", [], |_| Ok(()))?;
 
         match conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get::<_, String>(0)) {
             Ok(mode) => {
@@ -39,61 +59,13 @@ pub fn create_user_db_connection(
 
         trace!("Setting PRAGMA foreign_keys = ON.");
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        trace!("Executing schema setup.");
-        conn.execute_batch(get_schema())
+
+        Ok(())
     });
 
     let pool = Pool::new(db_manager)?;
     trace!("Exiting sqlite::create_user_db_connection successfully.");
     Ok(pool)
-}
-
-pub fn get_schema() -> &'static str {
-    trace!("Executing sqlite::get_schema.");
-    "
-      BEGIN;
-      
-      CREATE TABLE IF NOT EXISTS folders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        parent_folder_id INTEGER,
-        name TEXT NOT NULL,
-        FOREIGN KEY (parent_folder_id) REFERENCES folders(id),
-        UNIQUE(parent_folder_id, name)
-      );
-
-      CREATE TABLE IF NOT EXISTS files (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        parent_folder_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        encoded_name TEXT NOT NULL,
-        file_extension TEXT,
-        key BLOB NOT NULL,
-        buffer_size INTEGER NOT NULL,
-        nonce_size INTEGER NOT NULL,
-        salt_size INTEGER NOT NULL,
-        tag_size INTEGER NOT NULL,
-        FOREIGN KEY (parent_folder_id) REFERENCES folders(id),
-        UNIQUE(parent_folder_id, name),
-        UNIQUE(encoded_name)
-      );
-
-      CREATE TABLE IF NOT EXISTS thumbnails (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        encoded_name TEXT NOT NULL,
-        file_id INTEGER,
-        key BLOB NOT NULL,
-        buffer_size INTEGER NOT NULL,
-        nonce_size INTEGER NOT NULL,
-        salt_size INTEGER NOT NULL,
-        tag_size INTEGER NOT NULL,
-        FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
-        UNIQUE(encoded_name)
-      );
-
-      INSERT OR IGNORE INTO folders (id, parent_folder_id, name) VALUES (1, NULL, 'ROOT');
-
-      COMMIT;
-    "
 }
 
 fn get_folder_id_and_create_if_missing(

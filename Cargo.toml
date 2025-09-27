@@ -12,11 +12,12 @@ license = "MIT"
 encryption = { path = "encryption" }
 rocket = { version = "0.5.1", features = ["json", "secrets", "tls"] }
 uuid = { version = "1.8.0", features = ["v4"] }
-rusqlite = { version = "0.34.0", features = [
+rusqlite = { version = "0.37.0", features = [
   "bundled-sqlcipher-vendored-openssl",
 ] }
+rusqlite_migration = "2.3.0"
 r2d2 = "0.8.10"
-r2d2_sqlite = "0.27.0"
+r2d2_sqlite = "0.31.0"
 dotenv = "0.15.0"
 serde = "1.0.202"
 serde_json = "1.0.117"
