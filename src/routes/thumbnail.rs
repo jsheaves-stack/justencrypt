@@ -145,11 +145,12 @@ pub async fn get_thumbnail(
             }
         };
 
-        let reader = BufReader::new(input_file);
+        let mut reader = BufReader::new(input_file);
 
         let mut decrypted_original_image_data = Vec::new();
+
         decrypt_stream_to_writer(
-            reader,
+            &mut reader,
             &mut decryptor,
             &mut decrypted_original_image_data,
             (SALT_SIZE + NONCE_SIZE) as u64,
@@ -219,16 +220,8 @@ pub async fn get_thumbnail(
             }
         };
 
-        // Write encryption metadata (salt and nonce) to the file.
-        match encryptor.write_salt_and_nonce().await {
-            Ok(_) => (),
-            Err(e) => {
-                error!("Failed to write salt and nonce chunks: {}", e);
-                return Err(RequestError::FailedToWriteData);
-            }
-        };
-
         encrypt_source_to_encryptor(&mut thumbnail_buffer, &mut encryptor).await?;
+
         trace!("Encrypted and wrote thumbnail to cache.");
 
         trace!(
@@ -272,11 +265,11 @@ pub async fn get_thumbnail(
             }
         };
 
-        let reader = BufReader::new(input_file);
+        let mut reader = BufReader::new(input_file);
 
         let mut decrypted_thumbnail_data = Vec::new();
         decrypt_stream_to_writer(
-            reader,
+            &mut reader,
             &mut decryptor,
             &mut decrypted_thumbnail_data,
             (SALT_SIZE + NONCE_SIZE) as u64,
