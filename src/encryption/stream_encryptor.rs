@@ -5,12 +5,14 @@ use orion::{
     kdf::Salt,
     kex::SecretKey,
 };
-use tokio::{
+use rocket::tokio::{
     fs::{self, File, OpenOptions},
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::{FileEncryptionMetadata, BUFFER_SIZE, KEY_LENGTH, NONCE_SIZE, SALT_SIZE, TAG_SIZE};
+use crate::encryption::{
+    FileEncryptionMetadata, BUFFER_SIZE, KEY_LENGTH, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
+};
 
 pub struct StreamEncryptor {
     file: File,
@@ -81,6 +83,57 @@ impl StreamEncryptor {
 
     pub async fn write_chunk(&mut self, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
         self.file.write_all(&data).await?;
+
+        Ok(())
+    }
+
+    pub async fn encrypt_source_to_encryptor<R: AsyncReadExt + Unpin>(
+        &mut self,
+        source: &mut R,
+    ) -> Result<(), Box<dyn Error>> {
+        trace!("Entering encrypt_source_to_encryptor");
+
+        // Write encryption metadata (salt and nonce) to the file.
+        self.write_salt_and_nonce().await?;
+
+        trace!("Salt and nonce written.");
+
+        let mut read_buffer = [0u8; BUFFER_SIZE];
+        let mut current_buffer_fill = 0;
+
+        loop {
+            // Read a chunk of data from the source.
+            let bytes_read = source.read(&mut read_buffer[current_buffer_fill..]).await?;
+
+            current_buffer_fill += bytes_read;
+
+            trace!(
+                "Read {} bytes from source. Current buffer fill {}/{}",
+                bytes_read,
+                current_buffer_fill,
+                BUFFER_SIZE
+            );
+
+            let final_chunk = bytes_read == 0;
+
+            if current_buffer_fill == BUFFER_SIZE || final_chunk {
+                // Encrypt the chunk.
+                let encrypted_chunk = self
+                    .encrypt_chunk(&read_buffer[..current_buffer_fill])
+                    .await?;
+
+                // Write the encrypted chunk to the encryptor's file.
+                self.write_chunk(encrypted_chunk).await?;
+
+                if final_chunk {
+                    break;
+                }
+
+                current_buffer_fill = 0;
+            }
+        }
+
+        trace!("Exiting encrypt_source_to_encryptor");
 
         Ok(())
     }

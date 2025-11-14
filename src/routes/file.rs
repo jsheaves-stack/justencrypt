@@ -1,21 +1,19 @@
-use crate::streaming::encryption_streaming::{
-    decrypt_stream_to_channel, encrypt_source_to_encryptor,
-};
+use crate::encryption::stream_decryptor::StreamDecryptor;
+use crate::encryption::stream_encryptor::StreamEncryptor;
+use crate::encryption::{NONCE_SIZE, SALT_SIZE};
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     get_sharded_path, remove_sharded_path,
     web::forwarding_guards::AuthenticatedSession,
     UnrestrictedPath,
 };
-use encryption::{
-    stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, NONCE_SIZE, SALT_SIZE,
-};
 use rocket::serde::{json::Json, Deserialize};
+use rocket::tokio::sync::mpsc;
 use rocket::{
     data::ByteUnit,
     delete, get, options, patch, put,
     response::stream::ByteStream,
-    tokio::{self, fs::File, io::BufReader, sync::mpsc},
+    tokio::{self, fs::File, io::BufReader},
     Data,
 };
 use uuid::Uuid;
@@ -78,14 +76,17 @@ pub async fn put_file(
 
     let mut data_stream = reqdata.open(ByteUnit::from(STREAM_LIMIT));
 
-    match encrypt_source_to_encryptor(&mut data_stream, &mut encryptor).await {
+    match encryptor
+        .encrypt_source_to_encryptor(&mut data_stream)
+        .await
+    {
         Ok(_) => {
             trace!("Exiting route [PUT /file{}] successfully.", file_path);
             Ok(RequestSuccess::Created)
         }
         Err(e) => {
             error!("encrypt_source_to_encryptor failed: {}", e);
-            Err(e)
+            Err(RequestError::FailedToAddFile)
         }
     }
 }
@@ -103,9 +104,9 @@ pub async fn patch_file(
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [PATCH /file{}]", file_path);
+
     let file_path_buf = file_path.to_path_buf();
     let session = auth.session.read().await;
-
     let updates = patch_file_request.into_inner();
 
     if let Some(parent_folder_path) = updates.parent_folder_path {
@@ -137,7 +138,9 @@ pub async fn patch_file(
     };
 
     drop(session);
+
     trace!("Exiting route [PATCH /file{}] successfully.", file_path);
+
     Ok(RequestSuccess::NoContent)
 }
 
@@ -179,7 +182,7 @@ pub async fn get_file(
     };
 
     // Initialize the stream decryptor for the requested file.
-    let decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
+    let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
         Ok(d) => d,
         Err(e) => {
             error!("Failed to create StreamDecryptor: {}", e);
@@ -200,7 +203,7 @@ pub async fn get_file(
 
     trace!("Encrypted file opened for reading.");
 
-    let reader = BufReader::new(input_file);
+    let mut reader = BufReader::new(input_file);
     let offset = (SALT_SIZE + NONCE_SIZE) as u64;
 
     // Create an unbounded channel for streaming decrypted file chunks.
@@ -209,7 +212,11 @@ pub async fn get_file(
     trace!("MPSC channel created for file download.");
 
     // Spawn an async task to read, decrypt, and send file chunks.
-    tokio::spawn(decrypt_stream_to_channel(reader, decryptor, tx, offset));
+    tokio::spawn(async move {
+        decryptor
+            .decrypt_stream_to_channel(&mut reader, tx, offset)
+            .await
+    });
 
     // Stream the decrypted file chunks as they become available.
     trace!("Returning ByteStream to client.");
@@ -227,9 +234,9 @@ pub async fn delete_file(
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [DELETE /file{}]", file_path);
+
     let file_path_buf = file_path.to_path_buf();
     let session = auth.session.read().await;
-
     let user_path = session.get_user_path().clone();
 
     let encoded_file_name = match session.get_encoded_file_name(file_path.to_path_buf()).await {
@@ -242,6 +249,7 @@ pub async fn delete_file(
     trace!("Retrieved encoded_file_name: {}", encoded_file_name);
 
     let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name);
+
     trace!("Constructed encoded_file_path: {:?}", encoded_file_path);
 
     match session.delete_file(file_path_buf).await {
@@ -264,6 +272,7 @@ pub async fn delete_file(
     };
 
     trace!("Exiting route [DELETE /file{}] successfully.", file_path);
+
     Ok(RequestSuccess::NoContent)
 }
 
@@ -295,12 +304,14 @@ mod tests {
             "JUSTENCRYPT_ROCKET_SECRET_KEY",
             "BlN4QMqM8+wmRLPNRn10X/ZwmM58tEcCOgeY8cuMsB8=",
         );
+
         std::env::set_var("JUSTENCRYPT_USER_DATA_PATH", "/tmp/");
 
         let state = AppState {
             active_sessions: RwLock::new(HashMap::new()),
             thumbnail_semaphore: Arc::new(Semaphore::new(1)),
         };
+
         let app_config = get_app_config();
 
         let rocket = rocket::custom(app_config).manage(state).mount(
@@ -418,12 +429,16 @@ mod tests {
         assert_eq!(response.status(), Status::Ok);
 
         let body = response.into_string().await.unwrap();
-        println!("{:?}", body);
+
         assert_eq!(body, file_content);
 
         let state = client.rocket().state::<AppState>().unwrap();
         let session_guard = state.active_sessions.read().await;
-        let session = session_guard.get(&session_id).unwrap().clone();
+        let session = match session_guard.get(&session_id) {
+            Some(session) => session,
+            None => panic!("Session not found"),
+        };
+
         let session = session.read().await;
 
         let file_entry = Some(

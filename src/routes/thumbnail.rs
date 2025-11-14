@@ -1,12 +1,11 @@
 use crate::{
+    encryption::{
+        stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, NONCE_SIZE, SALT_SIZE,
+    },
     enums::{request_error::RequestError, request_success::RequestSuccess},
     get_sharded_path,
-    streaming::encryption_streaming::{decrypt_stream_to_writer, encrypt_source_to_encryptor},
     web::forwarding_guards::AuthenticatedSession,
     AppState, UnrestrictedPath,
-};
-use encryption::{
-    stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, NONCE_SIZE, SALT_SIZE,
 };
 use image::ImageFormat;
 use rocket::{
@@ -149,13 +148,21 @@ pub async fn get_thumbnail(
 
         let mut decrypted_original_image_data = Vec::new();
 
-        decrypt_stream_to_writer(
-            &mut reader,
-            &mut decryptor,
-            &mut decrypted_original_image_data,
-            (SALT_SIZE + NONCE_SIZE) as u64,
-        )
-        .await?;
+        match decryptor
+            .decrypt_stream_to_writer(
+                &mut reader,
+                &mut decrypted_original_image_data,
+                (SALT_SIZE + NONCE_SIZE) as u64,
+            )
+            .await
+        {
+            Ok(_) => (),
+            Err(_) => {
+                error!("Failed to decrypt original image data.");
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
+
         trace!("Decrypted original image data.");
 
         let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
@@ -220,7 +227,16 @@ pub async fn get_thumbnail(
             }
         };
 
-        encrypt_source_to_encryptor(&mut thumbnail_buffer, &mut encryptor).await?;
+        match encryptor
+            .encrypt_source_to_encryptor(&mut thumbnail_buffer)
+            .await
+        {
+            Ok(_) => (),
+            Err(_) => {
+                error!("Failed to encrypt thumbnail data.");
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
 
         trace!("Encrypted and wrote thumbnail to cache.");
 
@@ -268,19 +284,29 @@ pub async fn get_thumbnail(
         let mut reader = BufReader::new(input_file);
 
         let mut decrypted_thumbnail_data = Vec::new();
-        decrypt_stream_to_writer(
-            &mut reader,
-            &mut decryptor,
-            &mut decrypted_thumbnail_data,
-            (SALT_SIZE + NONCE_SIZE) as u64,
-        )
-        .await?;
+
+        match decryptor
+            .decrypt_stream_to_writer(
+                &mut reader,
+                &mut decrypted_thumbnail_data,
+                (SALT_SIZE + NONCE_SIZE) as u64,
+            )
+            .await
+        {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to decrypt thumbnail data: {}", e);
+                return Err(RequestError::FailedToProcessData);
+            }
+        };
+
         trace!("Decrypted thumbnail data from cache.");
 
         trace!(
             "Exiting route [GET /thumbnail{}] with cached thumbnail successfully.",
             file_path
         );
+
         Ok(decrypted_thumbnail_data)
     }
 }

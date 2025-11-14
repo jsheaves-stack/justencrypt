@@ -33,10 +33,10 @@ use std::{
 use web::fairings::Cors;
 
 mod db;
+mod encryption;
 mod enums;
 mod routes;
 mod session;
-mod streaming;
 mod web;
 
 #[macro_use]
