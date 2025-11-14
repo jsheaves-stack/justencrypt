@@ -51,7 +51,7 @@ pub async fn put_file(
         Ok(e) => e,
         Err(e) => {
             error!("Failed to create StreamEncryptor: {}", e);
-            return Err(RequestError::FailedToProcessData);
+            return Err(RequestError::FailedToAddFile);
         }
     };
 
@@ -121,7 +121,7 @@ pub async fn patch_file(
             Ok(_) => trace!("File moved successfully."),
             Err(e) => {
                 error!("Failed to move file: {}", e);
-                return Err(RequestError::FailedToProcessData);
+                return Err(RequestError::FailedToMoveFile);
             }
         }
     };
@@ -132,7 +132,7 @@ pub async fn patch_file(
             Ok(_) => trace!("File renamed successfully."),
             Err(e) => {
                 error!("Failed to rename file: {}", e);
-                return Err(RequestError::FailedToProcessData);
+                return Err(RequestError::FailedToRenameFile);
             }
         }
     };

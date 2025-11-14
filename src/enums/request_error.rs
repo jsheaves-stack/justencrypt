@@ -26,6 +26,12 @@ pub enum RequestError {
     #[error("Failed to remove file")]
     FailedToRemoveFile,
 
+    #[error("Failed to rename file")]
+    FailedToRenameFile,
+
+    #[error("Failed to move file")]
+    FailedToMoveFile,
+
     #[error("Failed to add file")]
     FailedToAddFile,
 
