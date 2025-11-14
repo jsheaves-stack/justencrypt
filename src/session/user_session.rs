@@ -1,6 +1,5 @@
 use std::{env, path::PathBuf};
 
-use encryption::FileEncryptionMetadata;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio::task;
@@ -8,6 +7,7 @@ use secrecy::SecretString;
 
 use crate::{
     db::sqlite::{self, FolderEntry},
+    encryption::FileEncryptionMetadata,
     enums::db_error::DbError,
 };
 use serde::{Deserialize, Serialize};
