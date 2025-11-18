@@ -1,5 +1,7 @@
-use std::{str::FromStr, sync::Arc};
-
+use crate::{
+    enums::{request_error::RequestError, request_success::RequestSuccess},
+    AppState, UserSession,
+};
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
     options, post,
@@ -9,14 +11,9 @@ use rocket::{
 };
 use secrecy::SecretString;
 use serde::Deserialize;
-use std::env;
+use std::{env, str::FromStr, sync::Arc};
 use uuid::Uuid;
 use zxcvbn::{zxcvbn, Score};
-
-use crate::{
-    enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppState, UserSession,
-};
 
 #[derive(Deserialize)]
 pub struct CreateSession {

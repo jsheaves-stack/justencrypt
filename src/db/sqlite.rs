@@ -1,15 +1,16 @@
+use crate::db::migrations;
+use crate::encryption::FileEncryptionMetadata;
+use crate::enums::db_error::DbError;
 use orion::kex::SecretKey;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
-
-use crate::db::migrations;
-use crate::encryption::FileEncryptionMetadata;
-use crate::enums::db_error::DbError;
+use std::{
+    path::{Component, Path, PathBuf},
+    time::Duration,
+};
 
 pub fn create_user_db_connection(
     db_path: PathBuf,

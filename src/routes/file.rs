@@ -1,26 +1,24 @@
-use crate::encryption::stream_decryptor::StreamDecryptor;
-use crate::encryption::stream_encryptor::StreamEncryptor;
-use crate::encryption::{NONCE_SIZE, SALT_SIZE};
-use crate::util::sharded_path::{get_sharded_path, remove_sharded_path};
-use crate::util::unrestricted_path::UnrestrictedPath;
+use crate::encryption::{
+    stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, MPSC_CHANNEL_CAPACITY,
+    NONCE_SIZE, SALT_SIZE, STREAM_LIMIT,
+};
+use crate::util::{
+    sharded_path::{get_sharded_path, remove_sharded_path},
+    unrestricted_path::UnrestrictedPath,
+};
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     web::forwarding_guards::AuthenticatedSession,
 };
-use rocket::serde::{json::Json, Deserialize};
-use rocket::tokio::sync::mpsc;
 use rocket::{
     data::ByteUnit,
     delete, get, options, patch, put,
     response::stream::ByteStream,
-    tokio::{self, fs::File, io::BufReader},
+    serde::{json::Json, Deserialize},
+    tokio::{self, fs::File, io::BufReader, sync::mpsc},
     Data,
 };
 use uuid::Uuid;
-
-const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
-
-const MPSC_CHANNEL_CAPACITY: usize = 2;
 
 #[options("/<file_path..>")]
 pub fn file_options(file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {

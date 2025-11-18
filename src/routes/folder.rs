@@ -1,5 +1,3 @@
-use rocket::{delete, get, options, put, serde::json::Json};
-
 use crate::{
     db::sqlite::FolderEntry,
     enums::{request_error::RequestError, request_success::RequestSuccess},
@@ -9,6 +7,7 @@ use crate::{
     },
     web::forwarding_guards::AuthenticatedSession,
 };
+use rocket::{delete, get, options, put, serde::json::Json};
 
 #[options("/<folder_path..>")]
 pub fn folder_options(folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {

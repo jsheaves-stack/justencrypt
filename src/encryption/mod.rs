@@ -11,6 +11,10 @@ pub const BUFFER_SIZE: usize = 1024 * 16; // Adjust this buffer size as needed (
 
 pub const KEY_LENGTH: usize = 32; // 32 byte key
 
+pub const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
+
+pub const MPSC_CHANNEL_CAPACITY: usize = 2;
+
 pub struct DerivedKey {
     pub key: SecretKey,
 }
