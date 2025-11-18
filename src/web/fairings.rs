@@ -32,12 +32,14 @@ impl Fairing for Cors {
         response.set_header(Header::new("Access-Control-Allow-Methods", methods));
         response.set_header(Header::new("Access-Control-Request-Methods", methods));
         response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
+
         trace!("Set standard CORS headers.");
 
         if request.method() == Method::Options {
             trace!("Request method is OPTIONS, setting status to OK.");
             response.set_status(Status::Ok);
         }
+
         trace!("Exiting fairing::Cors::on_response");
     }
 }

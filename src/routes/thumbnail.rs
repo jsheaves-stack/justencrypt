@@ -3,9 +3,9 @@ use crate::{
         stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, NONCE_SIZE, SALT_SIZE,
     },
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    get_sharded_path,
+    util::{sharded_path::get_sharded_path, unrestricted_path::UnrestrictedPath},
     web::forwarding_guards::AuthenticatedSession,
-    AppState, UnrestrictedPath,
+    AppState,
 };
 use image::ImageFormat;
 use rocket::{
@@ -35,10 +35,9 @@ pub async fn get_thumbnail(
     auth: AuthenticatedSession,
 ) -> Result<Vec<u8>, RequestError> {
     trace!("Entering route [GET /thumbnail{}]", file_path);
+
     let file_path_buf = file_path.to_path_buf();
-
     let thumbnail_extension = file_path_buf.extension().unwrap_or_default();
-
     let content_type =
         ContentType::from_extension(thumbnail_extension.to_str().unwrap_or_default()).unwrap();
 
@@ -52,6 +51,7 @@ pub async fn get_thumbnail(
             return Err(RequestError::UnsupportedFileType);
         }
     };
+
     trace!("Determined image format: {:?}", image_format);
 
     let permit = state
@@ -59,6 +59,7 @@ pub async fn get_thumbnail(
         .acquire()
         .await
         .map_err(|_| RequestError::FailedToProcessData)?;
+
     trace!("Acquired thumbnail semaphore permit.");
 
     let session = auth.session.read().await;
@@ -96,7 +97,8 @@ pub async fn get_thumbnail(
     });
 
     let encoded_thumbnail_file_path =
-        get_sharded_path(cache_path.clone(), &encoded_thumbnail_file_name);
+        get_sharded_path(cache_path.clone(), &encoded_thumbnail_file_name).await;
+
     trace!(
         "Constructed thumbnail path: {:?}",
         encoded_thumbnail_file_path
@@ -112,10 +114,12 @@ pub async fn get_thumbnail(
             return Err(RequestError::FailedToProcessData);
         }
     };
+
     trace!("Retrieved original file encryption metadata.");
 
     if !encoded_thumbnail_file_path.exists() {
         trace!("Thumbnail does not exist in cache, generating new one.");
+
         let encoded_file_name = match session.get_encoded_file_name(file_path_buf.clone()).await {
             Ok(e) => e,
             Err(e) => {
@@ -124,7 +128,7 @@ pub async fn get_thumbnail(
             }
         };
 
-        let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name);
+        let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
         // Initialize the stream decryptor for the requested file.
         let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
@@ -167,6 +171,7 @@ pub async fn get_thumbnail(
 
         let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
             trace!("Entering blocking task for image resizing.");
+
             let mut thumbnail_buffer = Cursor::new(Vec::new());
 
             let img =
@@ -196,6 +201,7 @@ pub async fn get_thumbnail(
         })??;
 
         drop(permit);
+
         trace!("Semaphore permit released after generation.");
 
         // Initialize the stream encryptor for the file.
@@ -239,15 +245,17 @@ pub async fn get_thumbnail(
         };
 
         trace!("Encrypted and wrote thumbnail to cache.");
-
         trace!(
             "Exiting route [GET /thumbnail{}] after generating new thumbnail successfully.",
             file_path
         );
+
         Ok(thumbnail_buffer.into_inner())
     } else {
         trace!("Thumbnail exists in cache, decrypting it.");
+
         drop(permit);
+
         trace!("Semaphore permit released immediately.");
 
         let thumbnail_metadata = match session.get_thumbnail(file_path_buf).await {
@@ -260,6 +268,7 @@ pub async fn get_thumbnail(
                 return Err(RequestError::FailedToProcessData);
             }
         };
+
         trace!("Retrieved thumbnail encryption metadata.");
 
         // Initialize the stream decryptor for the requested file.
@@ -282,7 +291,6 @@ pub async fn get_thumbnail(
         };
 
         let mut reader = BufReader::new(input_file);
-
         let mut decrypted_thumbnail_data = Vec::new();
 
         match decryptor
@@ -301,7 +309,6 @@ pub async fn get_thumbnail(
         };
 
         trace!("Decrypted thumbnail data from cache.");
-
         trace!(
             "Exiting route [GET /thumbnail{}] with cached thumbnail successfully.",
             file_path

@@ -12,6 +12,12 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct EncodedFile {
+    pub id: i32,
+    pub encoded_name: String,
+}
+
 pub struct UserSession {
     user_path: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
@@ -32,22 +38,28 @@ impl UserSession {
 
         let result = task::spawn_blocking(move || {
             trace!("Inside spawn_blocking for UserSession::open");
+
             let user_data_path = env::var("JUSTENCRYPT_USER_DATA_PATH")
                 .unwrap_or_else(|_| String::from("./user_data"));
+
             trace!("User data path: {}", user_data_path);
 
             let user_path = PathBuf::from(&user_data_path).join(&user_name);
+
             trace!("Constructed user path: {:?}", user_path);
 
             if !user_path.exists() {
                 trace!("User path does not exist.");
+
                 return Err(DbError::UserDoesNotExist);
             }
 
             let user_db_path = user_path.join(format!("{user_name}.db"));
+
             trace!("User DB path: {:?}", user_db_path);
 
             let db_pool = sqlite::create_user_db_connection(user_db_path, passphrase)?;
+
             trace!("DB connection pool created.");
 
             Ok(Self { user_path, db_pool })
@@ -56,6 +68,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::open successfully.");
+
         result
     }
 
@@ -64,6 +77,7 @@ impl UserSession {
             "Entering and exiting UserSession::get_user_path. Path: {:?}",
             self.user_path
         );
+
         self.user_path.clone()
     }
 
@@ -72,6 +86,7 @@ impl UserSession {
             "Entering UserSession::get_encoded_file_name for path: {:?}",
             file_path
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -93,6 +108,7 @@ impl UserSession {
         metadata: FileEncryptionMetadata,
     ) -> Result<(), DbError> {
         trace!("Entering UserSession::add_file for path: {:?}", file_path);
+
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
@@ -109,6 +125,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::add_file successfully.");
+
         Ok(())
     }
 
@@ -117,6 +134,7 @@ impl UserSession {
             "Entering UserSession::delete_file for path: {:?}",
             file_path
         );
+
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
@@ -128,6 +146,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::delete_file successfully.");
+
         Ok(())
     }
 
@@ -136,6 +155,7 @@ impl UserSession {
             "Entering UserSession::add_folder for path: {:?}",
             folder_path
         );
+
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
@@ -147,6 +167,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::add_folder successfully.");
+
         Ok(())
     }
 
@@ -155,6 +176,7 @@ impl UserSession {
             "Entering UserSession::delete_folder for path: {:?}",
             folder_path
         );
+
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
@@ -166,6 +188,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::delete_folder successfully.");
+
         Ok(())
     }
 
@@ -174,6 +197,7 @@ impl UserSession {
             "Entering UserSession::delete_folder_by_id for id: {}",
             folder_id
         );
+
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
@@ -185,6 +209,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::delete_folder_by_id successfully.");
+
         Ok(())
     }
 
@@ -193,6 +218,7 @@ impl UserSession {
             "Entering UserSession::delete_file_by_id for id: {}",
             file_id
         );
+
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
@@ -204,6 +230,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::delete_file_by_id successfully.");
+
         Ok(())
     }
 
@@ -212,6 +239,7 @@ impl UserSession {
             "Entering UserSession::get_folder_id for path: {:?}",
             folder_path
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -223,6 +251,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::get_folder_id.");
+
         result
     }
 
@@ -231,6 +260,7 @@ impl UserSession {
             "Entering UserSession::get_files_in_folder for id: {}",
             folder_id
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -242,6 +272,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::get_files_in_folder.");
+
         result
     }
 
@@ -250,6 +281,7 @@ impl UserSession {
             "Entering UserSession::get_child_folders for id: {}",
             folder_id
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -261,6 +293,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::get_child_folders.");
+
         result
     }
 
@@ -272,6 +305,7 @@ impl UserSession {
             "Entering UserSession::get_encoded_thumbnail_file_name_by_file_id for id: {}",
             file_id
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -283,6 +317,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::get_encoded_thumbnail_file_name_by_file_id.");
+
         result
     }
 
@@ -296,6 +331,7 @@ impl UserSession {
             "Entering UserSession::add_thumbnail for path: {:?}",
             file_path
         );
+
         let db_pool = self.db_pool.clone();
 
         task::spawn_blocking(move || {
@@ -312,6 +348,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::add_thumbnail successfully.");
+
         Ok(())
     }
 
@@ -320,6 +357,7 @@ impl UserSession {
             "Entering UserSession::get_folder for path: {:?}",
             folder_path
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -331,6 +369,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::get_folder.");
+
         result
     }
 
@@ -342,6 +381,7 @@ impl UserSession {
             "Entering UserSession::get_thumbnail for path: {:?}",
             file_path
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -353,6 +393,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::get_thumbnail.");
+
         result
     }
 
@@ -364,6 +405,7 @@ impl UserSession {
             "Entering UserSession::get_encoded_thumbnail_file_name for path: {:?}",
             file_path
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -378,6 +420,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::get_encoded_thumbnail_file_name.");
+
         result
     }
 
@@ -389,6 +432,7 @@ impl UserSession {
             "Entering UserSession::get_file_encryption_metadata for path: {:?}",
             file_path
         );
+
         let db_pool = self.db_pool.clone();
 
         let result = task::spawn_blocking(move || {
@@ -400,6 +444,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
 
         trace!("Exiting UserSession::get_file_encryption_metadata.");
+
         result
     }
 
@@ -413,6 +458,7 @@ impl UserSession {
             file_path,
             new_file_name
         );
+
         let db_pool = self.db_pool.clone();
         let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
 
@@ -425,6 +471,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::rename_file successfully.");
+
         Ok(())
     }
 
@@ -438,6 +485,7 @@ impl UserSession {
             file_path,
             destination_folder
         );
+
         let db_pool = self.db_pool.clone();
 
         let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
@@ -451,12 +499,7 @@ impl UserSession {
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::move_file successfully.");
+
         Ok(())
     }
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct EncodedFile {
-    pub id: i32,
-    pub encoded_name: String,
 }

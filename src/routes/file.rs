@@ -1,11 +1,11 @@
 use crate::encryption::stream_decryptor::StreamDecryptor;
 use crate::encryption::stream_encryptor::StreamEncryptor;
 use crate::encryption::{NONCE_SIZE, SALT_SIZE};
+use crate::util::sharded_path::{get_sharded_path, remove_sharded_path};
+use crate::util::unrestricted_path::UnrestrictedPath;
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    get_sharded_path, remove_sharded_path,
     web::forwarding_guards::AuthenticatedSession,
-    UnrestrictedPath,
 };
 use rocket::serde::{json::Json, Deserialize};
 use rocket::tokio::sync::mpsc;
@@ -39,7 +39,7 @@ pub async fn put_file(
     let session = auth.session.read().await;
     let user_path = session.get_user_path().clone();
     let encoded_file_name = Uuid::new_v4().to_string();
-    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name);
+    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
 
     trace!(
         "Generated encoded_file_name: {} for path: {:?}",
@@ -165,7 +165,7 @@ pub async fn get_file(
 
     trace!("Retrieved encoded_file_name: {}", encoded_file_name);
 
-    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name);
+    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
 
     trace!("Constructed encoded_file_path: {:?}", encoded_file_path);
 
@@ -248,7 +248,7 @@ pub async fn delete_file(
     };
     trace!("Retrieved encoded_file_name: {}", encoded_file_name);
 
-    let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name);
+    let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
     trace!("Constructed encoded_file_path: {:?}", encoded_file_path);
 
@@ -391,7 +391,8 @@ mod tests {
         assert!(file_entry.is_some());
 
         let encoded_file_name = file_entry.map(|f| f).unwrap();
-        let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name);
+        let sharded_path =
+            get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
 
         assert!(tokio::fs::metadata(sharded_path).await.is_ok());
 
@@ -451,7 +452,8 @@ mod tests {
         assert!(file_entry.is_some());
 
         let encoded_file_name = file_entry.map(|f| f).unwrap();
-        let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name);
+        let sharded_path =
+            get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
 
         assert!(tokio::fs::metadata(sharded_path).await.is_ok());
 
@@ -515,7 +517,8 @@ mod tests {
         assert!(file_entry.is_some());
 
         let encoded_file_name = file_entry.map(|f| f).unwrap();
-        let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name);
+        let sharded_path =
+            get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
 
         assert!(tokio::fs::metadata(sharded_path).await.is_ok());
 

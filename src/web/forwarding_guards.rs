@@ -60,6 +60,7 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
         };
 
         trace!("Exiting forwarding_guard::AuthenticatedSession::from_request successfully.");
+
         Outcome::Success(AuthenticatedSession { session })
     }
 }

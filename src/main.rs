@@ -3,15 +3,10 @@ use rocket::{
     config::{Config, TlsConfig},
     data::{ByteUnit, Limits},
     figment::Figment,
-    http::uri::Segments,
     launch,
-    request::FromSegments,
     shield::{Hsts, Shield},
     time::Duration,
-    tokio::{
-        fs,
-        sync::{RwLock, Semaphore},
-    },
+    tokio::sync::{RwLock, Semaphore},
 };
 use routes::{
     file::{delete_file, file_options, get_file, patch_file, put_file},
@@ -20,16 +15,7 @@ use routes::{
     thumbnail::{get_thumbnail, thumbnail_options},
 };
 use session::user_session::UserSession;
-use std::{
-    collections::HashMap,
-    env,
-    error::Error,
-    fmt,
-    io::Write,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-};
+use std::{collections::HashMap, env, io::Write, str::FromStr, sync::Arc};
 use web::fairings::Cors;
 
 mod db;
@@ -37,6 +23,7 @@ mod encryption;
 mod enums;
 mod routes;
 mod session;
+mod util;
 mod web;
 
 #[macro_use]
@@ -46,67 +33,6 @@ extern crate serde;
 pub struct AppState {
     active_sessions: RwLock<HashMap<String, Arc<RwLock<UserSession>>>>,
     thumbnail_semaphore: Arc<Semaphore>,
-}
-
-#[derive(Debug)]
-struct UnrestrictedPath(Vec<String>);
-
-impl UnrestrictedPath {
-    /// Convert to a PathBuf while sanitizing the path
-    pub fn to_path_buf(&self) -> PathBuf {
-        self.0.iter().fold(PathBuf::new(), |mut pb, segment| {
-            pb.push(segment);
-            pb
-        })
-    }
-}
-
-impl<'r> FromSegments<'r> for UnrestrictedPath {
-    type Error = rocket::http::uri::Error<'r>;
-
-    fn from_segments(
-        segments: Segments<'r, rocket::http::uri::fmt::Path>,
-    ) -> Result<Self, Self::Error> {
-        Ok(UnrestrictedPath(
-            segments.into_iter().map(|s| s.to_string()).collect(),
-        ))
-    }
-}
-
-impl fmt::Display for UnrestrictedPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "/{}", self.0.join("/"))
-    }
-}
-
-async fn remove_sharded_path(base_path: &Path, file_path: &Path) -> Result<(), Box<dyn Error>> {
-    fs::remove_file(file_path).await?;
-
-    let mut current_dir = file_path.parent();
-
-    while let Some(dir) = current_dir {
-        if dir == base_path {
-            break;
-        }
-
-        if fs::read_dir(dir).await?.next_entry().await?.is_none() {
-            fs::remove_dir(dir).await?;
-        } else {
-            break;
-        }
-        current_dir = dir.parent();
-    }
-    Ok(())
-}
-
-fn get_sharded_path(mut user_path: PathBuf, file_name: &String) -> PathBuf {
-    if file_name.len() >= 4 {
-        user_path.push(&file_name[0..2]);
-        user_path.push(&file_name[2..4]);
-    }
-    user_path.push(file_name);
-
-    user_path
 }
 
 fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
@@ -125,11 +51,13 @@ fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> Strin
 
 fn get_app_config() -> Figment {
     trace!("Entering config::get_app_config");
+
     let secret_key = get_required_env_var(
         "JUSTENCRYPT_ROCKET_SECRET_KEY",
         "ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=",
         "JUSTENCRYPT_ROCKET_SECRET_KEY must be set in release mode.",
     );
+
     trace!("Secret key loaded.");
 
     let app_config = Config::figment()
@@ -232,9 +160,11 @@ fn get_app_config() -> Figment {
             tls_cert_path,
             tls_key_path
         );
+
         app_config.merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)))
     } else {
         trace!("No TLS paths provided, skipping TLS configuration.");
+
         app_config
     }
 }
@@ -274,10 +204,12 @@ async fn rocket() -> _ {
     trace!("Entering main::rocket launch function.");
 
     let app_config = get_app_config();
+
     trace!("Application configuration loaded.");
 
     let workers: u16 = app_config.extract_inner("workers").unwrap();
     let semaphore_tickets = ((workers as usize * 7) / 10).max(1);
+
     trace!(
         "Calculated thumbnail semaphore tickets: {} (from {} workers)",
         semaphore_tickets,
@@ -288,12 +220,14 @@ async fn rocket() -> _ {
         active_sessions: RwLock::default(),
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
     };
+
     trace!("AppState initialized.");
 
     let hsts = Hsts::Enable(Duration::days(365));
-    trace!("HSTS enabled.");
 
+    trace!("HSTS enabled.");
     trace!("Building Rocket instance...");
+
     rocket::custom(app_config)
         .attach(Cors)
         .attach(Shield::default().enable(hsts))

@@ -72,6 +72,7 @@ pub async fn create_session(
     let user_name = reqbody.username.clone();
 
     trace!("Attempting to open user session for user: {}", user_name);
+
     let session = Arc::new(RwLock::new(
         match UserSession::open(&user_name, &passphrase).await {
             Ok(a) => {
@@ -86,17 +87,21 @@ pub async fn create_session(
     ));
 
     let uuid = Uuid::new_v4().hyphenated().to_string();
+
     trace!("Generated new session UUID: {}", uuid);
 
     let mut cookie = Cookie::new("session_id", uuid.clone());
     cookie.set_same_site(Some(SameSite::Strict));
     cookies.add_private(cookie);
+
     trace!("Session cookie added to jar.");
 
     state.active_sessions.write().await.insert(uuid, session);
+
     trace!("Session added to active sessions map.");
 
     trace!("Exiting route [POST /session/create] successfully.");
+
     Ok(RequestSuccess::NoContent)
 }
 
@@ -112,6 +117,7 @@ pub async fn destroy_session(
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [POST /session/destroy]");
+
     let mut active_sessions = state.active_sessions.write().await;
 
     // Retrieve the user's session based on the "session_id" cookie.
@@ -141,5 +147,6 @@ pub async fn destroy_session(
     };
 
     trace!("Exiting route [POST /session/destroy] successfully.");
+
     result
 }

@@ -3,9 +3,11 @@ use rocket::{delete, get, options, put, serde::json::Json};
 use crate::{
     db::sqlite::FolderEntry,
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    get_sharded_path, remove_sharded_path,
+    util::{
+        sharded_path::{get_sharded_path, remove_sharded_path},
+        unrestricted_path::UnrestrictedPath,
+    },
     web::forwarding_guards::AuthenticatedSession,
-    UnrestrictedPath,
 };
 
 #[options("/<folder_path..>")]
@@ -20,6 +22,7 @@ pub async fn get_folder(
     auth: AuthenticatedSession,
 ) -> Result<Json<Vec<FolderEntry>>, RequestError> {
     trace!("Entering route [GET /folder{}]", folder_path);
+
     let folder_path_buf = folder_path.to_path_buf();
     let session = auth.session.read().await;
 
@@ -36,6 +39,7 @@ pub async fn get_folder(
     };
 
     trace!("Exiting route [GET /folder{}] successfully.", folder_path);
+
     Ok(Json(folder_contents))
 }
 
@@ -45,6 +49,7 @@ pub async fn create_folder(
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [PUT /folder{}]", folder_path);
+
     let folder_path_buf = folder_path.to_path_buf();
     let session = auth.session.read().await;
 
@@ -60,6 +65,7 @@ pub async fn create_folder(
     }
 
     trace!("Exiting route [PUT /folder{}] successfully.", folder_path);
+
     Ok(RequestSuccess::Created)
 }
 
@@ -69,6 +75,7 @@ pub async fn delete_folder(
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [DELETE /folder{}]", folder_path);
+
     let folder_path_buf = folder_path.to_path_buf();
     let session = auth.session.write().await;
 
@@ -89,10 +96,12 @@ pub async fn delete_folder(
 
     let user_path = session.get_user_path().clone();
     let mut folder_stack: Vec<i32> = vec![folder_id];
+
     trace!("Starting recursive delete from folder ID: {}", folder_id);
 
     while let Some(current_folder_id) = folder_stack.pop() {
         trace!("Processing folder ID: {}", current_folder_id);
+
         let files = match session.get_files_in_folder(current_folder_id).await {
             Ok(files) => files,
             Err(e) => {
@@ -100,6 +109,7 @@ pub async fn delete_folder(
                 return Err(RequestError::FailedToReadFolderContents);
             }
         };
+
         trace!(
             "Found {} files in folder ID {}",
             files.len(),
@@ -112,7 +122,8 @@ pub async fn delete_folder(
                 file.id,
                 file.encoded_name
             );
-            let encoded_file_path = get_sharded_path(user_path.clone(), &file.encoded_name);
+
+            let encoded_file_path = get_sharded_path(user_path.clone(), &file.encoded_name).await;
 
             // Remove thumbnail if it exists
             if let Ok(Some(encoded_thumbnail_file_name)) = session
@@ -120,10 +131,12 @@ pub async fn delete_folder(
                 .await
             {
                 trace!("Found thumbnail to delete: {}", encoded_thumbnail_file_name);
+
                 let encoded_thumbnail_file_path = get_sharded_path(
                     user_path.clone().join(".cache"),
                     &encoded_thumbnail_file_name,
-                );
+                )
+                .await;
 
                 if encoded_thumbnail_file_path.exists() {
                     if let Err(e) =
@@ -167,6 +180,7 @@ pub async fn delete_folder(
 
         if current_folder_id != folder_id {
             trace!("Deleting folder metadata for ID: {}", current_folder_id);
+
             if let Err(e) = session.delete_folder_by_id(current_folder_id).await {
                 error!("Failed to delete folder by id: {}", e);
             }
@@ -177,6 +191,7 @@ pub async fn delete_folder(
         "Deleting root folder metadata for path: {:?}",
         folder_path_buf
     );
+
     if let Err(e) = session.delete_folder(folder_path_buf).await {
         error!("Failed to delete folder: {}", e);
         return Err(RequestError::FailedToRemoveFile);
@@ -188,5 +203,6 @@ pub async fn delete_folder(
         "Exiting route [DELETE /folder{}] successfully.",
         folder_path
     );
+
     Ok(RequestSuccess::NoContent)
 }
