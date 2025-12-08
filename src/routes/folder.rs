@@ -95,11 +95,13 @@ pub async fn delete_folder(
 
     let user_path = session.get_user_path().clone();
     let mut folder_stack: Vec<i32> = vec![folder_id];
+    let mut folders_to_delete: Vec<i32> = Vec::new();
 
     trace!("Starting recursive delete from folder ID: {}", folder_id);
 
     while let Some(current_folder_id) = folder_stack.pop() {
         trace!("Processing folder ID: {}", current_folder_id);
+        folders_to_delete.push(current_folder_id);
 
         let files = match session.get_files_in_folder(current_folder_id).await {
             Ok(files) => files,
@@ -143,11 +145,6 @@ pub async fn delete_folder(
                     {
                         error!("Failed to delete thumbnail file: {}", e);
                     }
-                } else {
-                    info!(
-                        "Thumbnail file does not exist: {:?}",
-                        encoded_thumbnail_file_path
-                    );
                 }
             }
 
@@ -176,7 +173,9 @@ pub async fn delete_folder(
         for child_folder_id in child_folder_ids {
             folder_stack.push(child_folder_id);
         }
+    }
 
+    for current_folder_id in folders_to_delete.into_iter().rev() {
         if current_folder_id != folder_id {
             trace!("Deleting folder metadata for ID: {}", current_folder_id);
 
