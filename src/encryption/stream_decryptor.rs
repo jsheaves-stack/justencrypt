@@ -143,7 +143,8 @@ impl StreamDecryptor {
             let decrypted_chunk = self
                 .decrypt_chunk(&encrypted_read_buffer[..bytes_read])
                 .await
-                .unwrap();
+                .map_err(|e| error!("Failed to decrypt chunk: {}", e))
+                .unwrap_or_default();
 
             if decrypted_chunk.is_empty() {
                 trace!("Decrypted chunk is empty, assuming end of stream.");

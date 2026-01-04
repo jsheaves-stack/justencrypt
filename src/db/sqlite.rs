@@ -1,12 +1,13 @@
-use crate::db::migrations;
 use crate::encryption::FileEncryptionMetadata;
 use crate::enums::db_error::DbError;
+use crate::{db::migrations, session};
 use orion::kex::SecretKey;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use session::user_session::EncodedFile;
 use std::{
     path::{Component, Path, PathBuf},
     time::Duration,
@@ -786,7 +787,7 @@ pub fn move_file(
 pub fn get_files_in_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_id: i32,
-) -> Result<Vec<crate::session::user_session::EncodedFile>, DbError> {
+) -> Result<Vec<EncodedFile>, DbError> {
     trace!(
         "Entering sqlite::get_files_in_folder with folder_id: {}",
         folder_id
@@ -797,7 +798,7 @@ pub fn get_files_in_folder(
     let mut files = Vec::new();
 
     while let Some(row) = rows.next()? {
-        let file = crate::session::user_session::EncodedFile {
+        let file = EncodedFile {
             id: row.get(0)?,
             encoded_name: row.get(1)?,
         };
