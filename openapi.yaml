@@ -1,0 +1,298 @@
+openapi: 3.0.3
+info:
+  title: JustEncrypt API
+  version: 1.0.0
+  description: API specification for the JustEncrypt file encryption service.
+servers:
+  - url: /
+    description: Relative server URL
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session_id
+  schemas:
+    ServerInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: The name of the API.
+        version:
+          type: string
+          description: The semver version of the API.
+    CreateSession:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          description: The username of the user.
+        password:
+          type: string
+          format: password
+          description: The secure passphrase/password (must meet minimum score).
+    PatchFileRequest:
+      type: object
+      properties:
+        parent_folder_path:
+          type: string
+          description: The new logical parent folder path to move the file to.
+        file_name:
+          type: string
+          description: The new logical name for the file.
+    FolderEntry:
+      type: object
+      required:
+        - is_file
+        - file_name
+      properties:
+        is_file:
+          type: boolean
+          description: Indicates whether this entry is a file or a folder.
+        file_extension:
+          type: string
+          nullable: true
+          description: The file extension, if this entry is a file.
+        file_name:
+          type: string
+          description: The logical name of the file or folder.
+security:
+  - cookieAuth: []
+paths:
+  /:
+    get:
+      summary: Get server information
+      description: Returns the API name and semantic version.
+      security: []
+      responses:
+        '200':
+          description: Server information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerInfo'
+  /v1/session/create:
+    post:
+      summary: Create a new session
+      description: Initializes a new user session or logs into an existing one. Returns a session cookie.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSession'
+      responses:
+        '204':
+          description: Session created successfully, cookie provided in headers.
+        '400':
+          description: Bad request (e.g. password does not meet requirements).
+    options:
+      summary: Pre-flight check
+      security: []
+      responses:
+        '204':
+          description: CORS pre-flight response
+  /v1/session/destroy:
+    post:
+      summary: Destroy the active session
+      description: Invalidates the active session identified by the session_id cookie.
+      responses:
+        '204':
+          description: Session successfully destroyed.
+        '400':
+          description: Missing or invalid session ID.
+    options:
+      summary: Pre-flight check
+      responses:
+        '204':
+          description: CORS pre-flight response
+  /v1/file/{file_path}:
+    put:
+      summary: Upload and encrypt a file
+      description: Uploads a file stream, encrypts it on the fly, and stores it in the sharded filesystem.
+      parameters:
+        - in: path
+          name: file_path
+          required: true
+          schema:
+            type: string
+          description: The logical virtual file path where the file will be stored.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: File uploaded and encrypted successfully.
+        '400':
+          description: Failed to add file.
+    get:
+      summary: Download and decrypt a file
+      description: Streams and decrypts the file on the fly based on the logical file path.
+      parameters:
+        - in: path
+          name: file_path
+          required: true
+          schema:
+            type: string
+          description: The logical virtual path of the requested file.
+      responses:
+        '200':
+          description: Decrypted file stream.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Failed to process data or locate file.
+    patch:
+      summary: Move or rename a file
+      description: Allows renaming a file or moving it to a different logical folder.
+      parameters:
+        - in: path
+          name: file_path
+          required: true
+          schema:
+            type: string
+          description: The logical virtual path of the file to modify.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchFileRequest'
+      responses:
+        '204':
+          description: File moved or renamed successfully.
+        '400':
+          description: Failed to move or rename file.
+    delete:
+      summary: Delete a file
+      description: Permanently deletes the file metadata and physical encrypted chunks from the server.
+      parameters:
+        - in: path
+          name: file_path
+          required: true
+          schema:
+            type: string
+          description: The logical virtual path of the file to delete.
+      responses:
+        '204':
+          description: File successfully deleted.
+        '400':
+          description: Failed to remove file.
+    options:
+      summary: Pre-flight check
+      parameters:
+        - in: path
+          name: file_path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: CORS pre-flight response
+  /v1/folder/{folder_path}:
+    put:
+      summary: Create a folder
+      description: Creates a new logical folder path.
+      parameters:
+        - in: path
+          name: folder_path
+          required: true
+          schema:
+            type: string
+          description: The logical path of the folder to create.
+      responses:
+        '201':
+          description: Folder created successfully.
+        '400':
+          description: Failed to create folder.
+    get:
+      summary: List folder contents
+      description: Returns a list of files and folders contained within the specified folder path.
+      parameters:
+        - in: path
+          name: folder_path
+          required: true
+          schema:
+            type: string
+          description: The logical path of the folder to list.
+      responses:
+        '200':
+          description: JSON array of folder contents.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FolderEntry'
+        '400':
+          description: Failed to read folder contents.
+    delete:
+      summary: Delete a folder recursively
+      description: Recursively deletes the folder, sub-folders, and all encrypted files and thumbnails inside it.
+      parameters:
+        - in: path
+          name: folder_path
+          required: true
+          schema:
+            type: string
+          description: The logical path of the folder to delete.
+      responses:
+        '204':
+          description: Complete recursive deletion successful.
+        '400':
+          description: Failed to remove files/folders.
+    options:
+      summary: Pre-flight check
+      parameters:
+        - in: path
+          name: folder_path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: CORS pre-flight response
+  /v1/thumbnail/{file_path}:
+    get:
+      summary: Get or generate a thumbnail
+      description: Fetches a thumbnail for an image file. If the thumbnail does not exist, it securely decrypts the original, resizes it to 150x150, encrypts the thumbnail to a cache, and streams it.
+      parameters:
+        - in: path
+          name: file_path
+          required: true
+          schema:
+            type: string
+          description: The logical path of the original image file.
+      responses:
+        '200':
+          description: Decrypted raw byte stream of the thumbnail.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Unsupported file type or failed to process thumbnail.
+    options:
+      summary: Pre-flight check
+      parameters:
+        - in: path
+          name: file_path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: CORS pre-flight response

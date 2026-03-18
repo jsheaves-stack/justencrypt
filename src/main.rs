@@ -11,6 +11,7 @@ use rocket::{
 use routes::{
     file::{delete_file, file_options, get_file, patch_file, put_file},
     folder::{create_folder, delete_folder, folder_options, get_folder},
+    info::get_server_info,
     session::{create_session, create_session_options, destroy_session, destroy_session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
 };
@@ -232,6 +233,7 @@ async fn rocket() -> _ {
         .attach(Cors)
         .attach(Shield::default().enable(hsts))
         .manage(state)
+        .mount("/", routes![get_server_info])
         .mount(
             "/file",
             routes![get_file, put_file, delete_file, file_options, patch_file],
