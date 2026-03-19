@@ -75,7 +75,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerInfo'
-  /v1/session/create:
+  /session/create:
     post:
       summary: Create a new session
       description: Initializes a new user session or logs into an existing one. Returns a session cookie.
@@ -97,7 +97,7 @@ paths:
       responses:
         '204':
           description: CORS pre-flight response
-  /v1/session/destroy:
+  /session/destroy:
     post:
       summary: Destroy the active session
       description: Invalidates the active session identified by the session_id cookie.
@@ -111,7 +111,7 @@ paths:
       responses:
         '204':
           description: CORS pre-flight response
-  /v1/file/{file_path}:
+  /file/{file_path}:
     put:
       summary: Upload and encrypt a file
       description: Uploads a file stream, encrypts it on the fly, and stores it in the sharded filesystem.
@@ -201,7 +201,7 @@ paths:
       responses:
         '204':
           description: CORS pre-flight response
-  /v1/folder/{folder_path}:
+  /folder/{folder_path}:
     put:
       summary: Create a folder
       description: Creates a new logical folder path.
@@ -264,7 +264,7 @@ paths:
       responses:
         '204':
           description: CORS pre-flight response
-  /v1/thumbnail/{file_path}:
+  /thumbnail/{file_path}:
     get:
       summary: Get or generate a thumbnail
       description: Fetches a thumbnail for an image file. If the thumbnail does not exist, it securely decrypts the original, resizes it to 150x150, encrypts the thumbnail to a cache, and streams it.

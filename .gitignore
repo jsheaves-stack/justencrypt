@@ -18,3 +18,5 @@ Cargo.lock
 /user_data
 
 dist
+
+perf-results/

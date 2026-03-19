@@ -1,0 +1,69 @@
+# Dockerfile.perf
+
+# We define this at the top so it's available for the FROM instructions
+ARG BINARY_SOURCE=builder
+
+# --- Stage 1: Build the Rust App ---
+FROM rust:alpine3.20 AS builder
+ARG BUILD_MODE=static
+ENV OPENSSL_STATIC=1
+RUN apk add --no-cache \
+    build-base \
+    openssl-dev \
+    pkgconfig \
+    musl-dev \
+    linux-headers \
+    cmake \
+    perl
+
+RUN rustup target add x86_64-unknown-linux-musl
+WORKDIR /usr/src/justencrypt
+
+# Dependency Caching Trick:
+# Copy only the dependency manifests
+COPY Cargo.toml Cargo.lock ./
+
+# Create a dummy main.rs to compile dependencies
+RUN mkdir src && \
+    echo "fn main() {println!(\"if you see this, something went wrong with the build\");}" > src/main.rs && \
+    cargo build --release --target x86_64-unknown-linux-musl && \
+    rm -rf src/
+
+# Now copy the real source and build
+COPY src ./src
+RUN touch src/main.rs && cargo build --release --target x86_64-unknown-linux-musl
+
+# --- Stage 2: Performance Test Environment ---
+# We must re-declare the ARG inside the stage to use it
+ARG BINARY_SOURCE=builder
+FROM ${BINARY_SOURCE} AS app_source
+
+# Final image
+FROM alpine:3.20
+WORKDIR /app
+
+# The path where the binary exists in the source image.
+# We re-declare the path arg here
+ARG BINARY_PATH=/usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt
+
+# Install runtime dependencies and k6
+RUN apk add --no-cache bash curl ca-certificates jq bc
+COPY --from=grafana/k6:latest /usr/bin/k6 /usr/bin/k6
+
+# Copy the binary from the designated source image/stage
+COPY --from=app_source ${BINARY_PATH} /app/justencrypt
+
+# Copy test scripts
+COPY perf-test/ /perf-test/
+RUN chmod +x /perf-test/entrypoint.sh
+
+# Environment setup
+ENV JUSTENCRYPT_ROCKET_SECRET_KEY="ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=" \
+    JUSTENCRYPT_ADDRESS="0.0.0.0" \
+    JUSTENCRYPT_PORT="8000" \
+    ROCKET_LOG_LEVEL="off"
+
+# Results directory
+RUN mkdir -p /results
+
+ENTRYPOINT ["/perf-test/entrypoint.sh"]
