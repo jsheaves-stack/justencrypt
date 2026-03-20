@@ -1,5 +1,18 @@
 import http from 'k6/http';
-import { check, sleep } from 'k6';
+import { check, sleep, group } from 'k6';
+import { Trend, Rate, Counter } from 'k6/metrics';
+
+// Custom Metrics for deep insights
+const uploadTime = new Trend('upload_time');
+const downloadTime = new Trend('download_time');
+const loginTime = new Trend('login_time');
+const deleteTime = new Trend('delete_time');
+
+const uploadSuccessRate = new Rate('upload_success_rate');
+const downloadSuccessRate = new Rate('download_success_rate');
+
+const totalDataUploaded = new Counter('total_data_uploaded');
+const totalDataDownloaded = new Counter('total_data_downloaded');
 
 // Read configuration from environment variables
 const VUS = parseInt(__ENV.VUS || '20');
@@ -13,13 +26,15 @@ const MAX_SIZE = parseInt(__ENV.MAX_SIZE || '100');
 
 export const options = {
   stages: [
-    { duration: '10s', target: VUS },
-    { duration: DURATION, target: VUS },
-    { duration: '10s', target: 0 },
+    { duration: '30s', target: VUS }, // Ramp up
+    { duration: DURATION, target: VUS }, // Steady state
+    { duration: '30s', target: 0 }, // Ramp down
   ],
   thresholds: {
     http_req_failed: ['rate<0.05'],
-    http_req_duration: ['p(95)<120000'], 
+    http_req_duration: ['p(95)<120000'],
+    upload_success_rate: ['rate>0.95'],
+    download_success_rate: ['rate>0.95'],
   },
 };
 
@@ -46,16 +61,22 @@ export default function () {
   const username = `user_${__VU}`;
   const password = 'TestPassword123!@#Stronger';
 
-  // 1. Login
-  const loginRes = http.post(`${BASE_URL}/session/create`, JSON.stringify({
-    username: username,
-    password: password,
-  }), { headers: { 'Content-Type': 'application/json' } });
+  let loggedIn = false;
+  
+  group('1. Authentication Phase', function () {
+    const startTime = Date.now();
+    const loginRes = http.post(`${BASE_URL}/session/create`, JSON.stringify({
+      username: username,
+      password: password,
+    }), { headers: { 'Content-Type': 'application/json' }, tags: { name: 'Login' } });
 
-  check(loginRes, { 'auth successful': (r) => r.status === 204 });
-  if (loginRes.status !== 204) return;
+    loginTime.add(Date.now() - startTime);
+    loggedIn = check(loginRes, { 'auth successful': (r) => r.status === 204 });
+  });
 
-  // Generate file list
+  if (!loggedIn) return;
+
+  // Generate file list for the user
   let fileConfigs = [];
   for (let i = 0; i < FILES_COUNT; i++) {
     fileConfigs.push({
@@ -64,35 +85,56 @@ export default function () {
     });
   }
 
-  // 2. Upload Phase (Randomized Order)
-  let uploadQueue = shuffle([...fileConfigs]);
-  uploadQueue.forEach(file => {
-    const data = DATA_SOURCE.slice(0, file.size);
-    const res = http.put(`${BASE_URL}/file/${file.name}`, data, {
-      headers: { 'Content-Type': 'application/octet-stream' },
-      timeout: '180s',
-    });
-    check(res, { [`upload ok`]: (r) => r.status === 201 });
-  });
-
-  // 3. Download Phase (Randomized Order)
-  let downloadQueue = shuffle([...fileConfigs]);
-  downloadQueue.forEach(file => {
-    const res = http.get(`${BASE_URL}/file/${file.name}`, { 
-      timeout: '180s',
-      responseType: 'binary' 
-    });
-    check(res, { 
-        [`download ok`]: (r) => r.status === 200,
-        // Verification: ArrayBuffer has byteLength
-        [`content size correct`]: (r) => (r.body && r.body.byteLength) === file.size
+  group('2. Upload Phase', function () {
+    let uploadQueue = shuffle([...fileConfigs]);
+    uploadQueue.forEach(file => {
+      const data = DATA_SOURCE.slice(0, file.size);
+      
+      const startTime = Date.now();
+      const res = http.put(`${BASE_URL}/file/${file.name}`, data, {
+        headers: { 'Content-Type': 'application/octet-stream' },
+        timeout: '180s',
+        tags: { name: 'UploadFile' }
+      });
+      uploadTime.add(Date.now() - startTime);
+      
+      const success = check(res, { [`upload ok`]: (r) => r.status === 201 });
+      uploadSuccessRate.add(success);
+      if (success) {
+        totalDataUploaded.add(file.size);
+      }
     });
   });
 
-  // 4. Cleanup Phase
-  fileConfigs.forEach(file => {
-    const res = http.del(`${BASE_URL}/file/${file.name}`);
-    check(res, { [`delete ok`]: (r) => r.status === 204 });
+  group('3. Download Phase', function () {
+    let downloadQueue = shuffle([...fileConfigs]);
+    downloadQueue.forEach(file => {
+      const startTime = Date.now();
+      const res = http.get(`${BASE_URL}/file/${file.name}`, { 
+        timeout: '180s',
+        responseType: 'binary',
+        tags: { name: 'DownloadFile' }
+      });
+      downloadTime.add(Date.now() - startTime);
+
+      const success = check(res, { 
+          [`download ok`]: (r) => r.status === 200,
+          [`content size correct`]: (r) => (r.body && r.body.byteLength) === file.size
+      });
+      downloadSuccessRate.add(success);
+      if (success) {
+        totalDataDownloaded.add(file.size);
+      }
+    });
+  });
+
+  group('4. Cleanup Phase', function () {
+    fileConfigs.forEach(file => {
+      const startTime = Date.now();
+      const res = http.del(`${BASE_URL}/file/${file.name}`, null, { tags: { name: 'DeleteFile' }});
+      deleteTime.add(Date.now() - startTime);
+      check(res, { [`delete ok`]: (r) => r.status === 204 });
+    });
   });
 
   sleep(SLEEP_DELAY);

@@ -67,4 +67,5 @@ docker run --rm \
     justencrypt-perf
 
 echo -e "\n${BLUE}--- Performance Test Complete ---${NC}"
-echo -e "${GREEN}Report available: ./perf-results/PERFORMANCE_REPORT.md${NC}"
+echo -e "${GREEN}Report available: ./perf-results/PERFORMANCE_REPORT_<timestamp>.md${NC}"
+echo -e "${GREEN}Raw metrics available: ./perf-results/k6_raw_metrics_<timestamp>.csv and ./perf-results/system_metrics_<timestamp>.csv${NC}"
