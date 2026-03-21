@@ -6,12 +6,12 @@ use rocket::{
     http::{Cookie, CookieJar, SameSite},
     options, post,
     serde::json::Json,
-    tokio::sync::RwLock,
+    tokio::{sync::RwLock, task},
     State,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
-use std::{env, str::FromStr, sync::Arc};
+use std::{env, path::PathBuf, str::FromStr, sync::Arc};
 use uuid::Uuid;
 use zxcvbn::{zxcvbn, Score};
 
@@ -35,35 +35,51 @@ pub async fn create_session(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [POST /session/create]");
 
-    let score_str =
-        env::var("JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE").unwrap_or_else(|_| "4".to_string());
+    let user_name = reqbody.username.clone();
+    let password = reqbody.password.clone();
 
-    let score_num = score_str.parse::<u8>().unwrap_or(4);
+    task::spawn_blocking(move || {
+        let user_data_path =
+            env::var("JUSTENCRYPT_USER_DATA_PATH").unwrap_or_else(|_| String::from("./user_data"));
+        let user_db_path = PathBuf::from(&user_data_path)
+            .join(&user_name)
+            .join(format!("{}.db", user_name));
 
-    let minimum_password_security_score = match score_num {
-        0 => Score::Zero,
-        1 => Score::One,
-        2 => Score::Two,
-        3 => Score::Three,
-        4 => Score::Four,
-        _ => Score::Three,
-    };
+        if !user_db_path.exists() {
+            trace!("User database does not exist, performing security score check.");
+            let score_str = env::var("JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE")
+                .unwrap_or_else(|_| "4".to_string());
+            let score_num = score_str.parse::<u8>().unwrap_or(4);
+            let minimum_password_security_score = match score_num {
+                0 => Score::Zero,
+                1 => Score::One,
+                2 => Score::Two,
+                3 => Score::Three,
+                4 => Score::Four,
+                _ => Score::Three,
+            };
 
-    let password_security_estimate = zxcvbn(reqbody.password.as_str(), &[]).score();
+            let password_security_estimate = zxcvbn(password.as_str(), &[]).score();
 
-    trace!("Validating password security score.");
-
-    if password_security_estimate < minimum_password_security_score {
-        trace!(
-            "Password score {} does not meet minimum required score {}.",
-            password_security_estimate,
-            minimum_password_security_score
-        );
-
-        return Err(RequestError::PasswordDoesNotMeetRequirements);
-    }
-
-    trace!("Password meets requirements.");
+            if password_security_estimate < minimum_password_security_score {
+                trace!(
+                    "Password score {} does not meet minimum required score {}.",
+                    password_security_estimate,
+                    minimum_password_security_score
+                );
+                return Err(RequestError::PasswordDoesNotMeetRequirements);
+            }
+            trace!("Password security score check passed.");
+        } else {
+            trace!("User database exists, skipping security score check.");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| {
+        error!("Blocking task failed: {}", e);
+        RequestError::FailedToCreateUserSession
+    })??;
 
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
     let user_name = reqbody.username.clone();

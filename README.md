@@ -48,6 +48,9 @@ The API uses environment variables for configuration. Below are the required var
 | Variable Name                                 | Description |
 |-----------------------------------------------|-------------|
 | `JUSTENCRYPT_USER_DATA_PATH`                  | The path to store the user data. Default: `./user_data`. |
+| `JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER`     | Minimum number of idle SQLite connections per user session. Default: `0`. |
+| `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`     | Maximum number of concurrent SQLite connections per user session. Default: `2`. |
+| `JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS`         | Seconds a connection can sit idle before being closed. Default: `600` (10 minutes). |
 | `JUSTENCRYPT_ADDRESS`                         | The IP address Rocket will bind to. Default: `0.0.0.0`. |
 | `JUSTENCRYPT_PORT`                            | The port Rocket will listen on. Default: `8000`. |
 | `JUSTENCRYPT_WORKERS`                         | Number of worker threads for handling requests. Default: `16`. |
@@ -69,8 +72,11 @@ The API uses environment variables for configuration. Below are the required var
 | `JUSTENCRYPT_LIMITS_STRING`                   | Maximum size for string payloads. Default: `10 MiB`. |
 
 Example `.env` file:
-```ini
+```env
 JUSTENCRYPT_USER_DATA_PATH=./user_data
+JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER=0
+JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER=2
+JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS=600
 JUSTENCRYPT_ADDRESS=0.0.0.0
 JUSTENCRYPT_PORT=8000
 JUSTENCRYPT_WORKERS=16

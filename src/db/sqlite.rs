@@ -1,10 +1,10 @@
-use crate::encryption::FileEncryptionMetadata;
-use crate::enums::db_error::DbError;
-use crate::{db::migrations, session};
+use crate::{
+    db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError, session,
+};
 use orion::kex::SecretKey;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use session::user_session::EncodedFile;
@@ -22,29 +22,39 @@ pub fn create_user_db_connection(
         db_path
     );
 
+    // 1. Manually open a connection to validate the password and run migrations.
+    // This allows us to "fail-fast" immediately if the password is wrong,
+    // avoiding r2d2's exponential backoff and retry loops.
     {
-        let mut conn = Connection::open(&db_path)?;
+        trace!("Manually opening DB connection for password validation and migrations.");
+        let mut conn = rusqlite::Connection::open(&db_path)?;
 
+        conn.busy_timeout(Duration::from_millis(60000))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
+
+        // Verify the key and trigger KDF. If password is wrong, this will fail immediately.
+        if let Err(e) = conn.query_row("SELECT 1", [], |_| Ok(())) {
+            error!("Failed to verify database password: {}", e);
+            return Err(DbError::Rusqlite(e));
+        }
 
         trace!("Running one-time database migrations...");
-
-        match migrations::get_migrations().to_latest(&mut conn) {
-            Ok(_) => trace!("Migrations are up to date."),
-            Err(e) => {
-                error!("{}", e);
-                return Err(DbError::MissingFileName);
-            }
-        };
+        if let Err(e) = migrations::get_migrations().to_latest(&mut conn) {
+            error!("Migration error: {}", e);
+            return Err(DbError::Rusqlite(rusqlite::Error::QueryReturnedNoRows));
+            // Mapping to generic Rusqlite error
+        }
+        trace!("Migrations are up to date.");
     }
 
+    // 2. Initialize the connection manager for r2d2.
+    // Migrations are already handled, so we only need to set pragmas.
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
-        trace!("Initializing new DB connection.");
+        trace!("Initializing new pool DB connection.");
         conn.busy_timeout(Duration::from_millis(60000))?;
-        trace!("Setting PRAGMA key.");
         conn.pragma_update(None, "key", password.expose_secret())?;
-        trace!("PRAGMA key set successfully.");
 
+        // Trigger KDF for this new connection
         conn.query_row("SELECT 1", [], |_| Ok(()))?;
 
         match conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get::<_, String>(0)) {
@@ -66,7 +76,29 @@ pub fn create_user_db_connection(
         Ok(())
     });
 
-    let pool = Pool::new(db_manager)?;
+    let min_connections = std::env::var("JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER")
+        .unwrap_or_else(|_| "0".to_string())
+        .parse::<u32>()
+        .unwrap_or(0);
+
+    let max_connections = std::env::var("JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER")
+        .unwrap_or_else(|_| "2".to_string())
+        .parse::<u32>()
+        .unwrap_or(2);
+
+    let idle_timeout_seconds = std::env::var("JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS")
+        .unwrap_or_else(|_| "600".to_string())
+        .parse::<u64>()
+        .unwrap_or(600);
+
+    // 3. Create the pool using configured min and max connections.
+    let pool = Pool::builder()
+        .max_size(max_connections)
+        .min_idle(Some(min_connections))
+        .idle_timeout(Some(Duration::from_secs(idle_timeout_seconds)))
+        .build(db_manager)
+        .map_err(DbError::PoolError)?;
+
     trace!("Exiting sqlite::create_user_db_connection successfully.");
     Ok(pool)
 }
