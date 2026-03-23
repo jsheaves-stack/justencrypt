@@ -1,22 +1,16 @@
-use std::{error::Error, io::SeekFrom, path::PathBuf};
-
-use orion::aead::streaming::{Nonce, StreamOpener};
-use rocket::{
-    futures::AsyncWriteExt,
-    tokio::{
-        fs::File,
-        io::{AsyncReadExt, AsyncSeekExt, BufReader},
-        sync::mpsc::Sender,
-    },
+use orion::aead;
+use rocket::tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
+    sync::mpsc::Sender,
 };
+use std::{error::Error, path::PathBuf};
 
-use crate::encryption::{
-    DerivedKey, FileEncryptionMetadata, BUFFER_SIZE, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
-};
+use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE};
 
 pub struct StreamDecryptor {
-    opener: StreamOpener,
     file_path: PathBuf,
+    metadata: FileEncryptionMetadata,
 }
 
 impl StreamDecryptor {
@@ -24,146 +18,155 @@ impl StreamDecryptor {
         file_path: PathBuf,
         metadata: FileEncryptionMetadata,
     ) -> Result<Self, Box<dyn Error>> {
-        let file = File::open(file_path.clone()).await?;
-        let mut reader = BufReader::new(file);
-
-        let mut salt_buf = [0u8; SALT_SIZE];
-        let mut nonce_buf = [0u8; NONCE_SIZE];
-
-        reader.read_exact(&mut salt_buf).await?;
-        reader.read_exact(&mut nonce_buf).await?;
-
-        let nonce = Nonce::from_slice(&nonce_buf)?;
-
-        let derived_key = DerivedKey { key: metadata.key };
-
-        let opener = StreamOpener::new(&derived_key.key, &nonce)?;
-
-        Ok(StreamDecryptor { opener, file_path })
-    }
-
-    pub async fn decrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        Ok(self.opener.open_chunk(data)?.0)
+        Ok(StreamDecryptor {
+            file_path,
+            metadata,
+        })
     }
 
     pub fn get_file_path(&self) -> PathBuf {
         self.file_path.clone()
     }
 
-    pub async fn decrypt_stream_to_writer<
-        R: AsyncReadExt + AsyncSeekExt + Unpin,
-        W: AsyncWriteExt + Unpin,
-    >(
-        &mut self,
-        source: &mut R,
-        writer: &mut W,
-        offset: u64,
-    ) -> Result<(), Box<dyn Error>> {
-        trace!("Entering decrypt_stream_to_writer");
+    pub async fn decrypt_range(&mut self, start: u64, end: u64, tx: Sender<Vec<u8>>) {
+        trace!("Entering decrypt_range, start: {}, end: {}", start, end);
 
-        // Skip the encryption metadata (salt and nonce).
-        source.seek(SeekFrom::Start(offset)).await?;
+        let first_chunk_index = start / CHUNK_SIZE as u64;
+        let last_chunk_index = end / CHUNK_SIZE as u64;
+        let disk_offset = first_chunk_index * ENCRYPTED_CHUNK_SIZE as u64;
 
-        trace!("Seeked past metadata (offset: {}).", offset);
-
-        let mut encrypted_read_buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
-
-        loop {
-            // Read a chunk of data from the encrypted file.
-            let bytes_read = match source.read(&mut encrypted_read_buffer).await {
-                Ok(0) => {
-                    trace!("End of encrypted file.");
-                    break; // End of file
-                }
-                Ok(n) => n,
-                Err(e) => {
-                    error!("Failed to read encrypted file chunk: {}", e);
-                    return Err(Box::new(e));
-                }
-            };
-
-            trace!("Read {} encrypted bytes from file.", bytes_read);
-
-            // Decrypt the chunk.
-            let decrypted_chunk = self
-                .decrypt_chunk(&encrypted_read_buffer[..bytes_read])
-                .await?;
-
-            if decrypted_chunk.is_empty() {
-                trace!("Decrypted chunk is empty, assuming end of stream.");
-                break;
+        let mut file = match File::open(&self.file_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Failed to open file {:?}: {}", self.file_path, e);
+                return;
             }
+        };
 
-            trace!("Decrypted chunk of size {}.", decrypted_chunk.len());
-
-            // Write the decrypted chunk to the destination writer.
-            writer.write_all(&decrypted_chunk).await?;
-        }
-
-        trace!("Exiting decrypt_stream_to_writer");
-
-        Ok(())
-    }
-
-    pub async fn decrypt_stream_to_channel<R: AsyncReadExt + AsyncSeekExt + Unpin>(
-        &mut self,
-        source: &mut R,
-        tx: Sender<Vec<u8>>,
-        offset: u64,
-    ) {
-        trace!("Entering spawned task: decrypt_stream_to_channel");
-
-        // Skip the encryption metadata (salt and nonce).
-        if let Err(e) = source.seek(SeekFrom::Start(offset)).await {
-            error!("Failed to seek in file: {}", e);
+        if let Err(e) = file.seek(SeekFrom::Start(disk_offset)).await {
+            error!("Failed to seek to {}: {}", disk_offset, e);
             return;
         }
 
-        trace!("Seeked past metadata (offset: {}).", offset);
+        for chunk_index in first_chunk_index..=last_chunk_index {
+            let mut encrypted_buffer = vec![0u8; ENCRYPTED_CHUNK_SIZE];
+            let mut bytes_read = 0;
 
-        let mut encrypted_read_buffer = [0u8; BUFFER_SIZE + TAG_SIZE];
-
-        loop {
-            // Read a chunk of data from the encrypted file.
-            let bytes_read = match source.read(&mut encrypted_read_buffer).await {
-                Ok(0) => {
-                    trace!("End of encrypted file.");
-                    break; // End of file
+            while bytes_read < ENCRYPTED_CHUNK_SIZE {
+                match file.read(&mut encrypted_buffer[bytes_read..]).await {
+                    Ok(0) => break,
+                    Ok(n) => bytes_read += n,
+                    Err(e) => {
+                        error!("Failed to read chunk {}: {}", chunk_index, e);
+                        return;
+                    }
                 }
-                Ok(n) => n,
-                Err(e) => {
-                    error!("Failed to read encrypted file chunk: {}", e);
-                    return;
-                }
-            };
+            }
 
-            trace!("Read {} encrypted bytes from file.", bytes_read);
-
-            // Decrypt the chunk.
-            let decrypted_chunk = self
-                .decrypt_chunk(&encrypted_read_buffer[..bytes_read])
-                .await
-                .map_err(|e| error!("Failed to decrypt chunk: {}", e))
-                .unwrap_or_default();
-
-            if decrypted_chunk.is_empty() {
-                trace!("Decrypted chunk is empty, assuming end of stream.");
+            if bytes_read == 0 {
                 break;
             }
 
-            trace!("Decrypted chunk of size {}.", decrypted_chunk.len());
+            let decrypted_payload =
+                match aead::open(&self.metadata.key, &encrypted_buffer[..bytes_read]) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        error!("Failed to decrypt chunk {}: {:?}", chunk_index, e);
+                        return;
+                    }
+                };
 
-            // Send the decrypted chunk for streaming.
-            if tx.send(decrypted_chunk).await.is_err() {
-                info!(
-                    "Failed to send decrypted chunk: channel closed (client likely disconnected)."
+            if decrypted_payload.len() < 8 {
+                error!("Decrypted chunk {} is too short", chunk_index);
+                return;
+            }
+
+            let mut index_bytes = [0u8; 8];
+            index_bytes.copy_from_slice(&decrypted_payload[..8]);
+            let stored_index = u64::from_le_bytes(index_bytes);
+            if stored_index != chunk_index {
+                error!(
+                    "Chunk index mismatch! Expected {}, got {}",
+                    chunk_index, stored_index
                 );
                 return;
             }
 
-            trace!("Sent decrypted chunk to stream.");
+            let decrypted_chunk = &decrypted_payload[8..];
+
+            let chunk_start_plaintext = chunk_index * CHUNK_SIZE as u64;
+            let chunk_end_plaintext = chunk_start_plaintext + decrypted_chunk.len() as u64 - 1;
+
+            let slice_start = if start > chunk_start_plaintext {
+                (start - chunk_start_plaintext) as usize
+            } else {
+                0
+            };
+
+            let slice_end = if end < chunk_end_plaintext {
+                (end - chunk_start_plaintext) as usize
+            } else {
+                decrypted_chunk.len() - 1
+            };
+
+            if slice_start <= slice_end && slice_start < decrypted_chunk.len() {
+                let slice =
+                    &decrypted_chunk[slice_start..=slice_end.min(decrypted_chunk.len() - 1)];
+                if tx.send(slice.to_vec()).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+
+    pub async fn decrypt_all(&mut self) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut result = Vec::with_capacity(self.metadata.total_size as usize);
+        let mut file = File::open(&self.file_path).await?;
+
+        for chunk_index in 0u64.. {
+            let mut encrypted_buffer = vec![0u8; ENCRYPTED_CHUNK_SIZE];
+            let mut bytes_read = 0;
+
+            while bytes_read < ENCRYPTED_CHUNK_SIZE {
+                let n = file.read(&mut encrypted_buffer[bytes_read..]).await?;
+                if n == 0 {
+                    break;
+                }
+                bytes_read += n;
+            }
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            let decrypted_payload = aead::open(&self.metadata.key, &encrypted_buffer[..bytes_read])
+                .map_err(|e| {
+                    error!("Failed to decrypt chunk {}: {:?}", chunk_index, e);
+                    format!("Decryption error at chunk {}", chunk_index)
+                })?;
+
+            if decrypted_payload.len() < 8 {
+                return Err("Decrypted chunk too short".into());
+            }
+
+            let mut index_bytes = [0u8; 8];
+            index_bytes.copy_from_slice(&decrypted_payload[..8]);
+            let stored_index = u64::from_le_bytes(index_bytes);
+            if stored_index != chunk_index {
+                return Err(format!(
+                    "Chunk index mismatch! Expected {}, got {}",
+                    chunk_index, stored_index
+                )
+                .into());
+            }
+
+            result.extend_from_slice(&decrypted_payload[8..]);
+
+            if bytes_read < ENCRYPTED_CHUNK_SIZE {
+                break;
+            }
         }
 
-        trace!("Finished processing all chunks in decryption task.");
+        Ok(result)
     }
 }

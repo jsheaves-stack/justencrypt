@@ -391,16 +391,15 @@ pub fn add_file(
 
     tx.execute(
         r#"INSERT INTO files
-            (parent_folder_id, name, encoded_name, file_extension, key, buffer_size, nonce_size, salt_size, tag_size)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            (parent_folder_id, name, encoded_name, file_extension, key, encryption_version, total_size)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
            ON CONFLICT(parent_folder_id, name) DO UPDATE SET
              encoded_name = excluded.encoded_name,
              file_extension = excluded.file_extension,
              key = excluded.key,
-             buffer_size = excluded.buffer_size,
-             nonce_size = excluded.nonce_size,
-             salt_size = excluded.salt_size,
-             tag_size = excluded.tag_size
+             encryption_version = excluded.encryption_version,
+             total_size = excluded.total_size,
+             updated_at = CURRENT_TIMESTAMP
         "#,
         params![
             parent_folder_id,
@@ -408,14 +407,12 @@ pub fn add_file(
             encoded_file_name,
             file_extension,
             metadata.key.unprotected_as_bytes(),
-            metadata.buffer_size,
-            metadata.nonce_size,
-            metadata.salt_size,
-            metadata.tag_size
+            metadata.encryption_version,
+            metadata.total_size as i64,
         ],
     ).map(|_| ())
     .map_err(|e| {
-        error!("Failed to add or update file in the db: {}", e);
+        error!("Database error in add_file: {}", e);
         DbError::FailedToAddFileToDb(e.to_string())
     })?;
     trace!("File insert/update executed.");
@@ -490,18 +487,17 @@ pub fn get_file(
 
     let result = match db
         .query_row(
-            "SELECT key, buffer_size, nonce_size, salt_size, tag_size
+            "SELECT key, encryption_version, total_size
         FROM files
         WHERE parent_folder_id = ?1 AND name = ?2",
             params![parent_folder_id, file_name],
             |row| {
                 let key_blob: Vec<u8> = row.get(0)?;
+                let total_size_i64: i64 = row.get(2)?;
                 Ok(FileEncryptionMetadata {
                     key: SecretKey::from_slice(&key_blob).unwrap(),
-                    buffer_size: row.get(1)?,
-                    nonce_size: row.get(2)?,
-                    salt_size: row.get(3)?,
-                    tag_size: row.get(4)?,
+                    encryption_version: row.get(1)?,
+                    total_size: total_size_i64 as u64,
                 })
             },
         )
@@ -509,7 +505,7 @@ pub fn get_file(
     {
         Ok(f) => f,
         Err(e) => {
-            error!("Failed to get file from the db: {}", e);
+            error!("Database error in get_file: {}", e);
             return Err(DbError::FailedToGetFileFromDb(e.to_string()));
         }
     };
@@ -578,16 +574,14 @@ pub fn add_thumbnail(
 
     tx.execute(
         "INSERT OR IGNORE INTO thumbnails 
-        (encoded_name, file_id, key, buffer_size, nonce_size, salt_size, tag_size) 
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (encoded_name, file_id, key, encryption_version, total_size) 
+        VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             encoded_name,
             file_id,
             metadata.key.unprotected_as_bytes(),
-            metadata.buffer_size,
-            metadata.nonce_size,
-            metadata.salt_size,
-            metadata.tag_size
+            metadata.encryption_version,
+            metadata.total_size as i64,
         ],
     )
     .map(|_| ())
@@ -655,18 +649,17 @@ pub fn get_thumbnail(
     );
 
     db.query_row(
-        "SELECT key, buffer_size, nonce_size, salt_size, tag_size
+        "SELECT key, encryption_version, total_size
         FROM thumbnails
         WHERE file_id = ?1",
         params![file_id],
         |row| {
             let key_blob: Vec<u8> = row.get(0)?;
+            let total_size_i64: i64 = row.get(2)?;
             Ok(FileEncryptionMetadata {
                 key: SecretKey::from_slice(&key_blob).unwrap(),
-                buffer_size: row.get(1)?,
-                nonce_size: row.get(2)?,
-                salt_size: row.get(3)?,
-                tag_size: row.get(4)?,
+                encryption_version: row.get(1)?,
+                total_size: total_size_i64 as u64,
             })
         },
     )
@@ -787,7 +780,7 @@ pub fn rename_file(
     trace!("Transaction started for renaming file.");
 
     tx.execute(
-        "UPDATE files SET name = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
+        "UPDATE files SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE parent_folder_id = ?2 AND name = ?3",
         params![
             new_file_name_str,
             current_parent_folder_id,
@@ -838,7 +831,7 @@ pub fn move_file(
     trace!("Transaction started for moving file.");
 
     tx.execute(
-        "UPDATE files SET parent_folder_id = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
+        "UPDATE files SET parent_folder_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE parent_folder_id = ?2 AND name = ?3",
         params![destination_folder_id, current_parent_folder_id, file_name],
     )
     .map(|_| ())

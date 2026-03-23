@@ -1,46 +1,31 @@
 pub mod stream_decryptor;
 pub mod stream_encryptor;
 
-pub use orion::{aead::streaming::ABYTES, kex::SecretKey};
+pub use orion::kex::SecretKey;
 
-pub const NONCE_SIZE: usize = 24; // Nonce size for the XChaCha20 algorithm
-pub const SALT_SIZE: usize = 32; // 32 byte salt
-pub const TAG_SIZE: usize = ABYTES; //  POLY1305 outsize (16) + tag size (1)
+pub const CHUNK_SIZE: usize = 64 * 1024;
+pub const NONCE_LEN: usize = 24;
+pub const TAG_LEN: usize = 16;
+pub const INDEX_LEN: usize = 8;
+pub const ENCRYPTED_CHUNK_SIZE: usize = CHUNK_SIZE + INDEX_LEN + NONCE_LEN + TAG_LEN;
+pub const ENCRYPTION_VERSION: i32 = 1;
 
-pub const BUFFER_SIZE: usize = 1024 * 16; // Adjust this buffer size as needed (Minimum 8192)
-
-pub const KEY_LENGTH: usize = 32; // 32 byte key
-
-pub const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000)); // 50 Gigabyte
-
+pub const KEY_LENGTH: usize = 32;
+pub const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000));
 pub const MPSC_CHANNEL_CAPACITY: usize = 2;
-
-pub struct DerivedKey {
-    pub key: SecretKey,
-}
 
 pub struct FileEncryptionMetadata {
     pub key: SecretKey,
-    pub buffer_size: usize,
-    pub nonce_size: usize,
-    pub salt_size: usize,
-    pub tag_size: usize,
-}
-
-impl Default for FileEncryptionMetadata {
-    fn default() -> Self {
-        Self::new()
-    }
+    pub encryption_version: i32,
+    pub total_size: u64,
 }
 
 impl Clone for FileEncryptionMetadata {
     fn clone(&self) -> Self {
         Self {
             key: SecretKey::from_slice(self.key.unprotected_as_bytes()).unwrap(),
-            buffer_size: self.buffer_size,
-            nonce_size: self.nonce_size,
-            salt_size: self.salt_size,
-            tag_size: self.tag_size,
+            encryption_version: self.encryption_version,
+            total_size: self.total_size,
         }
     }
 }
@@ -48,11 +33,9 @@ impl Clone for FileEncryptionMetadata {
 impl FileEncryptionMetadata {
     pub fn new() -> FileEncryptionMetadata {
         FileEncryptionMetadata {
-            key: SecretKey::generate(32).unwrap(),
-            buffer_size: BUFFER_SIZE,
-            nonce_size: NONCE_SIZE,
-            salt_size: SALT_SIZE,
-            tag_size: TAG_SIZE,
+            key: SecretKey::generate(KEY_LENGTH).unwrap(),
+            encryption_version: ENCRYPTION_VERSION,
+            total_size: 0,
         }
     }
 }

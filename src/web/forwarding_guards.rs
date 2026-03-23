@@ -10,6 +10,21 @@ pub struct AuthenticatedSession {
     pub session: Arc<RwLock<UserSession>>,
 }
 
+pub struct RangeHeader(pub Option<String>);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for RangeHeader {
+    type Error = RequestError;
+
+    async fn from_request(
+        request: &'r Request<'_>,
+    ) -> Outcome<Self, (Status, Self::Error), Status> {
+        Outcome::Success(RangeHeader(
+            request.headers().get_one("Range").map(|s| s.to_string()),
+        ))
+    }
+}
+
 pub struct AdminGuard;
 
 #[rocket::async_trait]

@@ -89,6 +89,16 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
 
+            RequestError::BadRequest(_) => Response::build()
+                .status(Status::BadRequest)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::RangeNotSatisfiable => Response::build()
+                .status(Status::RangeNotSatisfiable)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
             RequestError::InternalServerError => Response::build()
                 .status(Status::InternalServerError)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))

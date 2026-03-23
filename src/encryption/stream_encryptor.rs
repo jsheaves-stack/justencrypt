@@ -1,43 +1,22 @@
-use std::{error::Error, path::PathBuf};
-
-use orion::{
-    aead::streaming::{Nonce, StreamSealer, StreamTag},
-    kdf::Salt,
-    kex::SecretKey,
-};
+use orion::aead;
 use rocket::tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
 };
+use std::{error::Error, path::PathBuf};
 
-use crate::encryption::{
-    FileEncryptionMetadata, BUFFER_SIZE, KEY_LENGTH, NONCE_SIZE, SALT_SIZE, TAG_SIZE,
-};
+use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE};
 
 pub struct StreamEncryptor {
     file: File,
-    sealer: StreamSealer,
-    nonce: Nonce,
-    salt: Salt,
     metadata: FileEncryptionMetadata,
 }
 
 impl StreamEncryptor {
     pub async fn new(file_path: PathBuf) -> Result<Self, Box<dyn Error>> {
-        let secret_key = SecretKey::generate(KEY_LENGTH)?;
-        let salt = Salt::generate(SALT_SIZE)?;
-        let (sealer, nonce) = StreamSealer::new(&secret_key)?;
+        let metadata = FileEncryptionMetadata::new();
 
-        let metadata = FileEncryptionMetadata {
-            key: secret_key,
-            buffer_size: BUFFER_SIZE,
-            nonce_size: NONCE_SIZE,
-            salt_size: SALT_SIZE,
-            tag_size: TAG_SIZE,
-        };
-
-        let file_path_parts = file_path.parent().unwrap();
-
+        let file_path_parts = file_path.parent().expect("Failed to get parent directory");
         fs::create_dir_all(file_path_parts).await?;
 
         let file = OpenOptions::new()
@@ -47,94 +26,60 @@ impl StreamEncryptor {
             .open(file_path)
             .await?;
 
-        Ok(StreamEncryptor {
-            sealer,
-            nonce,
-            salt,
-            file,
-            metadata,
-        })
+        Ok(StreamEncryptor { file, metadata })
     }
 
-    pub fn get_file_encryption_metadata(&self) -> FileEncryptionMetadata {
+    pub fn get_metadata(&self) -> FileEncryptionMetadata {
         self.metadata.clone()
     }
 
-    // Function to write salt and nonce to the output file
-    pub async fn write_salt_and_nonce(&mut self) -> Result<(), Box<dyn Error>> {
-        self.file.write_all(self.salt.as_ref()).await?;
-        self.file.write_all(self.nonce.as_ref()).await?;
-
-        Ok(())
-    }
-
-    // Encrypt a single chunk of data
-    pub async fn encrypt_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        let stream_tag = if data.len() < BUFFER_SIZE {
-            StreamTag::Finish
-        } else {
-            StreamTag::Message
-        };
-
-        let chunk = self.sealer.seal_chunk(data, &stream_tag)?;
-
-        Ok(chunk)
-    }
-
-    pub async fn write_chunk(&mut self, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
-        self.file.write_all(&data).await?;
-
-        Ok(())
-    }
-
-    pub async fn encrypt_source_to_encryptor<R: AsyncReadExt + Unpin>(
+    pub async fn encrypt_stream<R: AsyncReadExt + Unpin>(
         &mut self,
         source: &mut R,
-    ) -> Result<(), Box<dyn Error>> {
-        trace!("Entering encrypt_source_to_encryptor");
+    ) -> Result<u64, Box<dyn Error>> {
+        trace!("Entering encrypt_stream");
 
-        // Write encryption metadata (salt and nonce) to the file.
-        self.write_salt_and_nonce().await?;
-
-        trace!("Salt and nonce written.");
-
-        let mut read_buffer = [0u8; BUFFER_SIZE];
-        let mut current_buffer_fill = 0;
+        let mut chunk_index: u64 = 0;
+        let mut total_plaintext_size: u64 = 0;
+        let mut buffer = vec![0u8; CHUNK_SIZE];
 
         loop {
-            // Read a chunk of data from the source.
-            let bytes_read = source.read(&mut read_buffer[current_buffer_fill..]).await?;
-
-            current_buffer_fill += bytes_read;
-
-            trace!(
-                "Read {} bytes from source. Current buffer fill {}/{}",
-                bytes_read,
-                current_buffer_fill,
-                BUFFER_SIZE
-            );
-
-            let final_chunk = bytes_read == 0;
-
-            if current_buffer_fill == BUFFER_SIZE || final_chunk {
-                // Encrypt the chunk.
-                let encrypted_chunk = self
-                    .encrypt_chunk(&read_buffer[..current_buffer_fill])
-                    .await?;
-
-                // Write the encrypted chunk to the encryptor's file.
-                self.write_chunk(encrypted_chunk).await?;
-
-                if final_chunk {
+            let mut bytes_read = 0;
+            while bytes_read < CHUNK_SIZE {
+                let n = source.read(&mut buffer[bytes_read..]).await?;
+                if n == 0 {
                     break;
                 }
+                bytes_read += n;
+            }
 
-                current_buffer_fill = 0;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let mut plaintext_with_index = Vec::with_capacity(8 + bytes_read);
+            plaintext_with_index.extend_from_slice(&chunk_index.to_le_bytes());
+            plaintext_with_index.extend_from_slice(&buffer[..bytes_read]);
+
+            let encrypted_chunk =
+                aead::seal(&self.metadata.key, &plaintext_with_index).map_err(|e| {
+                    error!("Encryption error at chunk {}: {:?}", chunk_index, e);
+                    "Encryption error"
+                })?;
+
+            self.file.write_all(&encrypted_chunk).await?;
+
+            total_plaintext_size += bytes_read as u64;
+            chunk_index += 1;
+
+            if bytes_read < CHUNK_SIZE {
+                break;
             }
         }
 
-        trace!("Exiting encrypt_source_to_encryptor");
+        self.metadata.total_size = total_plaintext_size;
+        trace!("Exiting encrypt_stream, total_size: {}", total_plaintext_size);
 
-        Ok(())
+        Ok(total_plaintext_size)
     }
 }

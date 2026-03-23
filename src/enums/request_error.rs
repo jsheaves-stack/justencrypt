@@ -50,6 +50,12 @@ pub enum RequestError {
     #[error("Unauthorized")]
     Unauthorized,
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Range not satisfiable")]
+    RangeNotSatisfiable,
+
     #[error("Internal server error")]
     InternalServerError,
 }
