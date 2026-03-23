@@ -259,12 +259,13 @@ pub fn get_encoded_file_name(
         .to_string_lossy();
     trace!("Looking for file name: '{}'", file_name);
 
-    let result: Option<String> = match db.query_row(
-        "SELECT encoded_name FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-        params![parent_folder_id, file_name],
-        |row| row.get(0),
-    )
-    .optional()
+    let result: Option<String> = match db
+        .query_row(
+            "SELECT encoded_name FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+            params![parent_folder_id, file_name],
+            |row| row.get(0),
+        )
+        .optional()
     {
         Ok(f) => f,
         Err(e) => {
@@ -487,23 +488,24 @@ pub fn get_file(
         .to_string_lossy();
     trace!("Looking for file name: '{}'", file_name);
 
-    let result = match db.query_row(
-        "SELECT key, buffer_size, nonce_size, salt_size, tag_size
+    let result = match db
+        .query_row(
+            "SELECT key, buffer_size, nonce_size, salt_size, tag_size
         FROM files
         WHERE parent_folder_id = ?1 AND name = ?2",
-        params![parent_folder_id, file_name],
-        |row| {
-            let key_blob: Vec<u8> = row.get(0)?;
-            Ok(FileEncryptionMetadata {
-                key: SecretKey::from_slice(&key_blob).unwrap(),
-                buffer_size: row.get(1)?,
-                nonce_size: row.get(2)?,
-                salt_size: row.get(3)?,
-                tag_size: row.get(4)?,
-            })
-        },
-    )
-    .optional()
+            params![parent_folder_id, file_name],
+            |row| {
+                let key_blob: Vec<u8> = row.get(0)?;
+                Ok(FileEncryptionMetadata {
+                    key: SecretKey::from_slice(&key_blob).unwrap(),
+                    buffer_size: row.get(1)?,
+                    nonce_size: row.get(2)?,
+                    salt_size: row.get(3)?,
+                    tag_size: row.get(4)?,
+                })
+            },
+        )
+        .optional()
     {
         Ok(f) => f,
         Err(e) => {
@@ -693,8 +695,7 @@ pub fn get_folder(
         "Entering sqlite::get_folder with folder_path_str: '{}'",
         folder_path_str
     );
-    let folder_id =
-        get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
+    let folder_id = get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
     trace!("Found folder ID: {}", folder_id);
 
     let mut entries = Vec::new();

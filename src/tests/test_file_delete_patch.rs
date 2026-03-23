@@ -1,7 +1,9 @@
 use super::*;
 use crate::{
-    routes::file::{delete_file, file_options, get_file, patch_file, put_file},
-    routes::folder::{create_folder, get_folder},
+    routes::{
+        file::{delete_file, file_options, get_file, patch_file, put_file},
+        folder::{create_folder, get_folder},
+    },
     util::sharded_path::get_sharded_path,
     AppState,
 };
@@ -40,7 +42,10 @@ async fn test_delete_file_success() {
     let session_lock = session_guard.get(&session_id).unwrap().clone();
     let session = session_lock.read().await;
 
-    let encoded_file_name = session.get_encoded_file_name(file_path.into()).await.unwrap();
+    let encoded_file_name = session
+        .get_encoded_file_name(file_path.into())
+        .await
+        .unwrap();
     let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
     assert!(tokio::fs::metadata(&sharded_path).await.is_ok());
 
@@ -124,7 +129,10 @@ async fn test_patch_file_rename() {
 async fn test_patch_file_move() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
-        .mount("/file", routes![put_file, get_file, delete_file, file_options, patch_file])
+        .mount(
+            "/file",
+            routes![put_file, get_file, delete_file, file_options, patch_file],
+        )
         .mount("/folder", routes![create_folder, get_folder]);
 
     let client = Client::tracked(rocket).await.expect("valid rocket");
@@ -183,5 +191,5 @@ async fn test_get_file_not_found() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NotFound); 
+    assert_eq!(response.status(), Status::NotFound);
 }

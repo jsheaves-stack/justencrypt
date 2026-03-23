@@ -40,7 +40,7 @@ async fn test_create_folder() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(2, folder_id); // Assuming 1 is root
+    assert_eq!(2, folder_id);
 }
 
 #[rocket::async_test]

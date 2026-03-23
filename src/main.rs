@@ -248,11 +248,7 @@ async fn rocket() -> _ {
         )
         .mount(
             "/session",
-            routes![
-                create_session,
-                destroy_session,
-                session_options,
-            ],
+            routes![create_session, destroy_session, session_options,],
         );
 
     if std::env::var("JUSTENCRYPT_ADMIN_API_KEY").is_ok() {

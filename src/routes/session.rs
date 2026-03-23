@@ -120,7 +120,11 @@ pub async fn create_session(
         .write()
         .await
         .insert(session_id.clone(), session);
-    state.token_to_id.write().await.insert(user_token, session_id);
+    state
+        .token_to_id
+        .write()
+        .await
+        .insert(user_token, session_id);
 
     trace!("Session added to active session map.");
 
@@ -136,7 +140,6 @@ pub async fn destroy_session(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [DELETE /session]");
 
-    // Retrieve the user's session based on the "__Host-id" cookie.
     let cookie = match cookies.get_private("__Host-id") {
         Some(c) => {
             trace!("Found __Host-id cookie.");

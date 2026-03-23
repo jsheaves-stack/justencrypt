@@ -205,4 +205,3 @@ pub async fn delete_folder(
 
     Ok(RequestSuccess::NoContent)
 }
-

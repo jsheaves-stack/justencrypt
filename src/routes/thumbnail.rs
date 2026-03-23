@@ -321,4 +321,3 @@ pub async fn get_thumbnail(
         Ok(decrypted_thumbnail_data)
     }
 }
- 

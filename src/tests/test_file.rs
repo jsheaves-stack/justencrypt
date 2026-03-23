@@ -47,8 +47,7 @@ async fn test_put_file() {
     assert!(file_entry.is_some());
 
     let encoded_file_name = file_entry.unwrap();
-    let sharded_path =
-        get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
+    let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
 
     assert!(tokio::fs::metadata(sharded_path).await.is_ok());
 }

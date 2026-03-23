@@ -1,7 +1,5 @@
 use super::*;
-use crate::{
-    routes::session::{create_session, destroy_session, session_options},
-};
+use crate::routes::session::{create_session, destroy_session, session_options};
 use rocket::{
     http::{ContentType, Status},
     local::asynchronous::Client,
@@ -11,10 +9,7 @@ use rocket::{
 #[rocket::async_test]
 async fn test_create_session_success() {
     let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount(
-        "/session",
-        routes![create_session, session_options],
-    );
+    let rocket = rocket.mount("/session", routes![create_session, session_options]);
     let client = Client::tracked(rocket)
         .await
         .expect("valid rocket instance");
@@ -42,10 +37,7 @@ async fn test_create_session_success() {
 #[rocket::async_test]
 async fn test_create_session_invalid_password() {
     let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount(
-        "/session",
-        routes![create_session, session_options],
-    );
+    let rocket = rocket.mount("/session", routes![create_session, session_options]);
     let client = Client::tracked(rocket)
         .await
         .expect("valid rocket instance");
@@ -71,10 +63,7 @@ async fn test_create_session_invalid_password() {
 #[rocket::async_test]
 async fn test_destroy_session_success() {
     let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount(
-        "/session",
-        routes![destroy_session, session_options],
-    );
+    let rocket = rocket.mount("/session", routes![destroy_session, session_options]);
     let client = Client::tracked(rocket)
         .await
         .expect("valid rocket instance");
@@ -93,10 +82,7 @@ async fn test_destroy_session_success() {
 #[rocket::async_test]
 async fn test_destroy_session_no_auth() {
     let (rocket, _test_user) = setup_rocket().await;
-    let rocket = rocket.mount(
-        "/session",
-        routes![destroy_session, session_options],
-    );
+    let rocket = rocket.mount("/session", routes![destroy_session, session_options]);
     let client = Client::tracked(rocket)
         .await
         .expect("valid rocket instance");

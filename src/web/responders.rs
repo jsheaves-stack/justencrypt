@@ -8,7 +8,6 @@ use std::io::Cursor;
 
 impl<'r> Responder<'r, 'static> for RequestError {
     fn respond_to(self, _: &'r Request<'_>) -> Result<'static> {
-        // Here you map your error enum variants to appropriate HTTP responses.
         let response = match self {
             RequestError::MissingSessionId => Response::build()
                 .status(Status::Unauthorized)

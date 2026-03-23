@@ -10,9 +10,11 @@ async fn test_get_thumbnail_not_found() {
     let client = Client::tracked(rocket).await.expect("valid rocket");
     let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
 
-    let response = client.get("/thumbnail/does_not_exist.jpg")
-                         .private_cookie(cookie)
-                         .dispatch().await;
+    let response = client
+        .get("/thumbnail/does_not_exist.jpg")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
 
-    assert_eq!(response.status(), Status::NotFound); 
+    assert_eq!(response.status(), Status::NotFound);
 }
