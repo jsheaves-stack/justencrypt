@@ -9,31 +9,33 @@ use rocket::{
     tokio::sync::{RwLock, Semaphore},
 };
 use routes::{
+    admin::{admin_options, delete_session, delete_session_options, get_session},
     file::{delete_file, file_options, get_file, patch_file, put_file},
     folder::{create_folder, delete_folder, folder_options, get_folder},
     info::get_server_info,
-    session::{create_session, create_session_options, destroy_session, destroy_session_options},
+    session::{create_session, destroy_session, session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
 };
 use session::user_session::UserSession;
 use std::{collections::HashMap, env, io::Write, str::FromStr, sync::Arc};
 use web::fairings::Cors;
 
-mod db;
-mod encryption;
-mod enums;
-mod routes;
-mod session;
-mod util;
-mod web;
+pub mod db;
+pub mod encryption;
+pub mod enums;
+pub mod routes;
+pub mod session;
+pub mod util;
+pub mod web;
 
 #[macro_use]
 extern crate rocket;
 extern crate serde;
 
 pub struct AppState {
-    active_sessions: RwLock<HashMap<String, Arc<RwLock<UserSession>>>>,
-    thumbnail_semaphore: Arc<Semaphore>,
+    pub sessions_by_id: RwLock<HashMap<String, Arc<RwLock<UserSession>>>>,
+    pub token_to_id: RwLock<HashMap<String, String>>,
+    pub thumbnail_semaphore: Arc<Semaphore>,
 }
 
 fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
@@ -50,7 +52,7 @@ fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> Strin
     }
 }
 
-fn get_app_config() -> Figment {
+pub fn get_app_config() -> Figment {
     trace!("Entering config::get_app_config");
 
     let secret_key = get_required_env_var(
@@ -218,7 +220,8 @@ async fn rocket() -> _ {
     );
 
     let state = AppState {
-        active_sessions: RwLock::default(),
+        sessions_by_id: RwLock::default(),
+        token_to_id: RwLock::default(),
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
     };
 
@@ -229,7 +232,7 @@ async fn rocket() -> _ {
     trace!("HSTS enabled.");
     trace!("Building Rocket instance...");
 
-    rocket::custom(app_config)
+    let mut rocket = rocket::custom(app_config)
         .attach(Cors)
         .attach(Shield::default().enable(hsts))
         .manage(state)
@@ -248,8 +251,27 @@ async fn rocket() -> _ {
             routes![
                 create_session,
                 destroy_session,
-                create_session_options,
-                destroy_session_options,
+                session_options,
             ],
-        )
+        );
+
+    if std::env::var("JUSTENCRYPT_ADMIN_API_KEY").is_ok() {
+        trace!("JUSTENCRYPT_ADMIN_API_KEY is set, mounting admin routes.");
+        rocket = rocket.mount(
+            "/admin",
+            routes![
+                get_session,
+                admin_options,
+                delete_session,
+                delete_session_options
+            ],
+        );
+    } else {
+        warn!("JUSTENCRYPT_ADMIN_API_KEY is not set, admin routes will NOT be available.");
+    }
+
+    rocket
 }
+
+#[cfg(test)]
+pub mod tests;

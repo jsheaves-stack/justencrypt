@@ -11,7 +11,11 @@ components:
     cookieAuth:
       type: apiKey
       in: cookie
-      name: session_id
+      name: __Host-id
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Admin-Api-Key
   schemas:
     ServerInfo:
       type: object
@@ -60,6 +64,19 @@ components:
         file_name:
           type: string
           description: The logical name of the file or folder.
+    ActiveSessionInfo:
+      type: object
+      properties:
+        session_id:
+          type: string
+          description: The public ID of the session.
+        username:
+          type: string
+          description: The username of the user.
+        created_at:
+          type: integer
+          format: int64
+          description: The Unix timestamp when the session was created.
 security:
   - cookieAuth: []
 paths:
@@ -75,7 +92,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerInfo'
-  /session/create:
+  /session:
     post:
       summary: Create a new session
       description: Initializes a new user session or logs into an existing one. Returns a session cookie.
@@ -87,20 +104,13 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateSession'
       responses:
-        '204':
+        '201':
           description: Session created successfully, cookie provided in headers.
         '400':
           description: Bad request (e.g. password does not meet requirements).
-    options:
-      summary: Pre-flight check
-      security: []
-      responses:
-        '204':
-          description: CORS pre-flight response
-  /session/destroy:
-    post:
+    delete:
       summary: Destroy the active session
-      description: Invalidates the active session identified by the session_id cookie.
+      description: Invalidates the active session identified by the __Host-id cookie.
       responses:
         '204':
           description: Session successfully destroyed.
@@ -108,6 +118,7 @@ paths:
           description: Missing or invalid session ID.
     options:
       summary: Pre-flight check
+      security: []
       responses:
         '204':
           description: CORS pre-flight response
@@ -195,6 +206,59 @@ paths:
       parameters:
         - in: path
           name: file_path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: CORS pre-flight response
+  /admin/session:
+    get:
+      summary: List all active sessions (Admin)
+      description: Returns a list of all active user sessions with their metadata. Requires admin API key.
+      security:
+        - apiKeyAuth: []
+      responses:
+        '200':
+          description: List of active sessions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ActiveSessionInfo'
+        '401':
+          description: Invalid or missing admin API key.
+    options:
+      summary: Pre-flight check
+      responses:
+        '204':
+          description: CORS pre-flight response
+  /admin/session/{session_id}:
+    delete:
+      summary: Forcefully terminate a session (Admin)
+      description: Invalidate a user session by its public session ID. Requires admin API key.
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+          description: The public ID of the session to terminate.
+      security:
+        - apiKeyAuth: []
+      responses:
+        '204':
+          description: Session terminated successfully.
+        '401':
+          description: Invalid or missing admin API key.
+        '404':
+          description: Session not found.
+    options:
+      summary: Pre-flight check
+      parameters:
+        - in: path
+          name: session_id
           required: true
           schema:
             type: string

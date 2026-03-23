@@ -2,7 +2,7 @@ use crate::{
     encryption::{
         stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, NONCE_SIZE, SALT_SIZE,
     },
-    enums::{request_error::RequestError, request_success::RequestSuccess},
+    enums::{db_error::DbError, request_error::RequestError, request_success::RequestSuccess},
     util::{sharded_path::get_sharded_path, unrestricted_path::UnrestrictedPath},
     web::forwarding_guards::AuthenticatedSession,
     AppState,
@@ -82,6 +82,7 @@ pub async fn get_thumbnail(
         .await
     {
         Ok(e) => e,
+        Err(DbError::NotFound) => return Err(RequestError::NotFound),
         Err(e) => {
             error!("Failed to get encoded thumbnail file name: {}", e);
             return Err(RequestError::FailedToProcessData);
@@ -109,6 +110,7 @@ pub async fn get_thumbnail(
         .await
     {
         Ok(m) => m,
+        Err(DbError::NotFound) => return Err(RequestError::NotFound),
         Err(e) => {
             error!("Failed to get file encryption metadata for file: {}", e);
             return Err(RequestError::FailedToProcessData);
@@ -122,6 +124,7 @@ pub async fn get_thumbnail(
 
         let encoded_file_name = match session.get_encoded_file_name(file_path_buf.clone()).await {
             Ok(e) => e,
+            Err(DbError::NotFound) => return Err(RequestError::NotFound),
             Err(e) => {
                 error!("Failed to get encoded file name: {}", e);
                 return Err(RequestError::FailedToProcessData);
@@ -263,6 +266,7 @@ pub async fn get_thumbnail(
                 drop(session);
                 f
             }
+            Err(DbError::NotFound) => return Err(RequestError::NotFound),
             Err(e) => {
                 error!("Failed to get thumbnail encryption metadata from db: {}", e);
                 return Err(RequestError::FailedToProcessData);
@@ -317,3 +321,4 @@ pub async fn get_thumbnail(
         Ok(decrypted_thumbnail_data)
     }
 }
+ 

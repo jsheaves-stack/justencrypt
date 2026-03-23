@@ -231,6 +231,13 @@ pub fn get_folder_id(
     Ok(Some(current_id))
 }
 
+pub fn get_folder_id_strict(
+    db: &PooledConnection<SqliteConnectionManager>,
+    folder_path_str: &str,
+) -> Result<i32, DbError> {
+    get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)
+}
+
 pub fn get_encoded_file_name(
     db: &PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
@@ -252,17 +259,21 @@ pub fn get_encoded_file_name(
         .to_string_lossy();
     trace!("Looking for file name: '{}'", file_name);
 
-    let result = match db.query_row(
+    let result: Option<String> = match db.query_row(
         "SELECT encoded_name FROM files WHERE parent_folder_id = ?1 AND name = ?2",
         params![parent_folder_id, file_name],
         |row| row.get(0),
-    ) {
+    )
+    .optional()
+    {
         Ok(f) => f,
         Err(e) => {
             error!("Failed to get encoded file name from the db: {}", e);
             return Err(DbError::FailedToGetFileFromDb(e.to_string()));
         }
     };
+
+    let result = result.ok_or(DbError::NotFound)?;
 
     trace!(
         "Exiting sqlite::get_encoded_file_name with result: '{}'",
@@ -306,11 +317,18 @@ pub fn get_encoded_thumbnail_file_name(
         .to_string_lossy();
     trace!("Looking for file name: '{}' to get its ID.", file_name);
 
-    let file_id: i32 = db.query_row(
-        "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-        params![parent_folder_id, file_name],
-        |row| row.get(0),
-    )?;
+    let file_id: i32 = match db
+        .query_row(
+            "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+            params![parent_folder_id, file_name],
+            |row| row.get(0),
+        )
+        .optional()
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => return Err(DbError::NotFound),
+        Err(e) => return Err(DbError::Rusqlite(e)),
+    };
     trace!("File ID found: {}. Looking for its thumbnail.", file_id);
 
     let result = db
@@ -484,13 +502,17 @@ pub fn get_file(
                 tag_size: row.get(4)?,
             })
         },
-    ) {
+    )
+    .optional()
+    {
         Ok(f) => f,
         Err(e) => {
             error!("Failed to get file from the db: {}", e);
             return Err(DbError::FailedToGetFileFromDb(e.to_string()));
         }
     };
+
+    let result = result.ok_or(DbError::NotFound)?;
 
     trace!("Exiting sqlite::get_file successfully.");
     Ok(result)
@@ -535,11 +557,18 @@ pub fn add_thumbnail(
         })?;
     trace!("Parent folder ID found: {}", parent_folder_id);
 
-    let file_id: i32 = db.query_row(
-        "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-        params![parent_folder_id, file_name],
-        |row| row.get(0),
-    )?;
+    let file_id: i32 = match db
+        .query_row(
+            "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+            params![parent_folder_id, file_name],
+            |row| row.get(0),
+        )
+        .optional()
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => return Err(DbError::NotFound),
+        Err(e) => return Err(DbError::Rusqlite(e)),
+    };
     trace!("Associated file ID found: {}", file_id);
 
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -606,11 +635,18 @@ pub fn get_thumbnail(
         .to_string_lossy();
     trace!("Looking for file name: '{}' to get its ID.", file_name);
 
-    let file_id: i32 = db.query_row(
-        "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-        params![parent_folder_id, file_name],
-        |row| row.get(0),
-    )?;
+    let file_id: i32 = match db
+        .query_row(
+            "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+            params![parent_folder_id, file_name],
+            |row| row.get(0),
+        )
+        .optional()
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => return Err(DbError::NotFound),
+        Err(e) => return Err(DbError::Rusqlite(e)),
+    };
     trace!(
         "File ID found: {}. Getting its thumbnail metadata.",
         file_id
@@ -658,7 +694,7 @@ pub fn get_folder(
         folder_path_str
     );
     let folder_id =
-        get_folder_id(db, folder_path_str)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
     trace!("Found folder ID: {}", folder_id);
 
     let mut entries = Vec::new();

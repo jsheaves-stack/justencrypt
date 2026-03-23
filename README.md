@@ -62,6 +62,7 @@ The API uses environment variables for configuration. Below are the required var
 | `JUSTENCRYPT_TLS_KEY_PATH`                    | The path to the tls key file. Required in release mode. |
 | `JUSTENCRYPT_TLS_CERT_PATH`                   | The path to the tls cert file. Required in release mode. |
 | `JUSTENCRYPT_ALLOW_ORIGIN`                    | The Access-Control-Allow-Origin domain value. Default: `http://localhost:8000`. |
+| `JUSTENCRYPT_ADMIN_API_KEY`                   | The API key required to access administrative routes. If not set, admin routes are disabled. |
 | `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size allowed for form submissions. Default: `10 MiB`. |
 | `JUSTENCRYPT_LIMITS_DATA_FORM`                | Maximum size allowed for data-form submissions. Default: `10 MiB`. |
 | `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file upload size. Default: `64 GiB`. |
@@ -87,6 +88,7 @@ JUSTENCRYPT_ROCKET_SECRET_KEY=your_generated_secret_key
 JUSTENCRYPT_TLS_KEY_PATH=./default.key
 JUSTENCRYPT_TLS_CERT_PATH=./default.crt
 JUSTENCRYPT_ALLOW_ORIGIN=https://example.com
+JUSTENCRYPT_ADMIN_API_KEY=api_key
 JUSTENCRYPT_LIMITS_FORM=10MiB
 JUSTENCRYPT_LIMITS_DATA_FORM=10MiB
 JUSTENCRYPT_LIMITS_FILE=64GiB

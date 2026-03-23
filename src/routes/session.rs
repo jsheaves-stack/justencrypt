@@ -9,10 +9,9 @@ use rocket::{
     tokio::{sync::RwLock, task},
     State,
 };
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use std::{env, path::PathBuf, str::FromStr, sync::Arc};
-use uuid::Uuid;
 use zxcvbn::{zxcvbn, Score};
 
 #[derive(Deserialize)]
@@ -21,19 +20,19 @@ pub struct CreateSession {
     password: String,
 }
 
-#[options("/create")]
-pub fn create_session_options() -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route::session::create_session_options");
+#[options("/")]
+pub fn session_options() -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route::session::session_options");
     Ok(RequestSuccess::NoContent)
 }
 
-#[post("/create", format = "json", data = "<reqbody>")]
+#[post("/", format = "json", data = "<reqbody>")]
 pub async fn create_session(
     reqbody: Json<CreateSession>,
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [POST /session/create]");
+    trace!("Entering route [POST /session]");
 
     let user_name = reqbody.username.clone();
     let password = reqbody.password.clone();
@@ -94,72 +93,79 @@ pub async fn create_session(
             }
             Err(e) => {
                 error!("Failed to create user session: {}", e);
-                return Err(RequestError::FailedToCreateUserSession);
+                return Err(RequestError::Unauthorized);
             }
         },
     ));
 
-    let uuid = Uuid::new_v4().hyphenated().to_string();
+    let (user_token, session_id) = {
+        let session_read = session.read().await;
+        (
+            session_read.user_token.expose_secret().clone(),
+            session_read.session_id.clone(),
+        )
+    };
 
-    trace!("Generated new session UUID: {}", uuid);
+    trace!("Generated new session ID: {}", session_id);
 
-    let mut cookie = Cookie::new("session_id", uuid.clone());
+    let mut cookie = Cookie::new("__Host-id", user_token.clone());
     cookie.set_same_site(Some(SameSite::Strict));
+    cookie.set_secure(true);
     cookies.add_private(cookie);
 
     trace!("Session cookie added to jar.");
 
-    state.active_sessions.write().await.insert(uuid, session);
+    state
+        .sessions_by_id
+        .write()
+        .await
+        .insert(session_id.clone(), session);
+    state.token_to_id.write().await.insert(user_token, session_id);
 
-    trace!("Session added to active sessions map.");
+    trace!("Session added to active session map.");
 
-    trace!("Exiting route [POST /session/create] successfully.");
+    trace!("Exiting route [POST /session] successfully.");
 
-    Ok(RequestSuccess::NoContent)
+    Ok(RequestSuccess::Created)
 }
 
-#[options("/destroy")]
-pub fn destroy_session_options() -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [OPTIONS /session/destroy]");
-    Ok(RequestSuccess::NoContent)
-}
-
-#[post("/destroy")]
+#[delete("/")]
 pub async fn destroy_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [POST /session/destroy]");
+    trace!("Entering route [DELETE /session]");
 
-    let mut active_sessions = state.active_sessions.write().await;
-
-    // Retrieve the user's session based on the "session_id" cookie.
-    let cookie = match cookies.get_private("session_id") {
+    // Retrieve the user's session based on the "__Host-id" cookie.
+    let cookie = match cookies.get_private("__Host-id") {
         Some(c) => {
-            trace!("Found session_id cookie.");
+            trace!("Found __Host-id cookie.");
             c
         }
         None => {
-            trace!("session_id cookie not found.");
+            trace!("__Host-id cookie not found.");
             return Err(RequestError::MissingSessionId);
         }
     };
 
-    let result = match active_sessions.remove(cookie.value()) {
-        Some(_) => {
-            trace!("Removed active session with ID: {}", cookie.value());
+    let user_token = cookie.value();
+
+    let mut sessions_by_id = state.sessions_by_id.write().await;
+    let mut token_to_id = state.token_to_id.write().await;
+
+    let result = match token_to_id.remove(user_token) {
+        Some(session_id) => {
+            sessions_by_id.remove(&session_id);
+            trace!("Removed active session with ID: {}", session_id);
             Ok(RequestSuccess::NoContent)
         }
         None => {
-            trace!(
-                "Session ID {} not found in active sessions.",
-                cookie.value()
-            );
+            trace!("User token not found in active session list.");
             Err(RequestError::MissingActiveSession)
         }
     };
 
-    trace!("Exiting route [POST /session/destroy] successfully.");
+    trace!("Exiting route [DELETE /session] successfully.");
 
     result
 }

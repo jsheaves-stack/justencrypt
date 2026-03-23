@@ -10,6 +10,31 @@ pub struct AuthenticatedSession {
     pub session: Arc<RwLock<UserSession>>,
 }
 
+pub struct AdminGuard;
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for AdminGuard {
+    type Error = RequestError;
+
+    async fn from_request(
+        request: &'r Request<'_>,
+    ) -> Outcome<Self, (Status, Self::Error), Status> {
+        trace!("Entering forwarding_guard::AdminGuard::from_request");
+
+        let api_key = match std::env::var("JUSTENCRYPT_ADMIN_API_KEY") {
+            Ok(key) => key,
+            Err(_) => {
+                return Outcome::Error((Status::InternalServerError, RequestError::InvalidApiKey))
+            }
+        };
+
+        match request.headers().get_one("X-Admin-Api-Key") {
+            Some(key) if key == api_key => Outcome::Success(AdminGuard),
+            _ => Outcome::Error((Status::Unauthorized, RequestError::InvalidApiKey)),
+        }
+    }
+}
+
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for AuthenticatedSession {
     type Error = RequestError;
@@ -36,25 +61,36 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
             }
         };
 
-        let cookie = match cookies.get_private("session_id") {
+        let cookie = match cookies.get_private("__Host-id") {
             Some(cookie) => {
-                trace!("Found private session_id cookie.");
+                trace!("Found private __Host-id cookie.");
                 cookie
             }
             None => {
-                trace!("Private session_id cookie not found.");
+                trace!("Private __Host-id cookie not found.");
                 return Outcome::Error((Status::Unauthorized, RequestError::MissingSessionId));
             }
         };
 
-        let active_sessions = state.active_sessions.read().await;
-        let session = match active_sessions.get(cookie.value()) {
+        let user_token = cookie.value();
+
+        let token_to_id = state.token_to_id.read().await;
+        let session_id = match token_to_id.get(user_token) {
+            Some(id) => id.clone(),
+            None => {
+                trace!("No session ID found for token.");
+                return Outcome::Error((Status::Unauthorized, RequestError::MissingActiveSession));
+            }
+        };
+
+        let sessions_by_id = state.sessions_by_id.read().await;
+        let session = match sessions_by_id.get(&session_id) {
             Some(s) => {
-                trace!("Found active session for cookie value.");
+                trace!("Found active session for session ID.");
                 s.clone()
             }
             None => {
-                trace!("No active session found for cookie value.");
+                trace!("No active session found for session ID.");
                 return Outcome::Error((Status::Unauthorized, RequestError::MissingActiveSession));
             }
         };

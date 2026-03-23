@@ -40,4 +40,16 @@ pub enum RequestError {
 
     #[error("Failed to read folder contents")]
     FailedToReadFolderContents,
+
+    #[error("Invalid API key")]
+    InvalidApiKey,
+
+    #[error("Not found")]
+    NotFound,
+
+    #[error("Unauthorized")]
+    Unauthorized,
+
+    #[error("Internal server error")]
+    InternalServerError,
 }

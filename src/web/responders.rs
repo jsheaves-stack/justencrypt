@@ -11,12 +11,12 @@ impl<'r> Responder<'r, 'static> for RequestError {
         // Here you map your error enum variants to appropriate HTTP responses.
         let response = match self {
             RequestError::MissingSessionId => Response::build()
-                .status(Status::BadRequest)
+                .status(Status::Unauthorized)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
 
             RequestError::MissingActiveSession => Response::build()
-                .status(Status::NotFound)
+                .status(Status::Unauthorized)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
 
@@ -31,7 +31,7 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .ok(),
 
             RequestError::FailedToCreateUserSession => Response::build()
-                .status(Status::Forbidden)
+                .status(Status::Unauthorized)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),
 
@@ -71,6 +71,26 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 .ok(),
 
             RequestError::FailedToRenameFile => Response::build()
+                .status(Status::InternalServerError)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::InvalidApiKey => Response::build()
+                .status(Status::Unauthorized)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::NotFound => Response::build()
+                .status(Status::NotFound)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::Unauthorized => Response::build()
+                .status(Status::Unauthorized)
+                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
+                .ok(),
+
+            RequestError::InternalServerError => Response::build()
                 .status(Status::InternalServerError)
                 .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
                 .ok(),

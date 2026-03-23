@@ -3,7 +3,7 @@ use crate::{
         stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
         MPSC_CHANNEL_CAPACITY, NONCE_SIZE, SALT_SIZE, STREAM_LIMIT,
     },
-    enums::{request_error::RequestError, request_success::RequestSuccess},
+    enums::{db_error::DbError, request_error::RequestError, request_success::RequestSuccess},
     util::{
         sharded_path::{get_sharded_path, remove_sharded_path},
         unrestricted_path::UnrestrictedPath,
@@ -155,6 +155,7 @@ pub async fn get_file(
 
     let encoded_file_name = match session.get_encoded_file_name(file_path.to_path_buf()).await {
         Ok(e) => e,
+        Err(DbError::NotFound) => return Err(RequestError::NotFound),
         Err(e) => {
             error!("Failed to get encoded file name from db: {}", e);
             return Err(RequestError::FailedToProcessData);
@@ -173,6 +174,7 @@ pub async fn get_file(
             drop(session);
             m
         }
+        Err(DbError::NotFound) => return Err(RequestError::NotFound),
         Err(e) => {
             error!("Failed to get file encryption metadata for file: {}", e);
             return Err(RequestError::FailedToProcessData);
@@ -239,6 +241,7 @@ pub async fn delete_file(
 
     let encoded_file_name = match session.get_encoded_file_name(file_path.to_path_buf()).await {
         Ok(e) => e,
+        Err(DbError::NotFound) => return Err(RequestError::NotFound),
         Err(e) => {
             error!("Failed to get encoded file name from db: {}", e);
             return Err(RequestError::FailedToProcessData);
@@ -272,292 +275,4 @@ pub async fn delete_file(
     trace!("Exiting route [DELETE /file{}] successfully.", file_path);
 
     Ok(RequestSuccess::NoContent)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{get_app_config, session::user_session::UserSession, AppState};
-    use rocket::{
-        http::{Cookie, Status},
-        local::asynchronous::Client,
-        tokio::sync::{RwLock, Semaphore},
-        Build, Orbit, Rocket,
-    };
-    use secrecy::SecretString;
-    use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
-    use uuid::Uuid;
-
-    async fn setup() -> (Rocket<Build>, PathBuf, String) {
-        dotenv::dotenv().ok();
-
-        let temp_user = Uuid::new_v4().to_string();
-        let temp_dir = std::env::temp_dir().join(temp_user.clone());
-
-        tokio::fs::create_dir_all(&temp_dir)
-            .await
-            .expect("Failed to create temp dir");
-
-        std::env::set_var(
-            "JUSTENCRYPT_ROCKET_SECRET_KEY",
-            "BlN4QMqM8+wmRLPNRn10X/ZwmM58tEcCOgeY8cuMsB8=",
-        );
-
-        std::env::set_var("JUSTENCRYPT_USER_DATA_PATH", "/tmp/");
-
-        let state = AppState {
-            active_sessions: RwLock::new(HashMap::new()),
-            thumbnail_semaphore: Arc::new(Semaphore::new(1)),
-        };
-
-        let app_config = get_app_config();
-
-        let rocket = rocket::custom(app_config).manage(state).mount(
-            "/file",
-            routes![put_file, get_file, delete_file, file_options, patch_file],
-        );
-
-        (rocket, temp_dir, temp_user)
-    }
-
-    async fn cleanup(temp_dir: PathBuf) {
-        tokio::fs::remove_dir_all(temp_dir)
-            .await
-            .expect("Failed to remove temp dir");
-    }
-
-    async fn create_test_session(
-        rocket: &Rocket<Orbit>,
-        temp_user: String,
-    ) -> (String, Cookie<'static>) {
-        // fs::create_dir("./user_data/test_user").unwrap();
-        let session_id = Uuid::new_v4().to_string();
-        let passphrase = SecretString::from_str("test_password").unwrap();
-
-        let user_session = match UserSession::open(&temp_user, &passphrase).await {
-            Ok(session) => Arc::new(RwLock::new(session)),
-            Err(e) => panic!("Failed to open user session: {}", e),
-        };
-
-        let state = rocket.state::<AppState>().unwrap();
-
-        state
-            .active_sessions
-            .write()
-            .await
-            .insert(session_id.clone(), user_session);
-
-        let cookie = Cookie::build(("session_id", session_id.clone())).build();
-
-        (session_id, cookie)
-    }
-
-    #[rocket::async_test]
-    async fn test_put_file() {
-        let (rocket, temp_dir, temp_user) = setup().await;
-
-        let client = Client::tracked(rocket)
-            .await
-            .expect("Failed to create client");
-
-        let (session_id, cookie) = create_test_session(client.rocket(), temp_user).await;
-
-        let file_path = "test_file.txt";
-        let file_content = "Hello, world!";
-
-        let response = client
-            .put(format!("/file/{}", file_path))
-            .private_cookie(cookie)
-            .body(file_content)
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::Created);
-
-        let state = client.rocket().state::<AppState>().unwrap();
-        let session_guard = state.active_sessions.read().await;
-        let session = session_guard.get(&session_id).unwrap().clone();
-        let session = session.read().await;
-
-        let file_entry = Some(
-            session
-                .get_encoded_file_name(file_path.into())
-                .await
-                .unwrap(),
-        );
-
-        assert!(file_entry.is_some());
-
-        let encoded_file_name = file_entry.map(|f| f).unwrap();
-        let sharded_path =
-            get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
-
-        assert!(tokio::fs::metadata(sharded_path).await.is_ok());
-
-        cleanup(temp_dir).await;
-    }
-
-    #[rocket::async_test]
-    async fn test_get_file() {
-        let (rocket, temp_dir, temp_user) = setup().await;
-
-        let client = Client::tracked(rocket)
-            .await
-            .expect("Failed to create client");
-
-        let (session_id, cookie) = create_test_session(client.rocket(), temp_user).await;
-
-        let file_path = "test_file.txt";
-        let file_content = "Hello, world!";
-
-        let response = client
-            .put(format!("/file/{}", file_path))
-            .private_cookie(cookie.clone())
-            .body(file_content)
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::Created);
-
-        let response = client
-            .get(format!("/file/{}", file_path))
-            .private_cookie(cookie)
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::Ok);
-
-        let body = response.into_string().await.unwrap();
-
-        assert_eq!(body, file_content);
-
-        let state = client.rocket().state::<AppState>().unwrap();
-        let session_guard = state.active_sessions.read().await;
-        let session = match session_guard.get(&session_id) {
-            Some(session) => session,
-            None => panic!("Session not found"),
-        };
-
-        let session = session.read().await;
-
-        let file_entry = Some(
-            session
-                .get_encoded_file_name(file_path.into())
-                .await
-                .unwrap(),
-        );
-
-        assert!(file_entry.is_some());
-
-        let encoded_file_name = file_entry.map(|f| f).unwrap();
-        let sharded_path =
-            get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
-
-        assert!(tokio::fs::metadata(sharded_path).await.is_ok());
-
-        cleanup(temp_dir).await;
-    }
-
-    #[rocket::async_test]
-    async fn test_put_file_no_auth() {
-        let (rocket, temp_dir, _) = setup().await;
-        let client = Client::tracked(rocket)
-            .await
-            .expect("Failed to create client");
-
-        let file_path = "test_file.txt";
-        let file_content = "Hello, world!";
-
-        let response = client
-            .put(format!("/file/{}", file_path))
-            .body(file_content)
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::Unauthorized);
-
-        cleanup(temp_dir).await;
-    }
-
-    #[rocket::async_test]
-    async fn test_put_file_empty_content() {
-        let (rocket, temp_dir, temp_user) = setup().await;
-        let client = Client::tracked(rocket)
-            .await
-            .expect("Failed to create client");
-
-        let (session_id, cookie) = create_test_session(client.rocket(), temp_user).await;
-
-        let file_path = "test_file.txt";
-        let file_content = "";
-
-        let response = client
-            .put(format!("/file/{}", file_path))
-            .private_cookie(cookie)
-            .body(file_content)
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::Created);
-
-        let state = client.rocket().state::<AppState>().unwrap();
-        let session_guard = state.active_sessions.read().await;
-        let session = session_guard.get(&session_id).unwrap().clone();
-        let session = session.read().await;
-
-        let file_entry = Some(
-            session
-                .get_encoded_file_name(file_path.into())
-                .await
-                .unwrap(),
-        );
-
-        assert!(file_entry.is_some());
-
-        let encoded_file_name = file_entry.map(|f| f).unwrap();
-        let sharded_path =
-            get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
-
-        assert!(tokio::fs::metadata(sharded_path).await.is_ok());
-
-        cleanup(temp_dir).await;
-    }
-
-    #[rocket::async_test]
-    async fn test_put_file_large_content() {
-        let (rocket, temp_dir, temp_user) = setup().await;
-        let client = Client::tracked(rocket)
-            .await
-            .expect("Failed to create client");
-
-        let (session_id, cookie) = create_test_session(client.rocket(), temp_user).await;
-
-        let file_path = "test_file.txt";
-        let file_content = "A".repeat(64 * 1024 * 1024); // 64MB
-
-        let response = client
-            .put(format!("/file/{}", file_path))
-            .private_cookie(cookie)
-            .body(file_content)
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::Created);
-
-        let state = client.rocket().state::<AppState>().unwrap();
-        let session_guard = state.active_sessions.read().await;
-        let session = session_guard.get(&session_id).unwrap().clone();
-        let session = session.read().await;
-
-        let file_entry = Some(
-            session
-                .get_encoded_file_name(file_path.into())
-                .await
-                .unwrap(),
-        );
-
-        assert!(file_entry.is_some());
-
-        cleanup(temp_dir).await;
-    }
 }

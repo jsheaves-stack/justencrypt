@@ -37,4 +37,7 @@ pub enum DbError {
 
     #[error("User does not exist")]
     UserDoesNotExist,
+
+    #[error("Not found")]
+    NotFound,
 }

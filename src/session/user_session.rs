@@ -19,6 +19,10 @@ pub struct EncodedFile {
 pub struct UserSession {
     user_path: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
+    pub username: String,
+    pub created_at: std::time::SystemTime,
+    pub session_id: String,
+    pub user_token: SecretString,
 }
 
 impl UserSession {
@@ -33,6 +37,7 @@ impl UserSession {
 
         let user_name = user_name.to_owned();
         let passphrase = passphrase.clone();
+        let user_name_clone = user_name.clone();
 
         let result = task::spawn_blocking(move || {
             trace!("Inside spawn_blocking for UserSession::open");
@@ -60,7 +65,14 @@ impl UserSession {
 
             trace!("DB connection pool created.");
 
-            Ok(Self { user_path, db_pool })
+            Ok(Self {
+                user_path,
+                db_pool,
+                username: user_name_clone,
+                created_at: std::time::SystemTime::now(),
+                session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
+                user_token: SecretString::from(uuid::Uuid::new_v4().hyphenated().to_string()),
+            })
         })
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
