@@ -1,10 +1,44 @@
 use crate::enums::{request_error::RequestError, request_success::RequestSuccess};
 use rocket::{
-    http::Status,
-    response::{Responder, Response, Result},
+    http::{Header, Status},
+    response::{self, stream::ByteStream, Responder, Response, Result},
+    tokio::sync::mpsc,
     Request,
 };
 use std::io::Cursor;
+
+pub struct RangeResponder {
+    pub rx: mpsc::Receiver<Vec<u8>>,
+    pub status: Status,
+    pub start: u64,
+    pub end: u64,
+    pub total_size: u64,
+}
+
+impl<'r> Responder<'r, 'r> for RangeResponder {
+    fn respond_to(self, req: &'r Request<'_>) -> response::Result<'r> {
+        let mut rx = self.rx;
+        let stream = ByteStream! {
+            while let Some(chunk) = rx.recv().await {
+                yield chunk;
+            }
+        };
+
+        let mut response = Response::build_from(stream.respond_to(req)?);
+        response.status(self.status);
+        response.header(Header::new("Accept-Ranges", "bytes"));
+        response.header(Header::new(
+            "Content-Range",
+            format!("bytes {}-{}/{}", self.start, self.end, self.total_size),
+        ));
+        response.header(Header::new(
+            "Content-Length",
+            (self.end - self.start + 1).to_string(),
+        ));
+
+        response.ok()
+    }
+}
 
 impl<'r> Responder<'r, 'static> for RequestError {
     fn respond_to(self, _: &'r Request<'_>) -> Result<'static> {

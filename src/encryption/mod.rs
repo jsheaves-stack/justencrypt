@@ -1,5 +1,5 @@
-pub mod stream_decryptor;
-pub mod stream_encryptor;
+pub mod chunk_decryptor;
+pub mod chunk_encryptor;
 
 pub use orion::kex::SecretKey;
 
@@ -39,3 +39,4 @@ impl FileEncryptionMetadata {
         }
     }
 }
+

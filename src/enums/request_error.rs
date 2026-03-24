@@ -1,3 +1,4 @@
+use crate::enums::db_error::DbError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -58,4 +59,17 @@ pub enum RequestError {
 
     #[error("Internal server error")]
     InternalServerError,
+}
+
+impl From<DbError> for RequestError {
+    fn from(error: DbError) -> Self {
+        match error {
+            DbError::NotFound => RequestError::NotFound,
+            DbError::UserDoesNotExist => RequestError::Unauthorized,
+            DbError::InvalidInput(msg) => RequestError::BadRequest(msg),
+            DbError::MissingFileName => RequestError::BadRequest("Missing file name".into()),
+            DbError::InvalidPath => RequestError::BadRequest("Invalid path".into()),
+            _ => RequestError::InternalServerError,
+        }
+    }
 }

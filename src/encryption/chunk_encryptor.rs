@@ -7,17 +7,18 @@ use std::{error::Error, path::PathBuf};
 
 use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE};
 
-pub struct StreamEncryptor {
+pub struct ChunkEncryptor {
     file: File,
     metadata: FileEncryptionMetadata,
 }
 
-impl StreamEncryptor {
+impl ChunkEncryptor {
     pub async fn new(file_path: PathBuf) -> Result<Self, Box<dyn Error>> {
         let metadata = FileEncryptionMetadata::new();
 
-        let file_path_parts = file_path.parent().expect("Failed to get parent directory");
-        fs::create_dir_all(file_path_parts).await?;
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
 
         let file = OpenOptions::new()
             .write(true)
@@ -26,7 +27,7 @@ impl StreamEncryptor {
             .open(file_path)
             .await?;
 
-        Ok(StreamEncryptor { file, metadata })
+        Ok(ChunkEncryptor { file, metadata })
     }
 
     pub fn get_metadata(&self) -> FileEncryptionMetadata {
@@ -37,16 +38,19 @@ impl StreamEncryptor {
         &mut self,
         source: &mut R,
     ) -> Result<u64, Box<dyn Error>> {
-        trace!("Entering encrypt_stream");
+        trace!("Entering ChunkEncryptor::encrypt_stream");
 
         let mut chunk_index: u64 = 0;
         let mut total_plaintext_size: u64 = 0;
-        let mut buffer = vec![0u8; CHUNK_SIZE];
+
+        // Pre-allocate buffers to reuse them in the loop
+        let mut plaintext_buffer = vec![0u8; CHUNK_SIZE];
+        let mut indexed_plaintext = vec![0u8; 8 + CHUNK_SIZE];
 
         loop {
             let mut bytes_read = 0;
             while bytes_read < CHUNK_SIZE {
-                let n = source.read(&mut buffer[bytes_read..]).await?;
+                let n = source.read(&mut plaintext_buffer[bytes_read..]).await?;
                 if n == 0 {
                     break;
                 }
@@ -57,15 +61,17 @@ impl StreamEncryptor {
                 break;
             }
 
-            let mut plaintext_with_index = Vec::with_capacity(8 + bytes_read);
-            plaintext_with_index.extend_from_slice(&chunk_index.to_le_bytes());
-            plaintext_with_index.extend_from_slice(&buffer[..bytes_read]);
+            // Prepare indexed plaintext: [index (8 bytes)] [plaintext (bytes_read)]
+            indexed_plaintext[..8].copy_from_slice(&chunk_index.to_le_bytes());
+            indexed_plaintext[8..8 + bytes_read].copy_from_slice(&plaintext_buffer[..bytes_read]);
 
             let encrypted_chunk =
-                aead::seal(&self.metadata.key, &plaintext_with_index).map_err(|e| {
-                    error!("Encryption error at chunk {}: {:?}", chunk_index, e);
-                    "Encryption error"
-                })?;
+                aead::seal(&self.metadata.key, &indexed_plaintext[..8 + bytes_read]).map_err(
+                    |e| {
+                        error!("Encryption error at chunk {}: {:?}", chunk_index, e);
+                        "Encryption error"
+                    },
+                )?;
 
             self.file.write_all(&encrypted_chunk).await?;
 
@@ -78,7 +84,10 @@ impl StreamEncryptor {
         }
 
         self.metadata.total_size = total_plaintext_size;
-        trace!("Exiting encrypt_stream, total_size: {}", total_plaintext_size);
+        trace!(
+            "Exiting ChunkEncryptor::encrypt_stream, total_size: {}",
+            total_plaintext_size
+        );
 
         Ok(total_plaintext_size)
     }

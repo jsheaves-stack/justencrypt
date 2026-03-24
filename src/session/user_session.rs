@@ -458,6 +458,30 @@ impl UserSession {
         result
     }
 
+    pub async fn get_file_decryption_data(
+        &self,
+        file_path: PathBuf,
+    ) -> Result<(String, FileEncryptionMetadata), DbError> {
+        trace!(
+            "Entering UserSession::get_file_decryption_data for path: {:?}",
+            file_path
+        );
+
+        let db_pool = self.db_pool.clone();
+
+        let result = task::spawn_blocking(move || {
+            trace!("Inside spawn_blocking for get_file_decryption_data");
+            let db = db_pool.get()?;
+            sqlite::get_file_decryption_data(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+
+        trace!("Exiting UserSession::get_file_decryption_data.");
+
+        result
+    }
+
     pub async fn rename_file(
         &self,
         file_path: PathBuf,

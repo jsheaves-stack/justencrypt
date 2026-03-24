@@ -596,6 +596,51 @@ pub fn add_thumbnail(
     Ok(())
 }
 
+pub fn get_file_decryption_data(
+    db: &PooledConnection<SqliteConnectionManager>,
+    file_path_str: &str,
+) -> Result<(String, FileEncryptionMetadata), DbError> {
+    trace!("Entering sqlite::get_file_decryption_data for path: {}", file_path_str);
+    let path = Path::new(file_path_str.trim_matches('/'));
+    let parent_path = path.parent().unwrap_or(Path::new(""));
+    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
+    
+    let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::NotFound)?;
+    
+    let file_name = path
+        .file_name()
+        .ok_or(DbError::MissingFileName)?
+        .to_string_lossy();
+
+    db.query_row(
+        "SELECT encoded_name, key, encryption_version, total_size
+        FROM files
+        WHERE parent_folder_id = ?1 AND name = ?2",
+        params![parent_folder_id, file_name],
+        |row| {
+            let encoded_name: String = row.get(0)?;
+            let key_blob: Vec<u8> = row.get(1)?;
+            let total_size_i64: i64 = row.get(3)?;
+            Ok((
+                encoded_name,
+                FileEncryptionMetadata {
+                    key: SecretKey::from_slice(&key_blob).unwrap(),
+                    encryption_version: row.get(2)?,
+                    total_size: total_size_i64 as u64,
+                },
+            ))
+        },
+    )
+    .map_err(|e| {
+        if let rusqlite::Error::QueryReturnedNoRows = e {
+            DbError::NotFound
+        } else {
+            error!("Database error in get_file_decryption_data: {}", e);
+            DbError::FailedToGetFileFromDb(e.to_string())
+        }
+    })
+}
+
 pub fn get_thumbnail(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
