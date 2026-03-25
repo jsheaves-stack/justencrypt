@@ -44,17 +44,17 @@ const BASE_URL = 'http://localhost:8000';
 const DATA_SOURCE = open('./test_data.bin', 'b');
 
 function getRandomSize(minMb, maxMb) {
-    return Math.floor(Math.random() * (maxMb - minMb + 1) + minMb) * 1024 * 1024;
+  return Math.floor(Math.random() * (maxMb - minMb + 1) + minMb) * 1024 * 1024;
 }
 
 function shuffle(array) {
-    let currentIndex = array.length,  randomIndex;
-    while (currentIndex != 0) {
-      randomIndex = Math.floor(Math.random() * currentIndex);
-      currentIndex--;
-      [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
-    }
-    return array;
+  let currentIndex = array.length, randomIndex;
+  while (currentIndex != 0) {
+    randomIndex = Math.floor(Math.random() * currentIndex);
+    currentIndex--;
+    [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+  }
+  return array;
 }
 
 export default function () {
@@ -62,16 +62,16 @@ export default function () {
   const password = 'TestPassword123!@#Stronger';
 
   let loggedIn = false;
-  
+
   group('1. Authentication Phase', function () {
     const startTime = Date.now();
-    const loginRes = http.post(`${BASE_URL}/session/create`, JSON.stringify({
+    const loginRes = http.post(`${BASE_URL}/session`, JSON.stringify({
       username: username,
       password: password,
     }), { headers: { 'Content-Type': 'application/json' }, tags: { name: 'Login' } });
 
     loginTime.add(Date.now() - startTime);
-    loggedIn = check(loginRes, { 'auth successful': (r) => r.status === 204 });
+    loggedIn = check(loginRes, { 'auth successful': (r) => r.status === 201 });
   });
 
   if (!loggedIn) return;
@@ -89,7 +89,7 @@ export default function () {
     let uploadQueue = shuffle([...fileConfigs]);
     uploadQueue.forEach(file => {
       const data = DATA_SOURCE.slice(0, file.size);
-      
+
       const startTime = Date.now();
       const res = http.put(`${BASE_URL}/file/${file.name}`, data, {
         headers: { 'Content-Type': 'application/octet-stream' },
@@ -97,7 +97,7 @@ export default function () {
         tags: { name: 'UploadFile' }
       });
       uploadTime.add(Date.now() - startTime);
-      
+
       const success = check(res, { [`upload ok`]: (r) => r.status === 201 });
       uploadSuccessRate.add(success);
       if (success) {
@@ -109,21 +109,36 @@ export default function () {
   group('3. Download Phase', function () {
     let downloadQueue = shuffle([...fileConfigs]);
     downloadQueue.forEach(file => {
+      // Full Download
       const startTime = Date.now();
-      const res = http.get(`${BASE_URL}/file/${file.name}`, { 
+      const res = http.get(`${BASE_URL}/file/${file.name}`, {
         timeout: '180s',
         responseType: 'binary',
         tags: { name: 'DownloadFile' }
       });
       downloadTime.add(Date.now() - startTime);
 
-      const success = check(res, { 
-          [`download ok`]: (r) => r.status === 200,
-          [`content size correct`]: (r) => (r.body && r.body.byteLength) === file.size
+      const success = check(res, {
+        [`download ok`]: (r) => r.status === 200,
+        [`content size correct`]: (r) => (r.body && r.body.byteLength) === file.size
       });
       downloadSuccessRate.add(success);
       if (success) {
         totalDataDownloaded.add(file.size);
+      }
+
+      // Range Download (First 1MB)
+      if (file.size > 1024 * 1024) {
+        const rangeRes = http.get(`${BASE_URL}/file/${file.name}`, {
+          headers: { 'Range': 'bytes=0-1048575' },
+          timeout: '180s',
+          responseType: 'binary',
+          tags: { name: 'DownloadRange' }
+        });
+        check(rangeRes, {
+          [`range download ok`]: (r) => r.status === 206,
+          [`range content size correct`]: (r) => (r.body && r.body.byteLength) === 1048576
+        });
       }
     });
   });
@@ -131,7 +146,7 @@ export default function () {
   group('4. Cleanup Phase', function () {
     fileConfigs.forEach(file => {
       const startTime = Date.now();
-      const res = http.del(`${BASE_URL}/file/${file.name}`, null, { tags: { name: 'DeleteFile' }});
+      const res = http.del(`${BASE_URL}/file/${file.name}`, null, { tags: { name: 'DeleteFile' } });
       deleteTime.add(Date.now() - startTime);
       check(res, { [`delete ok`]: (r) => r.status === 204 });
     });

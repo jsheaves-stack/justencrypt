@@ -20,3 +20,5 @@ Cargo.lock
 dist
 
 perf-results/
+
+.planning/
