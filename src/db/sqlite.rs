@@ -22,9 +22,8 @@ pub fn create_user_db_connection(
         db_path
     );
 
-    // 1. Manually open a connection to validate the password and run migrations.
-    // This allows us to "fail-fast" immediately if the password is wrong,
-    // avoiding r2d2's exponential backoff and retry loops.
+    // Open a connection to validate the password and run migrations.
+    // This fails immediately if the password is wrong, avoiding r2d2's exponential backoff and retry loops.
     {
         trace!("Manually opening DB connection for password validation and migrations.");
         let mut conn = rusqlite::Connection::open(&db_path)?;
@@ -32,29 +31,26 @@ pub fn create_user_db_connection(
         conn.busy_timeout(Duration::from_millis(60000))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
-        // Verify the key and trigger KDF. If password is wrong, this will fail immediately.
         if let Err(e) = conn.query_row("SELECT 1", [], |_| Ok(())) {
             error!("Failed to verify database password: {}", e);
             return Err(DbError::Rusqlite(e));
         }
 
         trace!("Running one-time database migrations...");
+
         if let Err(e) = migrations::get_migrations().to_latest(&mut conn) {
             error!("Migration error: {}", e);
             return Err(DbError::Rusqlite(rusqlite::Error::QueryReturnedNoRows));
-            // Mapping to generic Rusqlite error
         }
+
         trace!("Migrations are up to date.");
     }
 
-    // 2. Initialize the connection manager for r2d2.
-    // Migrations are already handled, so we only need to set pragmas.
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
         trace!("Initializing new pool DB connection.");
         conn.busy_timeout(Duration::from_millis(60000))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
-        // Trigger KDF for this new connection
         conn.query_row("SELECT 1", [], |_| Ok(()))?;
 
         match conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get::<_, String>(0)) {
@@ -91,7 +87,6 @@ pub fn create_user_db_connection(
         .parse::<u64>()
         .unwrap_or(600);
 
-    // 3. Create the pool using configured min and max connections.
     let pool = Pool::builder()
         .max_size(max_connections)
         .min_idle(Some(min_connections))
@@ -100,6 +95,7 @@ pub fn create_user_db_connection(
         .map_err(DbError::PoolError)?;
 
     trace!("Exiting sqlite::create_user_db_connection successfully.");
+
     Ok(pool)
 }
 
@@ -600,13 +596,16 @@ pub fn get_file_decryption_data(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
 ) -> Result<(String, FileEncryptionMetadata), DbError> {
-    trace!("Entering sqlite::get_file_decryption_data for path: {}", file_path_str);
+    trace!(
+        "Entering sqlite::get_file_decryption_data for path: {}",
+        file_path_str
+    );
     let path = Path::new(file_path_str.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
-    
+
     let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::NotFound)?;
-    
+
     let file_name = path
         .file_name()
         .ok_or(DbError::MissingFileName)?

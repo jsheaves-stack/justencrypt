@@ -1,4 +1,6 @@
 mod test_admin;
+mod test_chunked_upload;
+mod test_encryption;
 mod test_file;
 mod test_file_delete_patch;
 mod test_folder;

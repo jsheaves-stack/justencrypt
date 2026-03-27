@@ -28,7 +28,6 @@ impl ChunkDecryptor {
         self.file_path.clone()
     }
 
-    /// Internal helper to decrypt a single chunk into a provided buffer
     async fn decrypt_chunk(
         &self,
         file: &mut File,
@@ -36,6 +35,7 @@ impl ChunkDecryptor {
         encrypted_buffer: &mut [u8],
     ) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut bytes_read = 0;
+
         while bytes_read < ENCRYPTED_CHUNK_SIZE {
             match file.read(&mut encrypted_buffer[bytes_read..]).await {
                 Ok(0) => break,
@@ -59,7 +59,9 @@ impl ChunkDecryptor {
         }
 
         let mut index_bytes = [0u8; 8];
+
         index_bytes.copy_from_slice(&decrypted_payload[..8]);
+
         let stored_index = u64::from_le_bytes(index_bytes);
 
         if stored_index != chunk_index {

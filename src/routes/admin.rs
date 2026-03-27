@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use rocket::{delete, get, options, serde::json::Json, State};
 use secrecy::ExposeSecret;
 use serde::Serialize;
@@ -13,6 +15,15 @@ pub struct ActiveSessionInfo {
     pub session_id: String,
     pub username: String,
     pub created_at: u64,
+    pub active_uploads: Vec<ActiveFileUpload>,
+}
+
+#[derive(Serialize)]
+pub struct ActiveFileUpload {
+    upload_id: String,
+    file_path: String,
+    encoded_file_name: String,
+    last_updated: SystemTime,
 }
 
 #[get("/session")]
@@ -25,6 +36,17 @@ pub async fn get_session(
 
     for (session_id, session_lock) in sessions_by_id.iter() {
         let session = session_lock.read().await;
+        let mut active_uploads = Vec::<ActiveFileUpload>::new();
+
+        for (id, state) in session.active_uploads.iter() {
+            active_uploads.push(ActiveFileUpload {
+                upload_id: id.clone(),
+                file_path: state.file_path.display().to_string(),
+                encoded_file_name: state.encoded_file_name.clone(),
+                last_updated: *state.last_updated.lock().await,
+            });
+        }
+
         session_list.push(ActiveSessionInfo {
             session_id: session_id.clone(),
             username: session.username.clone(),
@@ -33,6 +55,7 @@ pub async fn get_session(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            active_uploads: active_uploads,
         });
     }
 

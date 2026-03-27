@@ -1,14 +1,20 @@
 use crate::{
     db::sqlite::{self, FolderEntry},
-    encryption::FileEncryptionMetadata,
+    encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
     enums::db_error::DbError,
 };
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::tokio::task;
+use rocket::tokio::{sync::Mutex, task};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use std::{env, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    path::PathBuf,
+    sync::Arc,
+    time::SystemTime,
+};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct EncodedFile {
@@ -16,13 +22,22 @@ pub struct EncodedFile {
     pub encoded_name: String,
 }
 
+pub struct UploadState {
+    pub file_path: PathBuf,
+    pub encoded_file_name: String,
+    pub written_chunks: Arc<Mutex<HashSet<u64>>>,
+    pub encryptor: Arc<Mutex<ChunkEncryptor>>,
+    pub last_updated: Arc<Mutex<SystemTime>>,
+}
+
 pub struct UserSession {
     user_path: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
     pub username: String,
-    pub created_at: std::time::SystemTime,
+    pub created_at: SystemTime,
     pub session_id: String,
     pub user_token: SecretString,
+    pub active_uploads: HashMap<String, UploadState>,
 }
 
 impl UserSession {
@@ -69,9 +84,10 @@ impl UserSession {
                 user_path,
                 db_pool,
                 username: user_name_clone,
-                created_at: std::time::SystemTime::now(),
+                created_at: SystemTime::now(),
                 session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
                 user_token: SecretString::from(uuid::Uuid::new_v4().hyphenated().to_string()),
+                active_uploads: HashMap::new(),
             })
         })
         .await

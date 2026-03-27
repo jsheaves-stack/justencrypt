@@ -51,9 +51,13 @@ components:
     FolderEntry:
       type: object
       required:
+        - id
         - is_file
         - file_name
       properties:
+        id:
+          type: integer
+          description: The internal database ID of the file or folder.
         is_file:
           type: boolean
           description: Indicates whether this entry is a file or a folder.
@@ -77,6 +81,14 @@ components:
           type: integer
           format: int64
           description: The Unix timestamp when the session was created.
+    InitUploadResponse:
+      type: object
+      required:
+        - upload_id
+      properties:
+        upload_id:
+          type: string
+          description: Unique identifier for the chunked upload session.
 security:
   - cookieAuth: []
 paths:
@@ -124,8 +136,8 @@ paths:
           description: CORS pre-flight response
   /file/{file_path}:
     put:
-      summary: Upload and encrypt a file
-      description: Uploads a file stream, encrypts it on the fly, and stores it in the sharded filesystem.
+      summary: Upload and encrypt a file (Single-shot)
+      description: Uploads a file stream, encrypts it on the fly, and stores it in the sharded filesystem. For large files, use the chunked upload endpoints.
       parameters:
         - in: path
           name: file_path
@@ -147,7 +159,7 @@ paths:
           description: Failed to add file.
     get:
       summary: Download and decrypt a file
-      description: Streams and decrypts the file on the fly based on the logical file path.
+      description: Streams and decrypts the file on the fly based on the logical file path. Supports Range requests for partial content.
       parameters:
         - in: path
           name: file_path
@@ -155,9 +167,38 @@ paths:
           schema:
             type: string
           description: The logical virtual path of the requested file.
+        - in: header
+          name: Range
+          required: false
+          schema:
+            type: string
+          description: Standard HTTP Range header (e.g., bytes=0-1024).
       responses:
         '200':
-          description: Decrypted file stream.
+          description: Decrypted file stream (Full content).
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+              description: Indicates support for byte range requests.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Decrypted file stream (Partial content).
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+            Content-Range:
+              schema:
+                type: string
+              description: The range of bytes being returned (e.g., bytes 0-1024/2048).
+            Content-Length:
+              schema:
+                type: string
           content:
             application/octet-stream:
               schema:
@@ -165,6 +206,8 @@ paths:
                 format: binary
         '400':
           description: Failed to process data or locate file.
+        '416':
+          description: Range not satisfiable.
     patch:
       summary: Move or rename a file
       description: Allows renaming a file or moving it to a different logical folder.
@@ -212,6 +255,85 @@ paths:
       responses:
         '204':
           description: CORS pre-flight response
+  /file/upload/initiate/{file_path}:
+    post:
+      summary: Initialize a chunked upload
+      description: Starts a new chunked upload session for a file. Returns an upload_id to be used in subsequent chunk uploads and finalization.
+      parameters:
+        - in: path
+          name: file_path
+          required: true
+          schema:
+            type: string
+          description: The logical virtual file path where the file will eventually be stored.
+      responses:
+        '200':
+          description: Upload initialized successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitUploadResponse'
+        '401':
+          description: Unauthorized.
+  /file/upload/chunk/{upload_id}:
+    put:
+      summary: Upload a file chunk
+      description: Uploads a 64KB chunk (or the last chunk) of the file at the specified offset.
+      parameters:
+        - in: path
+          name: upload_id
+          required: true
+          schema:
+            type: string
+          description: The unique identifier for the chunked upload session.
+        - in: query
+          name: offset
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: The byte offset in the original plaintext file where this chunk starts. Must be a multiple of 65536 (64KB).
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Chunk uploaded successfully.
+        '404':
+          description: Upload session not found.
+        '401':
+          description: Unauthorized.
+  /file/upload/finalize/{upload_id}:
+    post:
+      summary: Finalize a chunked upload
+      description: Completes the chunked upload process. Verifies that all chunks have been received and adds the file to the user's storage.
+      parameters:
+        - in: path
+          name: upload_id
+          required: true
+          schema:
+            type: string
+          description: The unique identifier for the chunked upload session.
+        - in: query
+          name: total_size
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: The total size of the original plaintext file in bytes.
+      responses:
+        '201':
+          description: File finalized and stored successfully.
+        '400':
+          description: Bad request (e.g., missing chunks).
+        '404':
+          description: Upload session not found.
+        '401':
+          description: Unauthorized.
   /admin/session:
     get:
       summary: List all active sessions (Admin)

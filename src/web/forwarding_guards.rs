@@ -60,7 +60,6 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
         trace!("Entering forwarding_guard::AuthenticatedSession::from_request");
         let cookies = request.cookies();
 
-        // Extract the state.
         let state: &State<AppState> = match request.guard::<&State<AppState>>().await {
             Outcome::Success(s) => {
                 trace!("Successfully retrieved AppState.");
