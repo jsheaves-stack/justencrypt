@@ -72,11 +72,11 @@ pub async fn create_test_session(
     let passphrase = SecretString::from_str("test_password").unwrap();
 
     let user_session = match UserSession::open(&temp_user, &passphrase).await {
-        Ok(session) => Arc::new(RwLock::new(session)),
+        Ok(session) => Arc::new(session),
         Err(e) => panic!("Failed to open user session: {}", e),
     };
 
-    let session_id = user_session.read().await.session_id.clone();
+    let session_id = user_session.session_id.clone();
 
     let state = rocket.state::<AppState>().unwrap();
 

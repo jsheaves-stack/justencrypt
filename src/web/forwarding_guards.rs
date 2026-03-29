@@ -1,13 +1,11 @@
 use std::sync::Arc;
 
-use rocket::{
-    http::Status, outcome::Outcome, request::FromRequest, tokio::sync::RwLock, Request, State,
-};
+use rocket::{http::Status, outcome::Outcome, request::FromRequest, Request, State};
 
 use crate::{enums::request_error::RequestError, session::user_session::UserSession, AppState};
 
 pub struct AuthenticatedSession {
-    pub session: Arc<RwLock<UserSession>>,
+    pub session: Arc<UserSession>,
 }
 
 pub struct RangeHeader(pub Option<String>);

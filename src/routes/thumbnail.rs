@@ -54,7 +54,7 @@ pub async fn get_thumbnail(
         .map_err(|_| RequestError::FailedToProcessData)?;
 
     let (user_path, cache_path, encoded_thumbnail_file_name) = {
-        let session = auth.session.read().await;
+        let session = auth.session.clone();
         let user_path = session.get_user_path();
         let cache_path = user_path.join(".cache");
 
@@ -77,7 +77,7 @@ pub async fn get_thumbnail(
 
     if !encoded_thumbnail_file_path.exists() {
         let (encoded_file_name, metadata) = {
-            let session = auth.session.read().await;
+            let session = auth.session.clone();
             session
                 .get_file_decryption_data(file_path_buf.clone())
                 .await?
@@ -102,9 +102,9 @@ pub async fn get_thumbnail(
             let img =
                 image::load_from_memory_with_format(&decrypted_original_image_data, image_format)
                     .map_err(|e| {
-                        error!("Image load error: {}", e);
-                        RequestError::FailedToProcessData
-                    })?;
+                    error!("Image load error: {}", e);
+                    RequestError::FailedToProcessData
+                })?;
 
             img.thumbnail(150, 150)
                 .write_to(&mut buf, image_format)
@@ -140,7 +140,7 @@ pub async fn get_thumbnail(
         let thumbnail_metadata = encryptor.get_metadata();
 
         {
-            let session = auth.session.read().await;
+            let session = auth.session.clone();
             session
                 .add_thumbnail(
                     file_path_buf,
@@ -153,7 +153,7 @@ pub async fn get_thumbnail(
         Ok(thumbnail_buffer.into_inner())
     } else {
         let metadata = {
-            let session = auth.session.read().await;
+            let session = auth.session.clone();
             session.get_thumbnail(file_path_buf).await?
         };
 

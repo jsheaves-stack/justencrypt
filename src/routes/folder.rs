@@ -24,7 +24,7 @@ pub async fn get_folder(
 
     let folder_path_buf = folder_path.to_path_buf();
     let folder_contents = {
-        let session = auth.session.read().await;
+        let session = auth.session.clone();
         session.get_folder(folder_path_buf).await?
     };
 
@@ -40,7 +40,7 @@ pub async fn create_folder(
 
     let folder_path_buf = folder_path.to_path_buf();
     {
-        let session = auth.session.read().await;
+        let session = auth.session.clone();
         session.add_folder(folder_path_buf).await.map_err(|e| {
             error!("Failed to add folder: {}", e);
             RequestError::FailedToCreateFolder
@@ -59,12 +59,12 @@ pub async fn delete_folder(
 
     let folder_path_buf = folder_path.to_path_buf();
     let user_path = {
-        let session = auth.session.read().await;
+        let session = auth.session.clone();
         session.get_user_path()
     };
 
     let folder_id = {
-        let session = auth.session.read().await;
+        let session = auth.session.clone();
         session
             .get_folder_id(folder_path_buf.clone())
             .await?
@@ -78,18 +78,21 @@ pub async fn delete_folder(
         folders_to_delete.push(current_folder_id);
 
         let files = {
-            let session = auth.session.read().await;
-            session.get_files_in_folder(current_folder_id).await.map_err(|e| {
-                error!("Failed to get files in folder {}: {}", current_folder_id, e);
-                RequestError::FailedToReadFolderContents
-            })?
+            let session = auth.session.clone();
+            session
+                .get_files_in_folder(current_folder_id)
+                .await
+                .map_err(|e| {
+                    error!("Failed to get files in folder {}: {}", current_folder_id, e);
+                    RequestError::FailedToReadFolderContents
+                })?
         };
 
         for file in files {
             let encoded_file_path = get_sharded_path(user_path.clone(), &file.encoded_name).await;
 
             let encoded_thumbnail_file_name = {
-                let session = auth.session.read().await;
+                let session = auth.session.clone();
                 session
                     .get_encoded_thumbnail_file_name_by_file_id(file.id)
                     .await
@@ -109,17 +112,23 @@ pub async fn delete_folder(
             let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
 
             {
-                let session = auth.session.read().await;
+                let session = auth.session.clone();
                 let _ = session.delete_file_by_id(file.id).await;
             }
         }
 
         let child_folder_ids = {
-            let session = auth.session.read().await;
-            session.get_child_folders(current_folder_id).await.map_err(|e| {
-                error!("Failed to get child folders for {}: {}", current_folder_id, e);
-                RequestError::FailedToReadFolderContents
-            })?
+            let session = auth.session.clone();
+            session
+                .get_child_folders(current_folder_id)
+                .await
+                .map_err(|e| {
+                    error!(
+                        "Failed to get child folders for {}: {}",
+                        current_folder_id, e
+                    );
+                    RequestError::FailedToReadFolderContents
+                })?
         };
 
         for child_folder_id in child_folder_ids {
@@ -129,13 +138,13 @@ pub async fn delete_folder(
 
     for current_folder_id in folders_to_delete.into_iter().rev() {
         if current_folder_id != folder_id {
-            let session = auth.session.read().await;
+            let session = auth.session.clone();
             let _ = session.delete_folder_by_id(current_folder_id).await;
         }
     }
 
     {
-        let session = auth.session.read().await;
+        let session = auth.session.clone();
         session.delete_folder(folder_path_buf).await.map_err(|e| {
             error!("Failed to delete root folder: {}", e);
             RequestError::FailedToRemoveFile

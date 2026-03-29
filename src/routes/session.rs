@@ -6,7 +6,7 @@ use rocket::{
     http::{Cookie, CookieJar, SameSite},
     options, post,
     serde::json::Json,
-    tokio::{sync::RwLock, task},
+    tokio::task,
     State,
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -85,21 +85,19 @@ pub async fn create_session(
 
     trace!("Attempting to open user session for user: {}", user_name);
 
-    let session = Arc::new(RwLock::new(
-        match UserSession::open(&user_name, &passphrase).await {
-            Ok(a) => {
-                trace!("User session opened successfully.");
-                a
-            }
-            Err(e) => {
-                error!("Failed to create user session: {}", e);
-                return Err(RequestError::Unauthorized);
-            }
-        },
-    ));
+    let session = Arc::new(match UserSession::open(&user_name, &passphrase).await {
+        Ok(a) => {
+            trace!("User session opened successfully.");
+            a
+        }
+        Err(e) => {
+            warn!("Failed to open user session: {}", e);
+            return Err(RequestError::Unauthorized);
+        }
+    });
 
     let (user_token, session_id) = {
-        let session_read = session.read().await;
+        let session_read = session.clone();
         (
             session_read.user_token.expose_secret().clone(),
             session_read.session_id.clone(),

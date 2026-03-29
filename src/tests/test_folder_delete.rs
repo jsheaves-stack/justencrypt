@@ -61,7 +61,7 @@ async fn test_delete_folder_success() {
         .read()
         .await;
     let session_lock = session_guard.get(&session_id).unwrap().clone();
-    let session = session_lock.read().await;
+    let session = session_lock.clone();
 
     // The DB query should fail because the folder doesn't exist
     let lookup_result = session.get_folder_id(parent_folder.into()).await;

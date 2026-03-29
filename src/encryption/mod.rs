@@ -40,3 +40,8 @@ impl FileEncryptionMetadata {
     }
 }
 
+impl Default for FileEncryptionMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -35,10 +35,11 @@ pub async fn get_session(
     let mut session_list = Vec::new();
 
     for (session_id, session_lock) in sessions_by_id.iter() {
-        let session = session_lock.read().await;
+        let session = session_lock.clone();
         let mut active_uploads = Vec::<ActiveFileUpload>::new();
 
-        for (id, state) in session.active_uploads.iter() {
+        let session_uploads = session.active_uploads.lock().await;
+        for (id, state) in session_uploads.iter() {
             active_uploads.push(ActiveFileUpload {
                 upload_id: id.clone(),
                 file_path: state.file_path.display().to_string(),
@@ -55,7 +56,7 @@ pub async fn get_session(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            active_uploads: active_uploads,
+            active_uploads,
         });
     }
 
@@ -72,7 +73,7 @@ pub async fn delete_session(
     let mut token_to_id = state.token_to_id.write().await;
 
     if let Some(session_lock) = sessions_by_id.remove(&session_id) {
-        let session = session_lock.read().await;
+        let session = session_lock.clone();
         let user_token = session.user_token.expose_secret();
         token_to_id.remove(user_token);
         Ok(RequestSuccess::NoContent)

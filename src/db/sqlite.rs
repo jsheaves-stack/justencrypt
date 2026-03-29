@@ -78,9 +78,9 @@ pub fn create_user_db_connection(
         .unwrap_or(0);
 
     let max_connections = std::env::var("JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER")
-        .unwrap_or_else(|_| "2".to_string())
+        .unwrap_or_else(|_| "16".to_string())
         .parse::<u32>()
-        .unwrap_or(2);
+        .unwrap_or(16);
 
     let idle_timeout_seconds = std::env::var("JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS")
         .unwrap_or_else(|_| "600".to_string())

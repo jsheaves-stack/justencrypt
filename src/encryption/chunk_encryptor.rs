@@ -50,7 +50,7 @@ impl ChunkEncryptor {
             offset
         );
 
-        if offset % (CHUNK_SIZE as u64) != 0 {
+        if !offset.is_multiple_of(CHUNK_SIZE as u64) {
             return Err("Offset must be a multiple of CHUNK_SIZE".into());
         }
 

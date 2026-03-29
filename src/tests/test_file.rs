@@ -35,7 +35,7 @@ async fn test_put_file() {
     let state = client.rocket().state::<AppState>().unwrap();
     let session_guard = state.sessions_by_id.read().await;
     let session_lock = session_guard.get(&session_id).unwrap().clone();
-    let session = session_lock.read().await;
+    let session = session_lock.clone();
 
     let file_entry = Some(
         session

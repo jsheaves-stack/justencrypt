@@ -36,7 +36,7 @@ extern crate rocket;
 extern crate serde;
 
 pub struct AppState {
-    pub sessions_by_id: RwLock<HashMap<String, Arc<RwLock<UserSession>>>>,
+    pub sessions_by_id: RwLock<HashMap<String, Arc<UserSession>>>,
     pub token_to_id: RwLock<HashMap<String, String>>,
     pub thumbnail_semaphore: Arc<Semaphore>,
 }

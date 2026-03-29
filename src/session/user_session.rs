@@ -38,7 +38,7 @@ pub struct UserSession {
     pub created_at: SystemTime,
     pub session_id: String,
     pub user_token: SecretString,
-    pub active_uploads: HashMap<String, UploadState>,
+    pub active_uploads: Mutex<HashMap<String, UploadState>>,
 }
 
 impl UserSession {
@@ -88,7 +88,7 @@ impl UserSession {
                 created_at: SystemTime::now(),
                 session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
                 user_token: SecretString::from(uuid::Uuid::new_v4().hyphenated().to_string()),
-                active_uploads: HashMap::new(),
+                active_uploads: Mutex::new(HashMap::new()),
             })
         })
         .await
