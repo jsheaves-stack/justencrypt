@@ -126,11 +126,14 @@ pub async fn upload_chunk(
         offset
     );
 
-    let session = auth.session.read().await;
-    let upload_state = session
-        .active_uploads
-        .get(&upload_id)
-        .ok_or(RequestError::NotFound)?;
+    let upload_state = {
+        let session = auth.session.read().await;
+        session
+            .active_uploads
+            .get(&upload_id)
+            .cloned()
+            .ok_or(RequestError::NotFound)?
+    };
 
     {
         let mut last_updated = upload_state.last_updated.lock().await;
@@ -225,16 +228,20 @@ pub async fn put_file(
     trace!("Entering route [PUT /file/{}]", file_path);
 
     let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.read().await;
-    let user_path = session.get_user_path();
+    let user_path = {
+        let session = auth.session.read().await;
+        session.get_user_path()
+    };
 
     let encoded_file_name = uuid::Uuid::new_v4().to_string();
     let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
-    let mut encryptor = ChunkEncryptor::new(encoded_file_path).await.map_err(|e| {
-        error!("Failed to create ChunkEncryptor: {}", e);
-        RequestError::FailedToProcessData
-    })?;
+    let mut encryptor = ChunkEncryptor::new(encoded_file_path)
+        .await
+        .map_err(|e| {
+            error!("Failed to create ChunkEncryptor: {}", e);
+            RequestError::FailedToProcessData
+        })?;
 
     let mut stream = data.open(5.gibibytes());
     encryptor.encrypt_stream(&mut stream).await.map_err(|e| {
@@ -243,9 +250,13 @@ pub async fn put_file(
     })?;
 
     let metadata = encryptor.get_metadata();
-    session
-        .add_file(file_path_buf, encoded_file_name, metadata)
-        .await?;
+
+    {
+        let session = auth.session.read().await;
+        session
+            .add_file(file_path_buf, encoded_file_name, metadata)
+            .await?;
+    }
 
     Ok(RequestSuccess::Created)
 }

@@ -31,7 +31,7 @@ async fn test_create_session_success() {
 
     assert_eq!(response.status(), Status::Created);
     let cookies = response.cookies();
-    assert!(cookies.iter().any(|c| c.name() == "__Host-id"));
+    assert!(cookies.iter().any(|c| c.name() == "sid"));
 }
 
 #[rocket::async_test]

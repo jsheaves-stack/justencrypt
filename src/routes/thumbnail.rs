@@ -53,33 +53,44 @@ pub async fn get_thumbnail(
         .await
         .map_err(|_| RequestError::FailedToProcessData)?;
 
-    let session = auth.session.read().await;
-    let user_path = session.get_user_path();
-    let cache_path = user_path.join(".cache");
+    let (user_path, cache_path, encoded_thumbnail_file_name) = {
+        let session = auth.session.read().await;
+        let user_path = session.get_user_path();
+        let cache_path = user_path.join(".cache");
 
-    if !cache_path.exists() {
-        fs::create_dir(&cache_path).await.map_err(|e| {
-            error!("Failed to create cache dir: {}", e);
-            RequestError::FailedToWriteData
-        })?;
-    }
+        if !cache_path.exists() {
+            fs::create_dir(&cache_path).await.map_err(|e| {
+                error!("Failed to create cache dir: {}", e);
+                RequestError::FailedToWriteData
+            })?;
+        }
 
-    let encoded_thumbnail_file_name = session
-        .get_encoded_thumbnail_file_name(file_path_buf.clone())
-        .await?
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let encoded_thumbnail_file_name = session
+            .get_encoded_thumbnail_file_name(file_path_buf.clone())
+            .await?
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        (user_path, cache_path, encoded_thumbnail_file_name)
+    };
 
     let encoded_thumbnail_file_path =
         get_sharded_path(cache_path.clone(), &encoded_thumbnail_file_name).await;
 
     if !encoded_thumbnail_file_path.exists() {
-        let (encoded_file_name, metadata) = session.get_file_decryption_data(file_path_buf.clone()).await?;
+        let (encoded_file_name, metadata) = {
+            let session = auth.session.read().await;
+            session
+                .get_file_decryption_data(file_path_buf.clone())
+                .await?
+        };
+
         let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
-        let mut decryptor = ChunkDecryptor::new(encoded_file_path, metadata).await.map_err(|e| {
-            error!("Failed to create ChunkDecryptor: {}", e);
-            RequestError::FailedToProcessData
-        })?;
+        let mut decryptor = ChunkDecryptor::new(encoded_file_path, metadata)
+            .await
+            .map_err(|e| {
+                error!("Failed to create ChunkDecryptor: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
         let decrypted_original_image_data = decryptor.decrypt_all().await.map_err(|e| {
             error!("Decryption error: {}", e);
@@ -88,11 +99,12 @@ pub async fn get_thumbnail(
 
         let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
             let mut buf = Cursor::new(Vec::new());
-            let img = image::load_from_memory_with_format(&decrypted_original_image_data, image_format)
-                .map_err(|e| {
-                    error!("Image load error: {}", e);
-                    RequestError::FailedToProcessData
-                })?;
+            let img =
+                image::load_from_memory_with_format(&decrypted_original_image_data, image_format)
+                    .map_err(|e| {
+                        error!("Image load error: {}", e);
+                        RequestError::FailedToProcessData
+                    })?;
 
             img.thumbnail(150, 150)
                 .write_to(&mut buf, image_format)
@@ -110,28 +122,47 @@ pub async fn get_thumbnail(
             RequestError::FailedToProcessData
         })??;
 
-        let mut encryptor = ChunkEncryptor::new(encoded_thumbnail_file_path).await.map_err(|e| {
-            error!("Failed to create ChunkEncryptor: {}", e);
-            RequestError::FailedToProcessData
-        })?;
+        let mut encryptor = ChunkEncryptor::new(encoded_thumbnail_file_path)
+            .await
+            .map_err(|e| {
+                error!("Failed to create ChunkEncryptor: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
-        encryptor.encrypt_stream(&mut thumbnail_buffer).await.map_err(|e| {
-            error!("Encryption error: {}", e);
-            RequestError::FailedToProcessData
-        })?;
+        encryptor
+            .encrypt_stream(&mut thumbnail_buffer)
+            .await
+            .map_err(|e| {
+                error!("Encryption error: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
         let thumbnail_metadata = encryptor.get_metadata();
-        session.add_thumbnail(file_path_buf, encoded_thumbnail_file_name, thumbnail_metadata).await?;
+
+        {
+            let session = auth.session.read().await;
+            session
+                .add_thumbnail(
+                    file_path_buf,
+                    encoded_thumbnail_file_name,
+                    thumbnail_metadata,
+                )
+                .await?;
+        }
 
         Ok(thumbnail_buffer.into_inner())
     } else {
-        let metadata = session.get_thumbnail(file_path_buf).await?;
-        drop(session);
+        let metadata = {
+            let session = auth.session.read().await;
+            session.get_thumbnail(file_path_buf).await?
+        };
 
-        let mut decryptor = ChunkDecryptor::new(encoded_thumbnail_file_path, metadata).await.map_err(|e| {
-            error!("Failed to create ChunkDecryptor: {}", e);
-            RequestError::FailedToProcessData
-        })?;
+        let mut decryptor = ChunkDecryptor::new(encoded_thumbnail_file_path, metadata)
+            .await
+            .map_err(|e| {
+                error!("Failed to create ChunkDecryptor: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
         let decrypted_thumbnail_data = decryptor.decrypt_all().await.map_err(|e| {
             error!("Decryption error: {}", e);

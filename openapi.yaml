@@ -11,7 +11,7 @@ components:
     cookieAuth:
       type: apiKey
       in: cookie
-      name: __Host-id
+      name: sid
     apiKeyAuth:
       type: apiKey
       in: header
@@ -122,7 +122,7 @@ paths:
           description: Bad request (e.g. password does not meet requirements).
     delete:
       summary: Destroy the active session
-      description: Invalidates the active session identified by the __Host-id cookie.
+      description: Invalidates the active session identified by the sid cookie.
       responses:
         '204':
           description: Session successfully destroyed.

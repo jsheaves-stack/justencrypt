@@ -22,6 +22,7 @@ pub struct EncodedFile {
     pub encoded_name: String,
 }
 
+#[derive(Clone)]
 pub struct UploadState {
     pub file_path: PathBuf,
     pub encoded_file_name: String,

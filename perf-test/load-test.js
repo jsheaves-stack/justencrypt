@@ -18,11 +18,13 @@ const totalDataDownloaded = new Counter('total_data_downloaded');
 const VUS = parseInt(__ENV.VUS || '20');
 const DURATION = __ENV.DURATION || '2m';
 const SLEEP_DELAY = parseFloat(__ENV.SLEEP || '0.5');
+const UPLOAD_MODE = __ENV.UPLOAD_MODE || 'chunked'; // 'stream' or 'chunked'
 
 // File specific configuration
 const FILES_COUNT = parseInt(__ENV.FILES_COUNT || '10');
 const MIN_SIZE = parseInt(__ENV.MIN_SIZE || '1');
 const MAX_SIZE = parseInt(__ENV.MAX_SIZE || '100');
+const REQUEST_CHUNK_SIZE = 1024 * 1024; // 1MB chunks for chunked upload
 
 export const options = {
   stages: [
@@ -88,21 +90,71 @@ export default function () {
   group('2. Upload Phase', function () {
     let uploadQueue = shuffle([...fileConfigs]);
     uploadQueue.forEach(file => {
-      const data = DATA_SOURCE.slice(0, file.size);
-
       const startTime = Date.now();
-      const res = http.put(`${BASE_URL}/file/${file.name}`, data, {
-        headers: { 'Content-Type': 'application/octet-stream' },
-        timeout: '180s',
-        tags: { name: 'UploadFile' }
-      });
-      uploadTime.add(Date.now() - startTime);
 
-      const success = check(res, { [`upload ok`]: (r) => r.status === 201 });
-      uploadSuccessRate.add(success);
-      if (success) {
-        totalDataUploaded.add(file.size);
+      if (UPLOAD_MODE === 'stream') {
+        const data = DATA_SOURCE.slice(0, file.size);
+        const res = http.put(`${BASE_URL}/file/${file.name}`, data, {
+          headers: { 'Content-Type': 'application/octet-stream' },
+          timeout: '180s',
+          tags: { name: 'UploadFileStream' }
+        });
+        
+        const success = check(res, { [`stream upload ok`]: (r) => r.status === 201 });
+        uploadSuccessRate.add(success);
+        if (success) {
+          totalDataUploaded.add(file.size);
+        }
+      } else {
+        // Chunked upload
+        const initRes = http.post(`${BASE_URL}/file/upload/initiate/${file.name}`, null, {
+          tags: { name: 'UploadInit' }
+        });
+        
+        if (initRes.status !== 200) {
+          check(initRes, { [`initiate chunked upload ok`]: (r) => r.status === 200 });
+          uploadSuccessRate.add(0);
+          uploadTime.add(Date.now() - startTime);
+          return;
+        }
+
+        const uploadId = initRes.json('upload_id');
+        let offset = 0;
+        let chunkedSuccess = true;
+
+        while (offset < file.size) {
+          const end = Math.min(offset + REQUEST_CHUNK_SIZE, file.size);
+          const chunkData = DATA_SOURCE.slice(offset, end);
+          
+          const chunkRes = http.put(`${BASE_URL}/file/upload/chunk/${uploadId}?offset=${offset}`, chunkData, {
+            headers: { 'Content-Type': 'application/octet-stream' },
+            timeout: '180s',
+            tags: { name: 'UploadChunk' }
+          });
+          
+          if (chunkRes.status !== 204) {
+            chunkedSuccess = false;
+            break;
+          }
+          offset += (end - offset);
+        }
+
+        if (chunkedSuccess) {
+          const finalizeRes = http.post(`${BASE_URL}/file/upload/finalize/${uploadId}?total_size=${file.size}`, null, {
+            tags: { name: 'UploadFinalize' }
+          });
+          const success = check(finalizeRes, { [`finalize chunked upload ok`]: (r) => r.status === 201 });
+          uploadSuccessRate.add(success);
+          if (success) {
+            totalDataUploaded.add(file.size);
+          }
+        } else {
+          check({ status: 500 }, { [`chunk upload ok`]: (r) => false });
+          uploadSuccessRate.add(0);
+        }
       }
+      
+      uploadTime.add(Date.now() - startTime);
     });
   });
 

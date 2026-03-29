@@ -75,13 +75,13 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
             }
         };
 
-        let cookie = match cookies.get_private("__Host-id") {
+        let cookie = match cookies.get_private("sid") {
             Some(cookie) => {
-                trace!("Found private __Host-id cookie.");
+                trace!("Found private sid cookie.");
                 cookie
             }
             None => {
-                trace!("Private __Host-id cookie not found.");
+                trace!("Private sid cookie not found.");
                 return Outcome::Error((Status::Unauthorized, RequestError::MissingSessionId));
             }
         };

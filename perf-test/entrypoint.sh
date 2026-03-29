@@ -89,6 +89,7 @@ k6 run \
   -e VUS="$VUS" \
   -e DURATION="$DURATION" \
   -e SLEEP="$SLEEP" \
+  -e UPLOAD_MODE="$UPLOAD_MODE" \
   -e FILES_COUNT="$FILES_COUNT" \
   -e MIN_SIZE="$MIN_SIZE" \
   -e MAX_SIZE="$MAX_SIZE" \

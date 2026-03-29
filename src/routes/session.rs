@@ -108,9 +108,9 @@ pub async fn create_session(
 
     trace!("Generated new session ID: {}", session_id);
 
-    let mut cookie = Cookie::new("__Host-id", user_token.clone());
+    let mut cookie = Cookie::new("sid", user_token.clone());
     cookie.set_same_site(Some(SameSite::Strict));
-    cookie.set_secure(true);
+    cookie.set_secure(false);
     cookies.add_private(cookie);
 
     trace!("Session cookie added to jar.");
@@ -140,13 +140,13 @@ pub async fn destroy_session(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [DELETE /session]");
 
-    let cookie = match cookies.get_private("__Host-id") {
+    let cookie = match cookies.get_private("sid") {
         Some(c) => {
-            trace!("Found __Host-id cookie.");
+            trace!("Found sid cookie.");
             c
         }
         None => {
-            trace!("__Host-id cookie not found.");
+            trace!("sid cookie not found.");
             return Err(RequestError::MissingSessionId);
         }
     };
