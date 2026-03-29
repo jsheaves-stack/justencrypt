@@ -314,13 +314,20 @@ pub async fn delete_file(
     trace!("Entering route [DELETE /file/{}]", file_path);
 
     let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.read().await;
-    let user_path = session.get_user_path();
+    let (user_path, encoded_file_name) = {
+        let session = auth.session.read().await;
+        let user_path = session.get_user_path();
+        let encoded_file_name = session.get_encoded_file_name(file_path_buf.clone()).await?;
+        (user_path, encoded_file_name)
+    };
 
-    let encoded_file_name = session.get_encoded_file_name(file_path_buf.clone()).await?;
     let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
-    session.delete_file(file_path_buf).await?;
+    {
+        let session = auth.session.read().await;
+        session.delete_file(file_path_buf).await?;
+    }
+
     remove_sharded_path(&user_path, &encoded_file_path)
         .await
         .map_err(|e| {
@@ -340,15 +347,16 @@ pub async fn patch_file(
     trace!("Entering route [PATCH /file/{}]", file_path);
 
     let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.read().await;
 
     if let Some(new_name) = &patch_data.file_name {
+        let session = auth.session.read().await;
         session
             .rename_file(file_path_buf.clone(), new_name.clone())
             .await?;
     }
 
     if let Some(destination_folder) = &patch_data.parent_folder_path {
+        let session = auth.session.read().await;
         session
             .move_file(file_path_buf, destination_folder.clone())
             .await?;

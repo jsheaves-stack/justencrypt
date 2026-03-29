@@ -23,10 +23,11 @@ pub async fn get_folder(
     trace!("Entering route [GET /folder/{}]", folder_path);
 
     let folder_path_buf = folder_path.to_path_buf();
-    let session = auth.session.read().await;
+    let folder_contents = {
+        let session = auth.session.read().await;
+        session.get_folder(folder_path_buf).await?
+    };
 
-    let folder_contents = session.get_folder(folder_path_buf).await?;
-    
     Ok(Json(folder_contents))
 }
 
@@ -38,12 +39,13 @@ pub async fn create_folder(
     trace!("Entering route [PUT /folder/{}]", folder_path);
 
     let folder_path_buf = folder_path.to_path_buf();
-    let session = auth.session.read().await;
-
-    session.add_folder(folder_path_buf).await.map_err(|e| {
-        error!("Failed to add folder: {}", e);
-        RequestError::FailedToCreateFolder
-    })?;
+    {
+        let session = auth.session.read().await;
+        session.add_folder(folder_path_buf).await.map_err(|e| {
+            error!("Failed to add folder: {}", e);
+            RequestError::FailedToCreateFolder
+        })?;
+    }
 
     Ok(RequestSuccess::Created)
 }
