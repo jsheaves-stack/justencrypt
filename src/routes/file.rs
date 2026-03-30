@@ -59,6 +59,16 @@ pub async fn init_upload(
 
     let mut active_uploads = session.active_uploads.lock().await;
 
+    let max_uploads = std::env::var("JUSTENCRYPT_MAX_ACTIVE_UPLOADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok());
+
+    if let Some(limit) = max_uploads {
+        if active_uploads.len() >= limit {
+            return Err(RequestError::TooManyActiveUploads);
+        }
+    }
+
     for (id, state) in active_uploads.iter() {
         if let Ok(last_updated) = state
             .last_updated

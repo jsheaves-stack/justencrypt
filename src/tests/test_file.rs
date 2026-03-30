@@ -37,16 +37,11 @@ async fn test_put_file() {
     let session_lock = session_guard.get(&session_id).unwrap().clone();
     let session = session_lock.clone();
 
-    let file_entry = Some(
-        session
-            .get_encoded_file_name(file_path.into())
-            .await
-            .unwrap(),
-    );
+    let encoded_file_name = session
+        .get_encoded_file_name(file_path.into())
+        .await
+        .unwrap();
 
-    assert!(file_entry.is_some());
-
-    let encoded_file_name = file_entry.unwrap();
     let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
 
     assert!(tokio::fs::metadata(sharded_path).await.is_ok());
@@ -191,8 +186,8 @@ async fn test_get_file_range_cross_chunks() {
     let file_path = "range_test_cross.txt";
     let chunk_size = 64 * 1024;
     let mut file_content = vec![0u8; chunk_size * 2];
-    for i in 0..file_content.len() {
-        file_content[i] = (i % 256) as u8;
+    for (i, byte) in file_content.iter_mut().enumerate() {
+        *byte = (i % 256) as u8;
     }
 
     client

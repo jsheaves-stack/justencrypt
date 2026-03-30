@@ -105,15 +105,29 @@ pub async fn delete_folder(
                     get_sharded_path(user_path.join(".cache"), &name).await;
 
                 if encoded_thumbnail_file_path.exists() {
-                    let _ = remove_sharded_path(&user_path, &encoded_thumbnail_file_path).await;
+                    if let Err(e) =
+                        remove_sharded_path(&user_path, &encoded_thumbnail_file_path).await
+                    {
+                        warn!(
+                            "Failed to remove thumbnail file {:?}: {}",
+                            encoded_thumbnail_file_path, e
+                        );
+                    }
                 }
             }
 
-            let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+            if let Err(e) = remove_sharded_path(&user_path, &encoded_file_path).await {
+                warn!(
+                    "Failed to remove physical file {:?}: {}",
+                    encoded_file_path, e
+                );
+            }
 
             {
                 let session = auth.session.clone();
-                let _ = session.delete_file_by_id(file.id).await;
+                if let Err(e) = session.delete_file_by_id(file.id).await {
+                    warn!("Failed to delete file entry {} from db: {}", file.id, e);
+                }
             }
         }
 
@@ -139,7 +153,12 @@ pub async fn delete_folder(
     for current_folder_id in folders_to_delete.into_iter().rev() {
         if current_folder_id != folder_id {
             let session = auth.session.clone();
-            let _ = session.delete_folder_by_id(current_folder_id).await;
+            if let Err(e) = session.delete_folder_by_id(current_folder_id).await {
+                warn!(
+                    "Failed to delete folder entry {} from db: {}",
+                    current_folder_id, e
+                );
+            }
         }
     }
 

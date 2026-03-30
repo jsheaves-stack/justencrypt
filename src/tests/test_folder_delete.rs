@@ -65,7 +65,7 @@ async fn test_delete_folder_success() {
 
     // The DB query should fail because the folder doesn't exist
     let lookup_result = session.get_folder_id(parent_folder.into()).await;
-    assert!(lookup_result.is_err() || lookup_result.unwrap() == None);
+    assert!(lookup_result.is_err() || lookup_result.unwrap().is_none());
 }
 
 #[rocket::async_test]

@@ -59,6 +59,9 @@ pub enum RequestError {
 
     #[error("Internal server error")]
     InternalServerError,
+
+    #[error("Too many active uploads")]
+    TooManyActiveUploads,
 }
 
 impl From<DbError> for RequestError {

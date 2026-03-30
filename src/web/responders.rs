@@ -42,104 +42,37 @@ impl<'r> Responder<'r, 'r> for RangeResponder {
 
 impl<'r> Responder<'r, 'static> for RequestError {
     fn respond_to(self, _: &'r Request<'_>) -> Result<'static> {
-        let response = match self {
-            RequestError::MissingSessionId => Response::build()
-                .status(Status::Unauthorized)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
+        let status = match self {
+            RequestError::MissingSessionId
+            | RequestError::MissingActiveSession
+            | RequestError::FailedToCreateUserSession
+            | RequestError::InvalidApiKey
+            | RequestError::Unauthorized => Status::Unauthorized,
 
-            RequestError::MissingActiveSession => Response::build()
-                .status(Status::Unauthorized)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
+            RequestError::FailedToProcessData
+            | RequestError::FailedToWriteData
+            | RequestError::FailedToRemoveFile
+            | RequestError::FailedToAddFile
+            | RequestError::FailedToCreateFolder
+            | RequestError::FailedToReadFolderContents
+            | RequestError::FailedToMoveFile
+            | RequestError::FailedToRenameFile
+            | RequestError::InternalServerError => Status::InternalServerError,
 
-            RequestError::FailedToProcessData => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToWriteData => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToCreateUserSession => Response::build()
-                .status(Status::Unauthorized)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::UnsupportedFileType => Response::build()
-                .status(Status::UnsupportedMediaType)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToRemoveFile => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToAddFile => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToCreateFolder => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToReadFolderContents => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::PasswordDoesNotMeetRequirements => Response::build()
-                .status(Status::BadRequest)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToMoveFile => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::FailedToRenameFile => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::InvalidApiKey => Response::build()
-                .status(Status::Unauthorized)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::NotFound => Response::build()
-                .status(Status::NotFound)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::Unauthorized => Response::build()
-                .status(Status::Unauthorized)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::BadRequest(_) => Response::build()
-                .status(Status::BadRequest)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::RangeNotSatisfiable => Response::build()
-                .status(Status::RangeNotSatisfiable)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
-
-            RequestError::InternalServerError => Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(self.to_string().len(), Cursor::new(self.to_string()))
-                .ok(),
+            RequestError::UnsupportedFileType => Status::UnsupportedMediaType,
+            RequestError::PasswordDoesNotMeetRequirements | RequestError::BadRequest(_) => {
+                Status::BadRequest
+            }
+            RequestError::NotFound => Status::NotFound,
+            RequestError::RangeNotSatisfiable => Status::RangeNotSatisfiable,
+            RequestError::TooManyActiveUploads => Status::TooManyRequests,
         };
 
-        response
+        let message = self.to_string();
+        Response::build()
+            .status(status)
+            .sized_body(message.len(), Cursor::new(message))
+            .ok()
     }
 }
 
