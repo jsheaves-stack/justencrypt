@@ -14,8 +14,13 @@ pub struct ChunkEncryptor {
 
 impl ChunkEncryptor {
     pub async fn new(file_path: PathBuf) -> Result<Self, Box<dyn Error>> {
-        let metadata = FileEncryptionMetadata::new();
+        Self::new_with_metadata(file_path, FileEncryptionMetadata::new()).await
+    }
 
+    pub async fn new_with_metadata(
+        file_path: PathBuf,
+        metadata: FileEncryptionMetadata,
+    ) -> Result<Self, Box<dyn Error>> {
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent).await?;
         }

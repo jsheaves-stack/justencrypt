@@ -304,54 +304,6 @@ impl UserSession {
         Ok(result)
     }
 
-    pub async fn get_encoded_thumbnail_file_name_by_file_id(
-        &self,
-        file_id: i32,
-    ) -> Result<Option<String>, DbError> {
-        trace!(
-            "Entering UserSession::get_encoded_thumbnail_file_name_by_file_id for id: {}",
-            file_id
-        );
-
-        let result = self
-            .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_encoded_thumbnail_file_name_by_file_id");
-                sqlite::get_encoded_thumbnail_file_name_by_file_id(&db, file_id)
-            })
-            .await?;
-
-        trace!("Exiting UserSession::get_encoded_thumbnail_file_name_by_file_id.");
-
-        Ok(result)
-    }
-
-    pub async fn add_thumbnail(
-        &self,
-        file_path: PathBuf,
-        encoded_name: String,
-        metadata: FileEncryptionMetadata,
-    ) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::add_thumbnail for path: {:?}",
-            file_path
-        );
-
-        self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for add_thumbnail");
-            sqlite::add_thumbnail(
-                &mut db,
-                file_path.to_str().ok_or(DbError::InvalidPath)?,
-                &encoded_name,
-                metadata,
-            )
-        })
-        .await?;
-
-        trace!("Exiting UserSession::add_thumbnail successfully.");
-
-        Ok(())
-    }
-
     pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<FolderEntry>, DbError> {
         trace!(
             "Entering UserSession::get_folder for path: {:?}",
@@ -366,51 +318,6 @@ impl UserSession {
             .await?;
 
         trace!("Exiting UserSession::get_folder.");
-
-        Ok(result)
-    }
-
-    pub async fn get_thumbnail(
-        &self,
-        file_path: PathBuf,
-    ) -> Result<FileEncryptionMetadata, DbError> {
-        trace!(
-            "Entering UserSession::get_thumbnail for path: {:?}",
-            file_path
-        );
-
-        let result = self
-            .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_thumbnail");
-                sqlite::get_thumbnail(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
-            })
-            .await?;
-
-        trace!("Exiting UserSession::get_thumbnail.");
-
-        Ok(result)
-    }
-
-    pub async fn get_encoded_thumbnail_file_name(
-        &self,
-        file_path: PathBuf,
-    ) -> Result<Option<String>, DbError> {
-        trace!(
-            "Entering UserSession::get_encoded_thumbnail_file_name for path: {:?}",
-            file_path
-        );
-
-        let result = self
-            .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_encoded_thumbnail_file_name");
-                sqlite::get_encoded_thumbnail_file_name(
-                    &db,
-                    file_path.to_str().ok_or(DbError::InvalidPath)?,
-                )
-            })
-            .await?;
-
-        trace!("Exiting UserSession::get_encoded_thumbnail_file_name.");
 
         Ok(result)
     }

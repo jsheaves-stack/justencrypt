@@ -27,17 +27,6 @@ pub fn get_migrations() -> Migrations<'static> {
                 UNIQUE(encoded_name)
             );
 
-            CREATE TABLE IF NOT EXISTS thumbnails (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                encoded_name TEXT NOT NULL,
-                file_id INTEGER,
-                key BLOB NOT NULL,
-                encryption_version INTEGER NOT NULL DEFAULT 1,
-                total_size BIGINT NOT NULL DEFAULT 0,
-                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
-                UNIQUE(encoded_name)
-            );
-
             INSERT OR IGNORE INTO folders (id, parent_folder_id, name) VALUES (1, NULL, 'ROOT');
         "#,
     )])

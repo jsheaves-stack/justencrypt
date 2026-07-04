@@ -279,77 +279,6 @@ pub fn get_encoded_file_name(
     Ok(result)
 }
 
-pub fn get_encoded_thumbnail_file_name(
-    db: &PooledConnection<SqliteConnectionManager>,
-    full_file_path: &str,
-) -> Result<Option<String>, DbError> {
-    trace!(
-        "Entering sqlite::get_encoded_thumbnail_file_name with full_file_path: '{}'",
-        full_file_path
-    );
-    let path = Path::new(full_file_path.trim_matches('/'));
-    let parent_path = path.parent().unwrap_or(Path::new(""));
-    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
-    trace!("Getting parent folder ID for path: '{}'", parent_str);
-
-    let parent_folder_id = get_folder_id(db, parent_str)
-        .map_err(|e| {
-            error!(
-                "Failed to get parent folder id for the provided path: {}",
-                e
-            );
-            DbError::FailedToGetFolderIdFromPath(e.to_string())
-        })?
-        .ok_or_else(|| {
-            error!("No folder id was returned from the db");
-            DbError::FailedToGetFolderIdFromPath(
-                "No folder id was returned from the db".to_string(),
-            )
-        })?;
-    trace!("Parent folder ID found: {}", parent_folder_id);
-
-    let file_name = path
-        .file_name()
-        .ok_or(DbError::MissingFileName)?
-        .to_string_lossy();
-    trace!("Looking for file name: '{}' to get its ID.", file_name);
-
-    let file_id: i32 = match db
-        .query_row(
-            "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-            params![parent_folder_id, file_name],
-            |row| row.get(0),
-        )
-        .optional()
-    {
-        Ok(Some(id)) => id,
-        Ok(None) => return Err(DbError::NotFound),
-        Err(e) => return Err(DbError::Rusqlite(e)),
-    };
-    trace!("File ID found: {}. Looking for its thumbnail.", file_id);
-
-    let result = db
-        .query_row(
-            "SELECT encoded_name FROM thumbnails WHERE file_id = ?1",
-            params![file_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| {
-            error!(
-                "Failed to get encoded thumbnail file name from the db: {}",
-                e
-            );
-            DbError::FailedToGetFileFromDb(e.to_string())
-        })?;
-
-    trace!(
-        "Exiting sqlite::get_encoded_thumbnail_file_name with result: {:?}",
-        result
-    );
-    Ok(result)
-}
-
 pub fn add_file(
     db: &mut PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
@@ -512,85 +441,6 @@ pub fn get_file(
     Ok(result)
 }
 
-pub fn add_thumbnail(
-    db: &mut PooledConnection<SqliteConnectionManager>,
-    full_file_path: &str,
-    encoded_name: &str,
-    metadata: FileEncryptionMetadata,
-) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::add_thumbnail with full_file_path: '{}', encoded_name: '{}'",
-        full_file_path,
-        encoded_name
-    );
-    let path = Path::new(full_file_path.trim_matches('/'));
-    let parent_path = path.parent().unwrap_or(Path::new(""));
-    let file_name = path
-        .file_name()
-        .ok_or(DbError::MissingFileName)?
-        .to_string_lossy();
-    trace!(
-        "Parsed file parts: parent_path: '{:?}', file_name: '{}'",
-        parent_path,
-        file_name
-    );
-
-    let parent_folder_id = get_folder_id(db, &parent_path.to_string_lossy())
-        .map_err(|e| {
-            error!(
-                "Failed to get parent folder id for the provided path: {}",
-                e
-            );
-            DbError::FailedToGetFolderIdFromPath(e.to_string())
-        })?
-        .ok_or_else(|| {
-            error!("No folder id was returned from the db");
-            DbError::FailedToGetFolderIdFromPath(
-                "No folder id was returned from the db".to_string(),
-            )
-        })?;
-    trace!("Parent folder ID found: {}", parent_folder_id);
-
-    let file_id: i32 = match db
-        .query_row(
-            "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-            params![parent_folder_id, file_name],
-            |row| row.get(0),
-        )
-        .optional()
-    {
-        Ok(Some(id)) => id,
-        Ok(None) => return Err(DbError::NotFound),
-        Err(e) => return Err(DbError::Rusqlite(e)),
-    };
-    trace!("Associated file ID found: {}", file_id);
-
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    trace!("Transaction started for adding thumbnail.");
-
-    tx.execute(
-        "INSERT OR IGNORE INTO thumbnails 
-        (encoded_name, file_id, key, encryption_version, total_size) 
-        VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
-            encoded_name,
-            file_id,
-            metadata.key.unprotected_as_bytes(),
-            metadata.encryption_version,
-            metadata.total_size as i64,
-        ],
-    )
-    .map(|_| ())
-    .map_err(|e| {
-        error!("Failed to add thumbnail file to the db: {}", e);
-        DbError::FailedToAddFileToDb(e.to_string())
-    })?;
-    trace!("Thumbnail insert executed.");
-
-    tx.commit()?;
-    trace!("Transaction committed. Exiting sqlite::add_thumbnail successfully.");
-    Ok(())
-}
 
 pub fn get_file_decryption_data(
     db: &PooledConnection<SqliteConnectionManager>,
@@ -640,82 +490,7 @@ pub fn get_file_decryption_data(
     })
 }
 
-pub fn get_thumbnail(
-    db: &PooledConnection<SqliteConnectionManager>,
-    file_path_str: &str,
-) -> Result<FileEncryptionMetadata, DbError> {
-    trace!(
-        "Entering sqlite::get_thumbnail with file_path_str: '{}'",
-        file_path_str
-    );
-    let path = Path::new(file_path_str.trim_matches('/'));
-    let parent_path = path.parent().unwrap_or(Path::new(""));
-    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
-    trace!("Getting parent folder ID for path: '{}'", parent_str);
 
-    let parent_folder_id = get_folder_id(db, parent_str)
-        .map_err(|e| {
-            error!(
-                "Failed to get parent folder id for the provided path: {}",
-                e
-            );
-            DbError::FailedToGetFolderIdFromPath(e.to_string())
-        })?
-        .ok_or_else(|| {
-            error!("No folder id was returned from the db");
-            DbError::FailedToGetFolderIdFromPath(
-                "No folder id was returned from the db".to_string(),
-            )
-        })?;
-    trace!("Parent folder ID found: {}", parent_folder_id);
-
-    let file_name = path
-        .file_name()
-        .ok_or(DbError::MissingFileName)?
-        .to_string_lossy();
-    trace!("Looking for file name: '{}' to get its ID.", file_name);
-
-    let file_id: i32 = match db
-        .query_row(
-            "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-            params![parent_folder_id, file_name],
-            |row| row.get(0),
-        )
-        .optional()
-    {
-        Ok(Some(id)) => id,
-        Ok(None) => return Err(DbError::NotFound),
-        Err(e) => return Err(DbError::Rusqlite(e)),
-    };
-    trace!(
-        "File ID found: {}. Getting its thumbnail metadata.",
-        file_id
-    );
-
-    db.query_row(
-        "SELECT key, encryption_version, total_size
-        FROM thumbnails
-        WHERE file_id = ?1",
-        params![file_id],
-        |row| {
-            let key_blob: Vec<u8> = row.get(0)?;
-            let total_size_i64: i64 = row.get(2)?;
-            Ok(FileEncryptionMetadata {
-                key: SecretKey::from_slice(&key_blob).unwrap(),
-                encryption_version: row.get(1)?,
-                total_size: total_size_i64 as u64,
-            })
-        },
-    )
-    .map(|metadata| {
-        trace!("Exiting sqlite::get_thumbnail successfully.");
-        Ok(metadata)
-    })
-    .map_err(|e| {
-        error!("Failed to get thumbnail file from the db: {}", e);
-        DbError::FailedToGetFileFromDb(e.to_string())
-    })?
-}
 
 #[derive(Deserialize, Serialize)]
 pub struct FolderEntry {
@@ -947,36 +722,6 @@ pub fn get_child_folders(
         folders.len()
     );
     Ok(folders)
-}
-
-pub fn get_encoded_thumbnail_file_name_by_file_id(
-    db: &PooledConnection<SqliteConnectionManager>,
-    file_id: i32,
-) -> Result<Option<String>, DbError> {
-    trace!(
-        "Entering sqlite::get_encoded_thumbnail_file_name_by_file_id with file_id: {}",
-        file_id
-    );
-    let result = db
-        .query_row(
-            "SELECT encoded_name FROM thumbnails WHERE file_id = ?1",
-            params![file_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| {
-            error!(
-                "Failed to get encoded thumbnail file name from the db: {}",
-                e
-            );
-            DbError::FailedToGetFileFromDb(e.to_string())
-        })?;
-
-    trace!(
-        "Exiting sqlite::get_encoded_thumbnail_file_name_by_file_id with result: {:?}",
-        result
-    );
-    Ok(result)
 }
 
 pub fn delete_file_by_id(

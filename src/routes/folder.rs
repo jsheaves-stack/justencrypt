@@ -91,28 +91,17 @@ pub async fn delete_folder(
         for file in files {
             let encoded_file_path = get_sharded_path(user_path.clone(), &file.encoded_name).await;
 
-            let encoded_thumbnail_file_name = {
-                let session = auth.session.clone();
-                session
-                    .get_encoded_thumbnail_file_name_by_file_id(file.id)
-                    .await
-                    .ok()
-                    .flatten()
-            };
+            let encoded_thumbnail_file_path =
+                get_sharded_path(user_path.join(".cache"), &file.encoded_name).await;
 
-            if let Some(name) = encoded_thumbnail_file_name {
-                let encoded_thumbnail_file_path =
-                    get_sharded_path(user_path.join(".cache"), &name).await;
-
-                if encoded_thumbnail_file_path.exists() {
-                    if let Err(e) =
-                        remove_sharded_path(&user_path, &encoded_thumbnail_file_path).await
-                    {
-                        warn!(
-                            "Failed to remove thumbnail file {:?}: {}",
-                            encoded_thumbnail_file_path, e
-                        );
-                    }
+            if encoded_thumbnail_file_path.exists() {
+                if let Err(e) =
+                    remove_sharded_path(&user_path, &encoded_thumbnail_file_path).await
+                {
+                    warn!(
+                        "Failed to remove thumbnail file {:?}: {}",
+                        encoded_thumbnail_file_path, e
+                    );
                 }
             }
 
