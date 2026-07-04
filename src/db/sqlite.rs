@@ -22,13 +22,39 @@ pub fn create_user_db_connection(
         db_path
     );
 
+    let busy_timeout_ms = std::env::var("JUSTENCRYPT_DB_BUSY_TIMEOUT_MS")
+        .unwrap_or_else(|_| "60000".to_string())
+        .parse::<u64>()
+        .unwrap_or(60000);
+
+    let synchronous_mode = std::env::var("JUSTENCRYPT_DB_SYNCHRONOUS_MODE")
+        .unwrap_or_else(|_| "NORMAL".to_string());
+
+    let cache_size_kb = std::env::var("JUSTENCRYPT_DB_CACHE_SIZE_KB")
+        .unwrap_or_else(|_| "16000".to_string())
+        .parse::<i64>()
+        .unwrap_or(16000);
+
+    let temp_store_mode = std::env::var("JUSTENCRYPT_DB_TEMP_STORE")
+        .unwrap_or_else(|_| "MEMORY".to_string());
+
+    let journal_size_limit_bytes = std::env::var("JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES")
+        .unwrap_or_else(|_| "67108864".to_string())
+        .parse::<i64>()
+        .unwrap_or(67108864);
+
+    let connection_timeout_seconds = std::env::var("JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS")
+        .unwrap_or_else(|_| "30".to_string())
+        .parse::<u64>()
+        .unwrap_or(30);
+
     // Open a connection to validate the password and run migrations.
     // This fails immediately if the password is wrong, avoiding r2d2's exponential backoff and retry loops.
     {
         trace!("Manually opening DB connection for password validation and migrations.");
         let mut conn = rusqlite::Connection::open(&db_path)?;
 
-        conn.busy_timeout(Duration::from_millis(60000))?;
+        conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
         if let Err(e) = conn.query_row("SELECT 1", [], |_| Ok(())) {
@@ -48,7 +74,7 @@ pub fn create_user_db_connection(
 
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
         trace!("Initializing new pool DB connection.");
-        conn.busy_timeout(Duration::from_millis(60000))?;
+        conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
         conn.query_row("SELECT 1", [], |_| Ok(()))?;
@@ -68,6 +94,12 @@ pub fn create_user_db_connection(
 
         trace!("Setting PRAGMA foreign_keys = ON.");
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
+        trace!("Applying performance PRAGMAs: synchronous={}, cache_size=-{}, temp_store={}, journal_size_limit={}", synchronous_mode, cache_size_kb, temp_store_mode, journal_size_limit_bytes);
+        conn.execute_batch(&format!(
+            "PRAGMA synchronous = {}; PRAGMA cache_size = -{}; PRAGMA temp_store = {}; PRAGMA journal_size_limit = {};",
+            synchronous_mode, cache_size_kb, temp_store_mode, journal_size_limit_bytes
+        ))?;
 
         Ok(())
     });
@@ -91,6 +123,7 @@ pub fn create_user_db_connection(
         .max_size(max_connections)
         .min_idle(Some(min_connections))
         .idle_timeout(Some(Duration::from_secs(idle_timeout_seconds)))
+        .connection_timeout(Duration::from_secs(connection_timeout_seconds))
         .build(db_manager)
         .map_err(DbError::PoolError)?;
 
@@ -107,6 +140,14 @@ fn get_folder_id_and_create_if_missing(
         "Entering sqlite::get_folder_id_and_create_if_missing with folder_path_str: '{}'",
         folder_path_str
     );
+    if let Some(id) = get_folder_id(db, folder_path_str)? {
+        trace!(
+            "Folder '{}' already exists with ID: {}. Fast-path exit without transaction.",
+            folder_path_str,
+            id
+        );
+        return Ok(id);
+    }
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -367,7 +408,16 @@ pub fn delete_file(
         file_name
     );
 
-    let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
+    let parent_folder_id = match get_folder_id(db, &parent_path.to_string_lossy())? {
+        Some(id) => id,
+        None => {
+            trace!(
+                "Parent folder '{:?}' not found during delete. File cannot exist.",
+                parent_path
+            );
+            return Ok(());
+        }
+    };
     trace!("Parent folder ID is: {}", parent_folder_id);
 
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
