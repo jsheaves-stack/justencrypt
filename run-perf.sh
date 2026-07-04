@@ -44,6 +44,7 @@ read -p "$(echo -e ${YELLOW}"Test Duration (e.g., 2m, 5m) [2m]: "${NC})" DURATIO
 read -p "$(echo -e ${YELLOW}"Sleep delay between iterations (seconds) [0.5]: "${NC})" SLEEP; SLEEP=${SLEEP:-0.5}
 
 echo -e "\n${BLUE}--- File Configuration ---${NC}"
+read -p "$(echo -e ${YELLOW}"Upload Mode (chunked or stream) [chunked]: "${NC})" UPLOAD_MODE; UPLOAD_MODE=${UPLOAD_MODE:-chunked}
 read -p "$(echo -e ${YELLOW}"Number of files per user session [10]: "${NC})" FILES_COUNT; FILES_COUNT=${FILES_COUNT:-10}
 read -p "$(echo -e ${YELLOW}"Minimum file size (MB) [1]: "${NC})" MIN_SIZE; MIN_SIZE=${MIN_SIZE:-1}
 read -p "$(echo -e ${YELLOW}"Maximum file size (MB) [100]: "${NC})" MAX_SIZE; MAX_SIZE=${MAX_SIZE:-100}
@@ -52,7 +53,7 @@ echo -e "\n${BLUE}--- Preparing Results Directory ---${NC}"
 mkdir -p perf-results
 
 echo -e "\n${BLUE}--- Starting Performance Test ---${NC}"
-echo -e "${GREEN}Config: ${VUS} VUs, ${FILES_COUNT} files (${MIN_SIZE}-${MAX_SIZE} MB) each.${NC}"
+echo -e "${GREEN}Config: ${VUS} VUs, ${FILES_COUNT} files (${MIN_SIZE}-${MAX_SIZE} MB) each. Upload Mode: ${UPLOAD_MODE}.${NC}"
 
 docker run --rm \
     --ulimit memlock=-1:-1 \
@@ -60,6 +61,7 @@ docker run --rm \
     -e VUS="$VUS" \
     -e DURATION="$DURATION" \
     -e SLEEP="$SLEEP" \
+    -e UPLOAD_MODE="$UPLOAD_MODE" \
     -e FILES_COUNT="$FILES_COUNT" \
     -e MIN_SIZE="$MIN_SIZE" \
     -e MAX_SIZE="$MAX_SIZE" \

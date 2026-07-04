@@ -6,7 +6,7 @@ use rocket::{
     http::{Cookie, CookieJar, SameSite},
     options, post,
     serde::json::Json,
-    tokio::{sync::RwLock, task},
+    tokio::task,
     State,
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -85,21 +85,19 @@ pub async fn create_session(
 
     trace!("Attempting to open user session for user: {}", user_name);
 
-    let session = Arc::new(RwLock::new(
-        match UserSession::open(&user_name, &passphrase).await {
-            Ok(a) => {
-                trace!("User session opened successfully.");
-                a
-            }
-            Err(e) => {
-                error!("Failed to create user session: {}", e);
-                return Err(RequestError::Unauthorized);
-            }
-        },
-    ));
+    let session = Arc::new(match UserSession::open(&user_name, &passphrase).await {
+        Ok(a) => {
+            trace!("User session opened successfully.");
+            a
+        }
+        Err(e) => {
+            warn!("Failed to open user session: {}", e);
+            return Err(RequestError::Unauthorized);
+        }
+    });
 
     let (user_token, session_id) = {
-        let session_read = session.read().await;
+        let session_read = session.clone();
         (
             session_read.user_token.expose_secret().clone(),
             session_read.session_id.clone(),
@@ -108,9 +106,9 @@ pub async fn create_session(
 
     trace!("Generated new session ID: {}", session_id);
 
-    let mut cookie = Cookie::new("__Host-id", user_token.clone());
+    let mut cookie = Cookie::new("sid", user_token.clone());
     cookie.set_same_site(Some(SameSite::Strict));
-    cookie.set_secure(true);
+    cookie.set_secure(false);
     cookies.add_private(cookie);
 
     trace!("Session cookie added to jar.");
@@ -140,13 +138,13 @@ pub async fn destroy_session(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [DELETE /session]");
 
-    let cookie = match cookies.get_private("__Host-id") {
+    let cookie = match cookies.get_private("sid") {
         Some(c) => {
-            trace!("Found __Host-id cookie.");
+            trace!("Found sid cookie.");
             c
         }
         None => {
-            trace!("__Host-id cookie not found.");
+            trace!("sid cookie not found.");
             return Err(RequestError::MissingSessionId);
         }
     };

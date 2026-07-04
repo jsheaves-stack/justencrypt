@@ -37,11 +37,11 @@ echo "Pre-initializing databases for $VUS users (Warm-up)..."
 for i in $(seq 1 $VUS); do
   SUCCESS=false
   for attempt in {1..3}; do
-    RESPONSE=$(curl -s -w "%{http_code}" -o /dev/null -X POST http://localhost:8000/session/create \
+    RESPONSE=$(curl -s -w "%{http_code}" -o /dev/null -X POST http://localhost:8000/session \
       -H "Content-Type: application/json" \
       -d "{\"username\": \"user_$i\", \"password\": \"TestPassword123!@#Stronger\"}")
-    
-    if [ "$RESPONSE" == "204" ]; then
+
+    if [ "$RESPONSE" == "201" ]; then
       if [ -f "user_data/user_$i/user_$i.db" ]; then
         SUCCESS=true
         break
@@ -89,6 +89,7 @@ k6 run \
   -e VUS="$VUS" \
   -e DURATION="$DURATION" \
   -e SLEEP="$SLEEP" \
+  -e UPLOAD_MODE="$UPLOAD_MODE" \
   -e FILES_COUNT="$FILES_COUNT" \
   -e MIN_SIZE="$MIN_SIZE" \
   -e MAX_SIZE="$MAX_SIZE" \

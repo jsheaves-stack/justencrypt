@@ -1,14 +1,20 @@
 use crate::{
     db::sqlite::{self, FolderEntry},
-    encryption::FileEncryptionMetadata,
+    encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
     enums::db_error::DbError,
 };
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::tokio::task;
+use rocket::tokio::{sync::Mutex, task};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use std::{env, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    path::PathBuf,
+    sync::Arc,
+    time::SystemTime,
+};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct EncodedFile {
@@ -16,13 +22,23 @@ pub struct EncodedFile {
     pub encoded_name: String,
 }
 
+#[derive(Clone)]
+pub struct UploadState {
+    pub file_path: PathBuf,
+    pub encoded_file_name: String,
+    pub written_chunks: Arc<Mutex<HashSet<u64>>>,
+    pub encryptor: Arc<Mutex<ChunkEncryptor>>,
+    pub last_updated: Arc<Mutex<SystemTime>>,
+}
+
 pub struct UserSession {
     user_path: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
     pub username: String,
-    pub created_at: std::time::SystemTime,
+    pub created_at: SystemTime,
     pub session_id: String,
     pub user_token: SecretString,
+    pub active_uploads: Mutex<HashMap<String, UploadState>>,
 }
 
 impl UserSession {
@@ -69,9 +85,10 @@ impl UserSession {
                 user_path,
                 db_pool,
                 username: user_name_clone,
-                created_at: std::time::SystemTime::now(),
+                created_at: SystemTime::now(),
                 session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
                 user_token: SecretString::from(uuid::Uuid::new_v4().hyphenated().to_string()),
+                active_uploads: Mutex::new(HashMap::new()),
             })
         })
         .await
@@ -80,6 +97,22 @@ impl UserSession {
         trace!("Exiting UserSession::open successfully.");
 
         result
+    }
+
+    async fn with_db<F, R>(&self, f: F) -> Result<R, DbError>
+    where
+        F: FnOnce(r2d2::PooledConnection<SqliteConnectionManager>) -> Result<R, DbError>
+            + Send
+            + 'static,
+        R: Send + 'static,
+    {
+        let db_pool = self.db_pool.clone();
+        task::spawn_blocking(move || {
+            let db = db_pool.get()?;
+            f(db)
+        })
+        .await
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
     }
 
     pub fn get_user_path(&self) -> PathBuf {
@@ -97,18 +130,15 @@ impl UserSession {
             file_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_encoded_file_name");
-            let db = db_pool.get()?;
-            sqlite::get_encoded_file_name(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_encoded_file_name");
+                sqlite::get_encoded_file_name(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_encoded_file_name.");
-        result
+        Ok(result)
     }
 
     pub async fn add_file(
@@ -119,11 +149,8 @@ impl UserSession {
     ) -> Result<(), DbError> {
         trace!("Entering UserSession::add_file for path: {:?}", file_path);
 
-        let db_pool = self.db_pool.clone();
-
-        task::spawn_blocking(move || {
+        self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for add_file");
-            let mut db = db_pool.get()?;
             sqlite::add_file(
                 &mut db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
@@ -131,8 +158,7 @@ impl UserSession {
                 metadata,
             )
         })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+        .await?;
 
         trace!("Exiting UserSession::add_file successfully.");
 
@@ -145,15 +171,11 @@ impl UserSession {
             file_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        task::spawn_blocking(move || {
+        self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for delete_file");
-            let mut db = db_pool.get()?;
             sqlite::delete_file(&mut db, file_path.to_str().ok_or(DbError::InvalidPath)?)
         })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+        .await?;
 
         trace!("Exiting UserSession::delete_file successfully.");
 
@@ -166,15 +188,11 @@ impl UserSession {
             folder_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        task::spawn_blocking(move || {
+        self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for add_folder");
-            let mut db = db_pool.get()?;
             sqlite::add_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+        .await?;
 
         trace!("Exiting UserSession::add_folder successfully.");
 
@@ -187,15 +205,11 @@ impl UserSession {
             folder_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        task::spawn_blocking(move || {
+        self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for delete_folder");
-            let mut db = db_pool.get()?;
             sqlite::delete_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+        .await?;
 
         trace!("Exiting UserSession::delete_folder successfully.");
 
@@ -208,15 +222,11 @@ impl UserSession {
             folder_id
         );
 
-        let db_pool = self.db_pool.clone();
-
-        task::spawn_blocking(move || {
+        self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for delete_folder_by_id");
-            let mut db = db_pool.get()?;
             sqlite::delete_folder_by_id(&mut db, folder_id)
         })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+        .await?;
 
         trace!("Exiting UserSession::delete_folder_by_id successfully.");
 
@@ -229,15 +239,11 @@ impl UserSession {
             file_id
         );
 
-        let db_pool = self.db_pool.clone();
-
-        task::spawn_blocking(move || {
+        self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for delete_file_by_id");
-            let mut db = db_pool.get()?;
             sqlite::delete_file_by_id(&mut db, file_id)
         })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+        .await?;
 
         trace!("Exiting UserSession::delete_file_by_id successfully.");
 
@@ -250,19 +256,16 @@ impl UserSession {
             folder_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_folder_id");
-            let db = db_pool.get()?;
-            sqlite::get_folder_id(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_folder_id");
+                sqlite::get_folder_id(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_folder_id.");
 
-        result
+        Ok(result)
     }
 
     pub async fn get_files_in_folder(&self, folder_id: i32) -> Result<Vec<EncodedFile>, DbError> {
@@ -271,19 +274,16 @@ impl UserSession {
             folder_id
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_files_in_folder");
-            let db = db_pool.get()?;
-            sqlite::get_files_in_folder(&db, folder_id)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_files_in_folder");
+                sqlite::get_files_in_folder(&db, folder_id)
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_files_in_folder.");
 
-        result
+        Ok(result)
     }
 
     pub async fn get_child_folders(&self, folder_id: i32) -> Result<Vec<i32>, DbError> {
@@ -292,19 +292,16 @@ impl UserSession {
             folder_id
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_child_folders");
-            let db = db_pool.get()?;
-            sqlite::get_child_folders(&db, folder_id)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_child_folders");
+                sqlite::get_child_folders(&db, folder_id)
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_child_folders.");
 
-        result
+        Ok(result)
     }
 
     pub async fn get_encoded_thumbnail_file_name_by_file_id(
@@ -316,19 +313,16 @@ impl UserSession {
             file_id
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_encoded_thumbnail_file_name_by_file_id");
-            let db = db_pool.get()?;
-            sqlite::get_encoded_thumbnail_file_name_by_file_id(&db, file_id)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_encoded_thumbnail_file_name_by_file_id");
+                sqlite::get_encoded_thumbnail_file_name_by_file_id(&db, file_id)
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_encoded_thumbnail_file_name_by_file_id.");
 
-        result
+        Ok(result)
     }
 
     pub async fn add_thumbnail(
@@ -342,11 +336,8 @@ impl UserSession {
             file_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        task::spawn_blocking(move || {
+        self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for add_thumbnail");
-            let mut db = db_pool.get()?;
             sqlite::add_thumbnail(
                 &mut db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
@@ -354,8 +345,7 @@ impl UserSession {
                 metadata,
             )
         })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+        .await?;
 
         trace!("Exiting UserSession::add_thumbnail successfully.");
 
@@ -368,19 +358,16 @@ impl UserSession {
             folder_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_folder");
-            let db = db_pool.get()?;
-            sqlite::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_folder");
+                sqlite::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_folder.");
 
-        result
+        Ok(result)
     }
 
     pub async fn get_thumbnail(
@@ -392,19 +379,16 @@ impl UserSession {
             file_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_thumbnail");
-            let db = db_pool.get()?;
-            sqlite::get_thumbnail(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_thumbnail");
+                sqlite::get_thumbnail(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_thumbnail.");
 
-        result
+        Ok(result)
     }
 
     pub async fn get_encoded_thumbnail_file_name(
@@ -416,22 +400,19 @@ impl UserSession {
             file_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_encoded_thumbnail_file_name");
-            let db = db_pool.get()?;
-            sqlite::get_encoded_thumbnail_file_name(
-                &db,
-                file_path.to_str().ok_or(DbError::InvalidPath)?,
-            )
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_encoded_thumbnail_file_name");
+                sqlite::get_encoded_thumbnail_file_name(
+                    &db,
+                    file_path.to_str().ok_or(DbError::InvalidPath)?,
+                )
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_encoded_thumbnail_file_name.");
 
-        result
+        Ok(result)
     }
 
     pub async fn get_file_encryption_metadata(
@@ -443,19 +424,40 @@ impl UserSession {
             file_path
         );
 
-        let db_pool = self.db_pool.clone();
-
-        let result = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for get_file_encryption_metadata");
-            let db = db_pool.get()?;
-            sqlite::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_file_encryption_metadata");
+                sqlite::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+            })
+            .await?;
 
         trace!("Exiting UserSession::get_file_encryption_metadata.");
 
-        result
+        Ok(result)
+    }
+
+    pub async fn get_file_decryption_data(
+        &self,
+        file_path: PathBuf,
+    ) -> Result<(String, FileEncryptionMetadata), DbError> {
+        trace!(
+            "Entering UserSession::get_file_decryption_data for path: {:?}",
+            file_path
+        );
+
+        let result = self
+            .with_db(move |db| {
+                trace!("Inside spawn_blocking for get_file_decryption_data");
+                sqlite::get_file_decryption_data(
+                    &db,
+                    file_path.to_str().ok_or(DbError::InvalidPath)?,
+                )
+            })
+            .await?;
+
+        trace!("Exiting UserSession::get_file_decryption_data.");
+
+        Ok(result)
     }
 
     pub async fn rename_file(
@@ -496,17 +498,13 @@ impl UserSession {
             destination_folder
         );
 
-        let db_pool = self.db_pool.clone();
-
         let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
 
-        task::spawn_blocking(move || {
+        self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for move_file");
-            let mut db = db_pool.get()?;
             sqlite::move_file(&mut db, &file_path_str, &destination_folder)
         })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+        .await?;
 
         trace!("Exiting UserSession::move_file successfully.");
 

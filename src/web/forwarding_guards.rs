@@ -1,13 +1,26 @@
 use std::sync::Arc;
 
-use rocket::{
-    http::Status, outcome::Outcome, request::FromRequest, tokio::sync::RwLock, Request, State,
-};
+use rocket::{http::Status, outcome::Outcome, request::FromRequest, Request, State};
 
 use crate::{enums::request_error::RequestError, session::user_session::UserSession, AppState};
 
 pub struct AuthenticatedSession {
-    pub session: Arc<RwLock<UserSession>>,
+    pub session: Arc<UserSession>,
+}
+
+pub struct RangeHeader(pub Option<String>);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for RangeHeader {
+    type Error = RequestError;
+
+    async fn from_request(
+        request: &'r Request<'_>,
+    ) -> Outcome<Self, (Status, Self::Error), Status> {
+        Outcome::Success(RangeHeader(
+            request.headers().get_one("Range").map(|s| s.to_string()),
+        ))
+    }
 }
 
 pub struct AdminGuard;
@@ -45,7 +58,6 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
         trace!("Entering forwarding_guard::AuthenticatedSession::from_request");
         let cookies = request.cookies();
 
-        // Extract the state.
         let state: &State<AppState> = match request.guard::<&State<AppState>>().await {
             Outcome::Success(s) => {
                 trace!("Successfully retrieved AppState.");
@@ -61,13 +73,13 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
             }
         };
 
-        let cookie = match cookies.get_private("__Host-id") {
+        let cookie = match cookies.get_private("sid") {
             Some(cookie) => {
-                trace!("Found private __Host-id cookie.");
+                trace!("Found private sid cookie.");
                 cookie
             }
             None => {
-                trace!("Private __Host-id cookie not found.");
+                trace!("Private sid cookie not found.");
                 return Outcome::Error((Status::Unauthorized, RequestError::MissingSessionId));
             }
         };

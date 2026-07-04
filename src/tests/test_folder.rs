@@ -32,7 +32,7 @@ async fn test_create_folder() {
     let state = client.rocket().state::<AppState>().unwrap();
     let session_guard = state.sessions_by_id.read().await;
     let session_lock = session_guard.get(&session_id).unwrap().clone();
-    let session = session_lock.read().await;
+    let session = session_lock.clone();
 
     let folder_id = session
         .get_folder_id(folder_path.into())

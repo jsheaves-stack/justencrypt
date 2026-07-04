@@ -22,9 +22,8 @@ pub fn create_user_db_connection(
         db_path
     );
 
-    // 1. Manually open a connection to validate the password and run migrations.
-    // This allows us to "fail-fast" immediately if the password is wrong,
-    // avoiding r2d2's exponential backoff and retry loops.
+    // Open a connection to validate the password and run migrations.
+    // This fails immediately if the password is wrong, avoiding r2d2's exponential backoff and retry loops.
     {
         trace!("Manually opening DB connection for password validation and migrations.");
         let mut conn = rusqlite::Connection::open(&db_path)?;
@@ -32,29 +31,26 @@ pub fn create_user_db_connection(
         conn.busy_timeout(Duration::from_millis(60000))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
-        // Verify the key and trigger KDF. If password is wrong, this will fail immediately.
         if let Err(e) = conn.query_row("SELECT 1", [], |_| Ok(())) {
             error!("Failed to verify database password: {}", e);
             return Err(DbError::Rusqlite(e));
         }
 
         trace!("Running one-time database migrations...");
+
         if let Err(e) = migrations::get_migrations().to_latest(&mut conn) {
             error!("Migration error: {}", e);
             return Err(DbError::Rusqlite(rusqlite::Error::QueryReturnedNoRows));
-            // Mapping to generic Rusqlite error
         }
+
         trace!("Migrations are up to date.");
     }
 
-    // 2. Initialize the connection manager for r2d2.
-    // Migrations are already handled, so we only need to set pragmas.
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
         trace!("Initializing new pool DB connection.");
         conn.busy_timeout(Duration::from_millis(60000))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
-        // Trigger KDF for this new connection
         conn.query_row("SELECT 1", [], |_| Ok(()))?;
 
         match conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get::<_, String>(0)) {
@@ -82,16 +78,15 @@ pub fn create_user_db_connection(
         .unwrap_or(0);
 
     let max_connections = std::env::var("JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER")
-        .unwrap_or_else(|_| "2".to_string())
+        .unwrap_or_else(|_| "16".to_string())
         .parse::<u32>()
-        .unwrap_or(2);
+        .unwrap_or(16);
 
     let idle_timeout_seconds = std::env::var("JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS")
         .unwrap_or_else(|_| "600".to_string())
         .parse::<u64>()
         .unwrap_or(600);
 
-    // 3. Create the pool using configured min and max connections.
     let pool = Pool::builder()
         .max_size(max_connections)
         .min_idle(Some(min_connections))
@@ -100,6 +95,7 @@ pub fn create_user_db_connection(
         .map_err(DbError::PoolError)?;
 
     trace!("Exiting sqlite::create_user_db_connection successfully.");
+
     Ok(pool)
 }
 
@@ -391,16 +387,15 @@ pub fn add_file(
 
     tx.execute(
         r#"INSERT INTO files
-            (parent_folder_id, name, encoded_name, file_extension, key, buffer_size, nonce_size, salt_size, tag_size)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            (parent_folder_id, name, encoded_name, file_extension, key, encryption_version, total_size)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
            ON CONFLICT(parent_folder_id, name) DO UPDATE SET
              encoded_name = excluded.encoded_name,
              file_extension = excluded.file_extension,
              key = excluded.key,
-             buffer_size = excluded.buffer_size,
-             nonce_size = excluded.nonce_size,
-             salt_size = excluded.salt_size,
-             tag_size = excluded.tag_size
+             encryption_version = excluded.encryption_version,
+             total_size = excluded.total_size,
+             updated_at = CURRENT_TIMESTAMP
         "#,
         params![
             parent_folder_id,
@@ -408,14 +403,12 @@ pub fn add_file(
             encoded_file_name,
             file_extension,
             metadata.key.unprotected_as_bytes(),
-            metadata.buffer_size,
-            metadata.nonce_size,
-            metadata.salt_size,
-            metadata.tag_size
+            metadata.encryption_version,
+            metadata.total_size as i64,
         ],
     ).map(|_| ())
     .map_err(|e| {
-        error!("Failed to add or update file in the db: {}", e);
+        error!("Database error in add_file: {}", e);
         DbError::FailedToAddFileToDb(e.to_string())
     })?;
     trace!("File insert/update executed.");
@@ -490,18 +483,17 @@ pub fn get_file(
 
     let result = match db
         .query_row(
-            "SELECT key, buffer_size, nonce_size, salt_size, tag_size
+            "SELECT key, encryption_version, total_size
         FROM files
         WHERE parent_folder_id = ?1 AND name = ?2",
             params![parent_folder_id, file_name],
             |row| {
                 let key_blob: Vec<u8> = row.get(0)?;
+                let total_size_i64: i64 = row.get(2)?;
                 Ok(FileEncryptionMetadata {
                     key: SecretKey::from_slice(&key_blob).unwrap(),
-                    buffer_size: row.get(1)?,
-                    nonce_size: row.get(2)?,
-                    salt_size: row.get(3)?,
-                    tag_size: row.get(4)?,
+                    encryption_version: row.get(1)?,
+                    total_size: total_size_i64 as u64,
                 })
             },
         )
@@ -509,7 +501,7 @@ pub fn get_file(
     {
         Ok(f) => f,
         Err(e) => {
-            error!("Failed to get file from the db: {}", e);
+            error!("Database error in get_file: {}", e);
             return Err(DbError::FailedToGetFileFromDb(e.to_string()));
         }
     };
@@ -578,16 +570,14 @@ pub fn add_thumbnail(
 
     tx.execute(
         "INSERT OR IGNORE INTO thumbnails 
-        (encoded_name, file_id, key, buffer_size, nonce_size, salt_size, tag_size) 
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (encoded_name, file_id, key, encryption_version, total_size) 
+        VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             encoded_name,
             file_id,
             metadata.key.unprotected_as_bytes(),
-            metadata.buffer_size,
-            metadata.nonce_size,
-            metadata.salt_size,
-            metadata.tag_size
+            metadata.encryption_version,
+            metadata.total_size as i64,
         ],
     )
     .map(|_| ())
@@ -600,6 +590,54 @@ pub fn add_thumbnail(
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::add_thumbnail successfully.");
     Ok(())
+}
+
+pub fn get_file_decryption_data(
+    db: &PooledConnection<SqliteConnectionManager>,
+    file_path_str: &str,
+) -> Result<(String, FileEncryptionMetadata), DbError> {
+    trace!(
+        "Entering sqlite::get_file_decryption_data for path: {}",
+        file_path_str
+    );
+    let path = Path::new(file_path_str.trim_matches('/'));
+    let parent_path = path.parent().unwrap_or(Path::new(""));
+    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
+
+    let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::NotFound)?;
+
+    let file_name = path
+        .file_name()
+        .ok_or(DbError::MissingFileName)?
+        .to_string_lossy();
+
+    db.query_row(
+        "SELECT encoded_name, key, encryption_version, total_size
+        FROM files
+        WHERE parent_folder_id = ?1 AND name = ?2",
+        params![parent_folder_id, file_name],
+        |row| {
+            let encoded_name: String = row.get(0)?;
+            let key_blob: Vec<u8> = row.get(1)?;
+            let total_size_i64: i64 = row.get(3)?;
+            Ok((
+                encoded_name,
+                FileEncryptionMetadata {
+                    key: SecretKey::from_slice(&key_blob).unwrap(),
+                    encryption_version: row.get(2)?,
+                    total_size: total_size_i64 as u64,
+                },
+            ))
+        },
+    )
+    .map_err(|e| {
+        if let rusqlite::Error::QueryReturnedNoRows = e {
+            DbError::NotFound
+        } else {
+            error!("Database error in get_file_decryption_data: {}", e);
+            DbError::FailedToGetFileFromDb(e.to_string())
+        }
+    })
 }
 
 pub fn get_thumbnail(
@@ -655,18 +693,17 @@ pub fn get_thumbnail(
     );
 
     db.query_row(
-        "SELECT key, buffer_size, nonce_size, salt_size, tag_size
+        "SELECT key, encryption_version, total_size
         FROM thumbnails
         WHERE file_id = ?1",
         params![file_id],
         |row| {
             let key_blob: Vec<u8> = row.get(0)?;
+            let total_size_i64: i64 = row.get(2)?;
             Ok(FileEncryptionMetadata {
                 key: SecretKey::from_slice(&key_blob).unwrap(),
-                buffer_size: row.get(1)?,
-                nonce_size: row.get(2)?,
-                salt_size: row.get(3)?,
-                tag_size: row.get(4)?,
+                encryption_version: row.get(1)?,
+                total_size: total_size_i64 as u64,
             })
         },
     )
@@ -787,7 +824,7 @@ pub fn rename_file(
     trace!("Transaction started for renaming file.");
 
     tx.execute(
-        "UPDATE files SET name = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
+        "UPDATE files SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE parent_folder_id = ?2 AND name = ?3",
         params![
             new_file_name_str,
             current_parent_folder_id,
@@ -838,7 +875,7 @@ pub fn move_file(
     trace!("Transaction started for moving file.");
 
     tx.execute(
-        "UPDATE files SET parent_folder_id = ?1 WHERE parent_folder_id = ?2 AND name = ?3",
+        "UPDATE files SET parent_folder_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE parent_folder_id = ?2 AND name = ?3",
         params![destination_folder_id, current_parent_folder_id, file_name],
     )
     .map(|_| ())

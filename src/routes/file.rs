@@ -1,278 +1,386 @@
 use crate::{
     encryption::{
-        stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor,
-        MPSC_CHANNEL_CAPACITY, NONCE_SIZE, SALT_SIZE, STREAM_LIMIT,
+        chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor, CHUNK_SIZE,
+        MPSC_CHANNEL_CAPACITY,
     },
-    enums::{db_error::DbError, request_error::RequestError, request_success::RequestSuccess},
+    enums::{request_error::RequestError, request_success::RequestSuccess},
+    session::user_session::UploadState,
     util::{
+        range::parse_range,
         sharded_path::{get_sharded_path, remove_sharded_path},
         unrestricted_path::UnrestrictedPath,
     },
-    web::forwarding_guards::AuthenticatedSession,
+    web::{
+        forwarding_guards::{AuthenticatedSession, RangeHeader},
+        responders::RangeResponder,
+    },
 };
 use rocket::{
-    data::ByteUnit,
-    delete, get, options, patch, put,
-    response::stream::ByteStream,
-    serde::{json::Json, Deserialize},
-    tokio::{self, fs::File, io::BufReader, sync::mpsc},
-    Data,
+    data::{Data, ToByteUnit},
+    delete, get,
+    http::Status,
+    options, patch, post, put,
+    serde::json::Json,
+    tokio::{
+        self, fs,
+        sync::{mpsc, Mutex},
+    },
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    sync::Arc,
+    time::{Duration, SystemTime},
 };
 use uuid::Uuid;
 
-#[options("/<file_path..>")]
-pub fn file_options(file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [OPTIONS /file{}]", file_path);
-    Ok(RequestSuccess::NoContent)
+#[derive(Serialize, Deserialize)]
+pub struct InitUploadResponse {
+    pub upload_id: String,
 }
 
-#[put("/<file_path..>", data = "<reqdata>")]
-pub async fn put_file(
-    file_path: UnrestrictedPath, // The path where the file should be stored, extracted from the URL.
-    reqdata: Data<'_>,           // The raw data of the file being uploaded.
+#[derive(Serialize, Deserialize)]
+pub struct FinalizeErrorResponse {
+    pub missing_chunks: Vec<u64>,
+}
+#[post("/upload/initiate/<file_path..>")]
+pub async fn init_upload(
+    file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
-) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PUT /file{}]", file_path);
+) -> Result<Json<InitUploadResponse>, RequestError> {
+    trace!("Entering route [POST /file/upload/initiate/{}]", file_path);
 
-    let session = auth.session.read().await;
-    let user_path = session.get_user_path().clone();
+    let session = auth.session.clone();
+    let user_path = session.get_user_path();
+
+    let now = SystemTime::now();
+    let stale_threshold = Duration::from_secs(24 * 60 * 60); // 24 hours
+    let mut stale_ids = Vec::new();
+
+    let mut active_uploads = session.active_uploads.lock().await;
+
+    let max_uploads = std::env::var("JUSTENCRYPT_MAX_ACTIVE_UPLOADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok());
+
+    if let Some(limit) = max_uploads {
+        if active_uploads.len() >= limit {
+            return Err(RequestError::TooManyActiveUploads);
+        }
+    }
+
+    for (id, state) in active_uploads.iter() {
+        if let Ok(last_updated) = state
+            .last_updated
+            .lock()
+            .await
+            .duration_since(SystemTime::UNIX_EPOCH)
+        {
+            if let Ok(current_time) = now.duration_since(SystemTime::UNIX_EPOCH) {
+                if current_time.saturating_sub(last_updated) > stale_threshold {
+                    stale_ids.push(id.clone());
+                }
+            }
+        }
+    }
+
+    for id in stale_ids {
+        if let Some(state) = session.active_uploads.lock().await.remove(&id) {
+            let encoded_file_path =
+                get_sharded_path(user_path.clone(), &state.encoded_file_name).await;
+
+            fs::remove_file(encoded_file_path.clone())
+                .await
+                .unwrap_or_else(|e| {
+                    error!(
+                        "Failed to remove stale upload file {}: {}",
+                        encoded_file_path.display(),
+                        e
+                    )
+                });
+        }
+    }
+
+    let upload_id = Uuid::new_v4().to_string();
     let encoded_file_name = Uuid::new_v4().to_string();
     let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
 
-    trace!(
-        "Generated encoded_file_name: {} for path: {:?}",
+    let encryptor = ChunkEncryptor::new(encoded_file_path).await.map_err(|e| {
+        error!("Failed to create ChunkEncryptor: {}", e);
+        RequestError::FailedToProcessData
+    })?;
+
+    let upload_state = UploadState {
+        file_path: file_path.to_path_buf(),
         encoded_file_name,
-        encoded_file_path
+        written_chunks: Arc::new(Mutex::new(HashSet::new())),
+        encryptor: Arc::new(Mutex::new(encryptor)),
+        last_updated: Arc::new(Mutex::new(SystemTime::now())),
+    };
+
+    active_uploads.insert(upload_id.clone(), upload_state);
+
+    Ok(Json(InitUploadResponse { upload_id }))
+}
+
+#[put("/upload/chunk/<upload_id>?<offset>", data = "<data>")]
+pub async fn upload_chunk(
+    upload_id: String,
+    offset: u64,
+    auth: AuthenticatedSession,
+    data: Data<'_>,
+) -> Result<RequestSuccess, RequestError> {
+    trace!(
+        "Entering route [PUT /file/upload/chunk/{}] at offset {}",
+        upload_id,
+        offset
     );
 
-    let mut encryptor = match StreamEncryptor::new(encoded_file_path).await {
-        Ok(e) => e,
-        Err(e) => {
-            error!("Failed to create StreamEncryptor: {}", e);
-            return Err(RequestError::FailedToAddFile);
-        }
-    };
-
-    trace!("StreamEncryptor created.");
-
-    let metadata = encryptor.get_file_encryption_metadata();
-    let file_path_buf = file_path.to_path_buf();
-
-    match session
-        .add_file(file_path_buf, encoded_file_name, metadata)
+    let upload_state = auth
+        .session
+        .active_uploads
+        .lock()
         .await
-    {
-        Ok(_) => {
-            trace!("File metadata added to DB successfully.");
-            drop(session)
-        }
-        Err(e) => {
-            error!("Failed to add file to db: {}", e);
-            return Err(RequestError::FailedToAddFile);
-        }
-    };
+        .get(&upload_id)
+        .cloned()
+        .ok_or(RequestError::NotFound)?;
 
-    let mut data_stream = reqdata.open(ByteUnit::from(STREAM_LIMIT));
-
-    match encryptor
-        .encrypt_source_to_encryptor(&mut data_stream)
-        .await
     {
-        Ok(_) => {
-            trace!("Exiting route [PUT /file{}] successfully.", file_path);
-            Ok(RequestSuccess::Created)
-        }
-        Err(e) => {
-            error!("encrypt_source_to_encryptor failed: {}", e);
-            Err(RequestError::FailedToAddFile)
-        }
+        let mut last_updated = upload_state.last_updated.lock().await;
+        *last_updated = SystemTime::now();
     }
-}
 
-#[derive(Deserialize)]
-pub struct PatchFileRequest {
-    parent_folder_path: Option<String>,
-    file_name: Option<String>,
-}
+    let mut encryptor = upload_state.encryptor.lock().await;
+    let mut written_chunks = upload_state.written_chunks.lock().await;
 
-#[patch("/<file_path..>", data = "<patch_file_request>")]
-pub async fn patch_file(
-    file_path: UnrestrictedPath,
-    patch_file_request: Json<PatchFileRequest>,
-    auth: AuthenticatedSession,
-) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PATCH /file{}]", file_path);
-
-    let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.read().await;
-    let updates = patch_file_request.into_inner();
-
-    if let Some(parent_folder_path) = updates.parent_folder_path {
-        trace!(
-            "Attempting to move file to new parent folder: {}",
-            parent_folder_path
-        );
-        match session
-            .move_file(file_path_buf.clone(), parent_folder_path)
-            .await
-        {
-            Ok(_) => trace!("File moved successfully."),
-            Err(e) => {
-                error!("Failed to move file: {}", e);
-                return Err(RequestError::FailedToMoveFile);
-            }
-        }
-    };
-
-    if let Some(new_file_name) = updates.file_name {
-        trace!("Attempting to rename file to: {}", new_file_name);
-        match session.rename_file(file_path_buf, new_file_name).await {
-            Ok(_) => trace!("File renamed successfully."),
-            Err(e) => {
-                error!("Failed to rename file: {}", e);
-                return Err(RequestError::FailedToRenameFile);
-            }
-        }
-    };
-
-    drop(session);
-
-    trace!("Exiting route [PATCH /file{}] successfully.", file_path);
+    let mut stream = data.open(5.gibibytes());
+    encryptor
+        .encrypt_stream_at_offset(&mut stream, offset, &mut written_chunks)
+        .await
+        .map_err(|e| {
+            error!("Encryption error: {}", e);
+            RequestError::FailedToProcessData
+        })?;
 
     Ok(RequestSuccess::NoContent)
+}
+
+#[post("/upload/finalize/<upload_id>?<total_size>")]
+pub async fn finalize_upload(
+    upload_id: String,
+    total_size: u64,
+    auth: AuthenticatedSession,
+) -> Result<RequestSuccess, RequestError> {
+    trace!(
+        "Entering route [POST /file/upload/finalize/{}] with total_size {}",
+        upload_id,
+        total_size
+    );
+
+    let session = auth.session.clone();
+    let upload_state = session
+        .active_uploads
+        .lock()
+        .await
+        .remove(&upload_id)
+        .ok_or(RequestError::NotFound)?;
+
+    let written_chunks = upload_state.written_chunks.lock().await;
+    let expected_chunks = total_size.div_ceil(CHUNK_SIZE as u64);
+
+    let mut missing_chunks = Vec::new();
+    for i in 0..expected_chunks {
+        if !written_chunks.contains(&i) {
+            missing_chunks.push(i);
+        }
+    }
+
+    if !missing_chunks.is_empty() {
+        drop(written_chunks);
+
+        // Re-insert the upload state so the client can retry
+        session
+            .active_uploads
+            .lock()
+            .await
+            .insert(upload_id, upload_state);
+
+        return Err(RequestError::BadRequest(format!(
+            "Missing chunks: {:?}",
+            missing_chunks
+        )));
+    }
+
+    drop(written_chunks);
+
+    let mut encryptor = upload_state.encryptor.lock().await;
+
+    encryptor.finalize_metadata(total_size);
+
+    let metadata = encryptor.get_metadata();
+
+    session
+        .add_file(
+            upload_state.file_path,
+            upload_state.encoded_file_name,
+            metadata,
+        )
+        .await?;
+
+    Ok(RequestSuccess::Created)
+}
+
+#[options("/<_file_path..>")]
+pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
+    Ok(RequestSuccess::NoContent)
+}
+
+#[put("/<file_path..>", data = "<data>")]
+pub async fn put_file(
+    file_path: UnrestrictedPath,
+    auth: AuthenticatedSession,
+    data: Data<'_>,
+) -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route [PUT /file/{}]", file_path);
+
+    let file_path_buf = file_path.to_path_buf();
+    let user_path = {
+        let session = auth.session.clone();
+        session.get_user_path()
+    };
+
+    let encoded_file_name = uuid::Uuid::new_v4().to_string();
+    let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
+
+    let mut encryptor = ChunkEncryptor::new(encoded_file_path).await.map_err(|e| {
+        error!("Failed to create ChunkEncryptor: {}", e);
+        RequestError::FailedToProcessData
+    })?;
+
+    let mut stream = data.open(5.gibibytes());
+    encryptor.encrypt_stream(&mut stream).await.map_err(|e| {
+        error!("Encryption error: {}", e);
+        RequestError::FailedToProcessData
+    })?;
+
+    let metadata = encryptor.get_metadata();
+
+    {
+        let session = auth.session.clone();
+        session
+            .add_file(file_path_buf, encoded_file_name, metadata)
+            .await?;
+    }
+
+    Ok(RequestSuccess::Created)
 }
 
 #[get("/<file_path..>")]
 pub async fn get_file(
-    file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
+    file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
-) -> Result<ByteStream![Vec<u8>], RequestError> {
-    trace!("Entering route [GET /file{}]", file_path);
+    range: RangeHeader,
+) -> Result<RangeResponder, RequestError> {
+    trace!("Entering route [GET /file/{}]", file_path);
 
     let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.read().await;
-    let user_path = session.get_user_path().clone();
+    let session = auth.session.clone();
+    let user_path = session.get_user_path();
 
-    let encoded_file_name = match session.get_encoded_file_name(file_path.to_path_buf()).await {
-        Ok(e) => e,
-        Err(DbError::NotFound) => return Err(RequestError::NotFound),
-        Err(e) => {
-            error!("Failed to get encoded file name from db: {}", e);
-            return Err(RequestError::FailedToProcessData);
-        }
+    let (encoded_file_name, metadata) = session.get_file_decryption_data(file_path_buf).await?;
+    drop(session);
+
+    let total_size = metadata.total_size;
+    let (start, end, status) = if let Some(range_str) = range.0 {
+        parse_range(&range_str, total_size)?
+    } else {
+        (0, total_size.saturating_sub(1), Status::Ok)
     };
-
-    trace!("Retrieved encoded_file_name: {}", encoded_file_name);
 
     let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
+    let mut decryptor = ChunkDecryptor::new(encoded_file_path, metadata)
+        .await
+        .map_err(|e| {
+            error!("Failed to create ChunkDecryptor: {}", e);
+            RequestError::FailedToProcessData
+        })?;
 
-    trace!("Constructed encoded_file_path: {:?}", encoded_file_path);
+    let (tx, rx) = mpsc::channel::<Vec<u8>>(MPSC_CHANNEL_CAPACITY);
 
-    let metadata = match session.get_file_encryption_metadata(file_path_buf).await {
-        Ok(m) => {
-            trace!("Successfully retrieved file encryption metadata.");
-            drop(session);
-            m
-        }
-        Err(DbError::NotFound) => return Err(RequestError::NotFound),
-        Err(e) => {
-            error!("Failed to get file encryption metadata for file: {}", e);
-            return Err(RequestError::FailedToProcessData);
-        }
-    };
-
-    // Initialize the stream decryptor for the requested file.
-    let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
-        Ok(d) => d,
-        Err(e) => {
-            error!("Failed to create StreamDecryptor: {}", e);
-            return Err(RequestError::FailedToProcessData);
-        }
-    };
-
-    trace!("StreamDecryptor created.");
-
-    // Open the encrypted file.
-    let input_file = match File::open(decryptor.get_file_path()).await {
-        Ok(i) => i,
-        Err(e) => {
-            error!("Failed to open file: {}", e);
-            return Err(RequestError::FailedToProcessData);
-        }
-    };
-
-    trace!("Encrypted file opened for reading.");
-
-    let mut reader = BufReader::new(input_file);
-    let offset = (SALT_SIZE + NONCE_SIZE) as u64;
-
-    // Create an unbounded channel for streaming decrypted file chunks.
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(MPSC_CHANNEL_CAPACITY);
-
-    trace!("MPSC channel created for file download.");
-
-    // Spawn an async task to read, decrypt, and send file chunks.
     tokio::spawn(async move {
-        decryptor
-            .decrypt_stream_to_channel(&mut reader, tx, offset)
-            .await
+        decryptor.decrypt_range(start, end, tx).await;
     });
 
-    // Stream the decrypted file chunks as they become available.
-    trace!("Returning ByteStream to client.");
-
-    Ok(ByteStream! {
-        while let Some(chunk) = rx.recv().await {
-            yield chunk;
-        }
+    Ok(RangeResponder {
+        rx,
+        status,
+        start,
+        end,
+        total_size,
     })
 }
 
 #[delete("/<file_path..>")]
 pub async fn delete_file(
-    file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
+    file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [DELETE /file{}]", file_path);
+    trace!("Entering route [DELETE /file/{}]", file_path);
 
     let file_path_buf = file_path.to_path_buf();
-    let session = auth.session.read().await;
-    let user_path = session.get_user_path().clone();
-
-    let encoded_file_name = match session.get_encoded_file_name(file_path.to_path_buf()).await {
-        Ok(e) => e,
-        Err(DbError::NotFound) => return Err(RequestError::NotFound),
-        Err(e) => {
-            error!("Failed to get encoded file name from db: {}", e);
-            return Err(RequestError::FailedToProcessData);
-        }
+    let (user_path, encoded_file_name) = {
+        let session = auth.session.clone();
+        let user_path = session.get_user_path();
+        let encoded_file_name = session.get_encoded_file_name(file_path_buf.clone()).await?;
+        (user_path, encoded_file_name)
     };
-    trace!("Retrieved encoded_file_name: {}", encoded_file_name);
 
     let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
-    trace!("Constructed encoded_file_path: {:?}", encoded_file_path);
+    {
+        let session = auth.session.clone();
+        session.delete_file(file_path_buf).await?;
+    }
 
-    match session.delete_file(file_path_buf).await {
-        Ok(_) => {
-            trace!("File metadata deleted from DB successfully.");
-            drop(session)
-        }
-        Err(e) => {
-            error!("Failed to delete file from db: {}", e);
-            return Err(RequestError::FailedToRemoveFile);
-        }
-    };
-
-    match remove_sharded_path(&user_path, &encoded_file_path).await {
-        Ok(_) => trace!("Physical file deleted successfully."),
-        Err(e) => {
-            error!("Failed to delete file: {}", e);
-            return Err(RequestError::FailedToRemoveFile);
-        }
-    };
-
-    trace!("Exiting route [DELETE /file{}] successfully.", file_path);
+    remove_sharded_path(&user_path, &encoded_file_path)
+        .await
+        .map_err(|e| {
+            error!("Failed to delete physical file: {}", e);
+            RequestError::FailedToRemoveFile
+        })?;
 
     Ok(RequestSuccess::NoContent)
+}
+
+#[patch("/<file_path..>", data = "<patch_data>")]
+pub async fn patch_file(
+    file_path: UnrestrictedPath,
+    auth: AuthenticatedSession,
+    patch_data: Json<PatchFileData>,
+) -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route [PATCH /file/{}]", file_path);
+
+    let file_path_buf = file_path.to_path_buf();
+
+    if let Some(new_name) = &patch_data.file_name {
+        let session = auth.session.clone();
+        session
+            .rename_file(file_path_buf.clone(), new_name.clone())
+            .await?;
+    }
+
+    if let Some(destination_folder) = &patch_data.parent_folder_path {
+        let session = auth.session.clone();
+        session
+            .move_file(file_path_buf, destination_folder.clone())
+            .await?;
+    }
+
+    Ok(RequestSuccess::NoContent)
+}
+
+#[derive(serde::Deserialize)]
+pub struct PatchFileData {
+    pub file_name: Option<String>,
+    pub parent_folder_path: Option<String>,
 }

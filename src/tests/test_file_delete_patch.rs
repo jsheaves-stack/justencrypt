@@ -40,7 +40,7 @@ async fn test_delete_file_success() {
     let state = client.rocket().state::<AppState>().unwrap();
     let session_guard = state.sessions_by_id.read().await;
     let session_lock = session_guard.get(&session_id).unwrap().clone();
-    let session = session_lock.read().await;
+    let session = session_lock.clone();
 
     let encoded_file_name = session
         .get_encoded_file_name(file_path.into())
@@ -67,7 +67,7 @@ async fn test_delete_file_success() {
     // Verify it's gone from DB
     let session_guard = state.sessions_by_id.read().await;
     let session_lock = session_guard.get(&session_id).unwrap().clone();
-    let session = session_lock.read().await;
+    let session = session_lock.clone();
     let db_lookup = session.get_encoded_file_name(file_path.into()).await;
     assert!(db_lookup.is_err());
 }

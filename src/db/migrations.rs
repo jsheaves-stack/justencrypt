@@ -18,10 +18,10 @@ pub fn get_migrations() -> Migrations<'static> {
                 encoded_name TEXT NOT NULL,
                 file_extension TEXT,
                 key BLOB NOT NULL,
-                buffer_size INTEGER NOT NULL,
-                nonce_size INTEGER NOT NULL,
-                salt_size INTEGER NOT NULL,
-                tag_size INTEGER NOT NULL,
+                encryption_version INTEGER NOT NULL DEFAULT 1,
+                total_size BIGINT NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (parent_folder_id) REFERENCES folders(id),
                 UNIQUE(parent_folder_id, name),
                 UNIQUE(encoded_name)
@@ -32,10 +32,8 @@ pub fn get_migrations() -> Migrations<'static> {
                 encoded_name TEXT NOT NULL,
                 file_id INTEGER,
                 key BLOB NOT NULL,
-                buffer_size INTEGER NOT NULL,
-                nonce_size INTEGER NOT NULL,
-                salt_size INTEGER NOT NULL,
-                tag_size INTEGER NOT NULL,
+                encryption_version INTEGER NOT NULL DEFAULT 1,
+                total_size BIGINT NOT NULL DEFAULT 0,
                 FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
                 UNIQUE(encoded_name)
             );

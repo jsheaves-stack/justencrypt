@@ -1,8 +1,6 @@
 use crate::{
-    encryption::{
-        stream_decryptor::StreamDecryptor, stream_encryptor::StreamEncryptor, NONCE_SIZE, SALT_SIZE,
-    },
-    enums::{db_error::DbError, request_error::RequestError, request_success::RequestSuccess},
+    encryption::{chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor},
+    enums::{request_error::RequestError, request_success::RequestSuccess},
     util::{sharded_path::get_sharded_path, unrestricted_path::UnrestrictedPath},
     web::forwarding_guards::AuthenticatedSession,
     AppState,
@@ -12,34 +10,33 @@ use rocket::{
     get,
     http::ContentType,
     options,
-    tokio::{
-        self,
-        fs::{self, File},
-        io::BufReader,
-    },
+    tokio::{self, fs},
     State,
 };
 use std::io::Cursor;
 use uuid::Uuid;
 
-#[options("/<file_path..>")]
-pub fn thumbnail_options(file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [OPTIONS /thumbnail{}]", file_path);
+#[options("/<_file_path..>")]
+pub fn thumbnail_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
 #[get("/<file_path..>")]
 pub async fn get_thumbnail(
-    file_path: UnrestrictedPath, // The name/path of the file being requested, extracted from the URL.
-    state: &State<AppState>, // Application state for accessing global resources like session management.
+    file_path: UnrestrictedPath,
+    state: &State<AppState>,
     auth: AuthenticatedSession,
 ) -> Result<Vec<u8>, RequestError> {
-    trace!("Entering route [GET /thumbnail{}]", file_path);
+    trace!("Entering route [GET /thumbnail/{}]", file_path);
 
     let file_path_buf = file_path.to_path_buf();
-    let thumbnail_extension = file_path_buf.extension().unwrap_or_default();
-    let content_type =
-        ContentType::from_extension(thumbnail_extension.to_str().unwrap_or_default()).unwrap();
+    let content_type = ContentType::from_extension(
+        file_path_buf
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default(),
+    )
+    .unwrap_or(ContentType::Binary);
 
     let image_format = match content_type {
         _ if content_type == ContentType::JPEG => ImageFormat::Jpeg,
@@ -47,276 +44,130 @@ pub async fn get_thumbnail(
         _ if content_type == ContentType::GIF => ImageFormat::Gif,
         _ if content_type == ContentType::WEBP => ImageFormat::WebP,
         _ if content_type == ContentType::AVIF => ImageFormat::Avif,
-        _ => {
-            return Err(RequestError::UnsupportedFileType);
-        }
+        _ => return Err(RequestError::UnsupportedFileType),
     };
 
-    trace!("Determined image format: {:?}", image_format);
-
-    let permit = state
+    let _permit = state
         .thumbnail_semaphore
         .acquire()
         .await
         .map_err(|_| RequestError::FailedToProcessData)?;
 
-    trace!("Acquired thumbnail semaphore permit.");
+    let (user_path, cache_path, encoded_thumbnail_file_name) = {
+        let session = auth.session.clone();
+        let user_path = session.get_user_path();
+        let cache_path = user_path.join(".cache");
 
-    let session = auth.session.read().await;
-    let user_path = session.get_user_path().clone();
-    let cache_path = user_path.join(".cache");
-
-    if !cache_path.exists() {
-        trace!("Cache directory does not exist, creating it.");
-        match fs::create_dir(&cache_path).await {
-            Ok(_) => (),
-            Err(e) => {
-                error!("Failed to create user cache directory: {}", e);
-                return Err(RequestError::FailedToWriteData);
-            }
-        };
-    }
-
-    let encoded_thumbnail_file_name = match session
-        .get_encoded_thumbnail_file_name(file_path.to_path_buf())
-        .await
-    {
-        Ok(e) => e,
-        Err(DbError::NotFound) => return Err(RequestError::NotFound),
-        Err(e) => {
-            error!("Failed to get encoded thumbnail file name: {}", e);
-            return Err(RequestError::FailedToProcessData);
+        if !cache_path.exists() {
+            fs::create_dir(&cache_path).await.map_err(|e| {
+                error!("Failed to create cache dir: {}", e);
+                RequestError::FailedToWriteData
+            })?;
         }
-    }
-    .unwrap_or_else(|| {
-        let new_uuid = Uuid::new_v4().to_string();
-        trace!(
-            "No existing thumbnail found, generated new UUID: {}",
-            new_uuid
-        );
-        new_uuid
-    });
+
+        let encoded_thumbnail_file_name = session
+            .get_encoded_thumbnail_file_name(file_path_buf.clone())
+            .await?
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        (user_path, cache_path, encoded_thumbnail_file_name)
+    };
 
     let encoded_thumbnail_file_path =
         get_sharded_path(cache_path.clone(), &encoded_thumbnail_file_name).await;
 
-    trace!(
-        "Constructed thumbnail path: {:?}",
-        encoded_thumbnail_file_path
-    );
-
-    let metadata = match session
-        .get_file_encryption_metadata(file_path_buf.clone())
-        .await
-    {
-        Ok(m) => m,
-        Err(DbError::NotFound) => return Err(RequestError::NotFound),
-        Err(e) => {
-            error!("Failed to get file encryption metadata for file: {}", e);
-            return Err(RequestError::FailedToProcessData);
-        }
-    };
-
-    trace!("Retrieved original file encryption metadata.");
-
     if !encoded_thumbnail_file_path.exists() {
-        trace!("Thumbnail does not exist in cache, generating new one.");
-
-        let encoded_file_name = match session.get_encoded_file_name(file_path_buf.clone()).await {
-            Ok(e) => e,
-            Err(DbError::NotFound) => return Err(RequestError::NotFound),
-            Err(e) => {
-                error!("Failed to get encoded file name: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
+        let (encoded_file_name, metadata) = {
+            let session = auth.session.clone();
+            session
+                .get_file_decryption_data(file_path_buf.clone())
+                .await?
         };
 
         let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
-        // Initialize the stream decryptor for the requested file.
-        let mut decryptor = match StreamDecryptor::new(encoded_file_path, metadata).await {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to create StreamDecryptor: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
-
-        // Open the encrypted file.
-        let input_file = match File::open(decryptor.get_file_path()).await {
-            Ok(i) => i,
-            Err(e) => {
-                error!("Failed to open file: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
-
-        let mut reader = BufReader::new(input_file);
-
-        let mut decrypted_original_image_data = Vec::new();
-
-        match decryptor
-            .decrypt_stream_to_writer(
-                &mut reader,
-                &mut decrypted_original_image_data,
-                (SALT_SIZE + NONCE_SIZE) as u64,
-            )
+        let mut decryptor = ChunkDecryptor::new(encoded_file_path, metadata)
             .await
-        {
-            Ok(_) => (),
-            Err(_) => {
-                error!("Failed to decrypt original image data.");
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
+            .map_err(|e| {
+                error!("Failed to create ChunkDecryptor: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
-        trace!("Decrypted original image data.");
+        let decrypted_original_image_data = decryptor.decrypt_all().await.map_err(|e| {
+            error!("Decryption error: {}", e);
+            RequestError::FailedToProcessData
+        })?;
 
         let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
-            trace!("Entering blocking task for image resizing.");
-
-            let mut thumbnail_buffer = Cursor::new(Vec::new());
-
+            let mut buf = Cursor::new(Vec::new());
             let img =
                 image::load_from_memory_with_format(&decrypted_original_image_data, image_format)
                     .map_err(|e| {
-                    error!("Failed to decode image: {}", e);
+                    error!("Image load error: {}", e);
                     RequestError::FailedToProcessData
                 })?;
 
-            let resized_image = img.thumbnail(150, 150);
-
-            resized_image
-                .write_to(&mut thumbnail_buffer, image_format)
+            img.thumbnail(150, 150)
+                .write_to(&mut buf, image_format)
                 .map_err(|e| {
-                    error!("Failed to write resized image: {}", e);
+                    error!("Image write error: {}", e);
                     RequestError::FailedToProcessData
                 })?;
 
-            thumbnail_buffer.set_position(0);
-            trace!("Exiting blocking task for image resizing.");
-            Ok(thumbnail_buffer)
+            buf.set_position(0);
+            Ok::<Cursor<Vec<u8>>, RequestError>(buf)
         })
         .await
         .map_err(|e| {
-            error!("Blocking image resize task panicked: {}", e);
+            error!("Blocking task error: {}", e);
             RequestError::FailedToProcessData
         })??;
 
-        drop(permit);
-
-        trace!("Semaphore permit released after generation.");
-
-        // Initialize the stream encryptor for the file.
-        let mut encryptor = match StreamEncryptor::new(encoded_thumbnail_file_path.clone()).await {
-            Ok(e) => e,
-            Err(e) => {
-                error!("Failed to create StreamEncryptor: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
-
-        let thumbnail_metadata = encryptor.get_file_encryption_metadata();
-
-        match session
-            .add_thumbnail(
-                file_path_buf,
-                encoded_thumbnail_file_name,
-                thumbnail_metadata,
-            )
+        let mut encryptor = ChunkEncryptor::new(encoded_thumbnail_file_path)
             .await
-        {
-            Ok(_) => {
-                trace!("Added thumbnail metadata to DB.");
-                drop(session)
-            }
-            Err(e) => {
-                error!("Failed to add thumbnail to db: {}", e);
-                return Err(RequestError::FailedToAddFile);
-            }
-        };
+            .map_err(|e| {
+                error!("Failed to create ChunkEncryptor: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
-        match encryptor
-            .encrypt_source_to_encryptor(&mut thumbnail_buffer)
+        encryptor
+            .encrypt_stream(&mut thumbnail_buffer)
             .await
-        {
-            Ok(_) => (),
-            Err(_) => {
-                error!("Failed to encrypt thumbnail data.");
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
+            .map_err(|e| {
+                error!("Encryption error: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
-        trace!("Encrypted and wrote thumbnail to cache.");
-        trace!(
-            "Exiting route [GET /thumbnail{}] after generating new thumbnail successfully.",
-            file_path
-        );
+        let thumbnail_metadata = encryptor.get_metadata();
+
+        {
+            let session = auth.session.clone();
+            session
+                .add_thumbnail(
+                    file_path_buf,
+                    encoded_thumbnail_file_name,
+                    thumbnail_metadata,
+                )
+                .await?;
+        }
 
         Ok(thumbnail_buffer.into_inner())
     } else {
-        trace!("Thumbnail exists in cache, decrypting it.");
-
-        drop(permit);
-
-        trace!("Semaphore permit released immediately.");
-
-        let thumbnail_metadata = match session.get_thumbnail(file_path_buf).await {
-            Ok(f) => {
-                drop(session);
-                f
-            }
-            Err(DbError::NotFound) => return Err(RequestError::NotFound),
-            Err(e) => {
-                error!("Failed to get thumbnail encryption metadata from db: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
+        let metadata = {
+            let session = auth.session.clone();
+            session.get_thumbnail(file_path_buf).await?
         };
 
-        trace!("Retrieved thumbnail encryption metadata.");
-
-        // Initialize the stream decryptor for the requested file.
-        let mut decryptor =
-            match StreamDecryptor::new(encoded_thumbnail_file_path, thumbnail_metadata).await {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to create StreamDecryptor: {}", e);
-                    return Err(RequestError::FailedToProcessData);
-                }
-            };
-
-        // Open the encrypted file.
-        let input_file = match File::open(decryptor.get_file_path()).await {
-            Ok(i) => i,
-            Err(e) => {
-                error!("Failed to open file: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
-
-        let mut reader = BufReader::new(input_file);
-        let mut decrypted_thumbnail_data = Vec::new();
-
-        match decryptor
-            .decrypt_stream_to_writer(
-                &mut reader,
-                &mut decrypted_thumbnail_data,
-                (SALT_SIZE + NONCE_SIZE) as u64,
-            )
+        let mut decryptor = ChunkDecryptor::new(encoded_thumbnail_file_path, metadata)
             .await
-        {
-            Ok(_) => (),
-            Err(e) => {
-                error!("Failed to decrypt thumbnail data: {}", e);
-                return Err(RequestError::FailedToProcessData);
-            }
-        };
+            .map_err(|e| {
+                error!("Failed to create ChunkDecryptor: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
-        trace!("Decrypted thumbnail data from cache.");
-        trace!(
-            "Exiting route [GET /thumbnail{}] with cached thumbnail successfully.",
-            file_path
-        );
+        let decrypted_thumbnail_data = decryptor.decrypt_all().await.map_err(|e| {
+            error!("Decryption error: {}", e);
+            RequestError::FailedToProcessData
+        })?;
 
         Ok(decrypted_thumbnail_data)
     }

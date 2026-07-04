@@ -1,3 +1,4 @@
+use crate::enums::db_error::DbError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -50,6 +51,28 @@ pub enum RequestError {
     #[error("Unauthorized")]
     Unauthorized,
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Range not satisfiable")]
+    RangeNotSatisfiable,
+
     #[error("Internal server error")]
     InternalServerError,
+
+    #[error("Too many active uploads")]
+    TooManyActiveUploads,
+}
+
+impl From<DbError> for RequestError {
+    fn from(error: DbError) -> Self {
+        match error {
+            DbError::NotFound => RequestError::NotFound,
+            DbError::UserDoesNotExist => RequestError::Unauthorized,
+            DbError::InvalidInput(msg) => RequestError::BadRequest(msg),
+            DbError::MissingFileName => RequestError::BadRequest("Missing file name".into()),
+            DbError::InvalidPath => RequestError::BadRequest("Invalid path".into()),
+            _ => RequestError::InternalServerError,
+        }
+    }
 }
