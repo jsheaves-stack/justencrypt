@@ -51,6 +51,12 @@ The API uses environment variables for configuration. Below are the required var
 | `JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER`     | Minimum number of idle SQLite connections per user session. Default: `0`. |
 | `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`     | Maximum number of concurrent SQLite connections per user session. Default: `2`. |
 | `JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS`         | Seconds a connection can sit idle before being closed. Default: `600` (10 minutes). |
+| `JUSTENCRYPT_DB_BUSY_TIMEOUT_MS`              | Milliseconds a connection waits when the database is locked before failing. Default: `60000` (60 seconds). |
+| `JUSTENCRYPT_DB_SYNCHRONOUS_MODE`             | SQLite PRAGMA synchronous setting. Options: `NORMAL`, `FULL`, `OFF`, `EXTRA`. Default: `NORMAL` (Safe in WAL mode, 10x-100x faster than `FULL`). |
+| `JUSTENCRYPT_DB_CACHE_SIZE_KB`                | SQLite PRAGMA cache_size in kilobytes per pool connection. Default: `16000` (16 MiB). |
+| `JUSTENCRYPT_DB_TEMP_STORE`                   | SQLite PRAGMA temp_store setting for temporary tables/indices. Options: `MEMORY`, `FILE`, `DEFAULT`. Default: `MEMORY`. |
+| `JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES`     | Maximum size in bytes the WAL file is allowed to grow before truncation. Default: `67108864` (64 MiB). |
+| `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds an r2d2 pool check-out will wait for an available connection. Default: `30`. |
 | `JUSTENCRYPT_ADDRESS`                         | The IP address Rocket will bind to. Default: `0.0.0.0`. |
 | `JUSTENCRYPT_PORT`                            | The port Rocket will listen on. Default: `8000`. |
 | `JUSTENCRYPT_WORKERS`                         | Number of worker threads for handling requests. Default: `16`. |
@@ -78,6 +84,12 @@ JUSTENCRYPT_USER_DATA_PATH=./user_data
 JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER=0
 JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER=2
 JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS=600
+JUSTENCRYPT_DB_BUSY_TIMEOUT_MS=60000
+JUSTENCRYPT_DB_SYNCHRONOUS_MODE=NORMAL
+JUSTENCRYPT_DB_CACHE_SIZE_KB=16000
+JUSTENCRYPT_DB_TEMP_STORE=MEMORY
+JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES=67108864
+JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS=30
 JUSTENCRYPT_ADDRESS=0.0.0.0
 JUSTENCRYPT_PORT=8000
 JUSTENCRYPT_WORKERS=16

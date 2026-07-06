@@ -219,6 +219,12 @@ pub async fn finalize_upload(
 
     let metadata = encryptor.get_metadata();
 
+    let user_path = session.get_user_path();
+    let old_encoded_name = session
+        .get_encoded_file_name(upload_state.file_path.clone())
+        .await
+        .ok();
+
     session
         .add_file(
             upload_state.file_path,
@@ -226,6 +232,13 @@ pub async fn finalize_upload(
             metadata,
         )
         .await?;
+
+    if let Some(old_name) = old_encoded_name {
+        let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
+        let old_thumb_path = get_sharded_path(user_path.join(".cache"), &old_name).await;
+        let _ = remove_sharded_path(&user_path, &old_file_path).await;
+        let _ = remove_sharded_path(&user_path, &old_thumb_path).await;
+    }
 
     Ok(RequestSuccess::Created)
 }
@@ -249,6 +262,14 @@ pub async fn put_file(
         session.get_user_path()
     };
 
+    let old_encoded_name = {
+        let session = auth.session.clone();
+        session
+            .get_encoded_file_name(file_path_buf.clone())
+            .await
+            .ok()
+    };
+
     let encoded_file_name = uuid::Uuid::new_v4().to_string();
     let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
@@ -270,6 +291,13 @@ pub async fn put_file(
         session
             .add_file(file_path_buf, encoded_file_name, metadata)
             .await?;
+    }
+
+    if let Some(old_name) = old_encoded_name {
+        let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
+        let old_thumb_path = get_sharded_path(user_path.join(".cache"), &old_name).await;
+        let _ = remove_sharded_path(&user_path, &old_file_path).await;
+        let _ = remove_sharded_path(&user_path, &old_thumb_path).await;
     }
 
     Ok(RequestSuccess::Created)
@@ -336,10 +364,18 @@ pub async fn delete_file(
     };
 
     let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
+    let cache_path = user_path.join(".cache");
+    let encoded_thumb_path = get_sharded_path(cache_path.clone(), &encoded_file_name).await;
 
     {
         let session = auth.session.clone();
         session.delete_file(file_path_buf).await?;
+    }
+
+    if encoded_thumb_path.exists() {
+        if let Err(e) = remove_sharded_path(&user_path, &encoded_thumb_path).await {
+            warn!("Failed to delete thumbnail file: {}", e);
+        }
     }
 
     remove_sharded_path(&user_path, &encoded_file_path)
