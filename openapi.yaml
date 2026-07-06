@@ -51,13 +51,9 @@ components:
     FolderEntry:
       type: object
       required:
-        - id
         - is_file
         - file_name
       properties:
-        id:
-          type: integer
-          description: The internal database ID of the file or folder.
         is_file:
           type: boolean
           description: Indicates whether this entry is a file or a folder.
@@ -96,6 +92,40 @@ components:
           type: integer
           format: int64
           description: The Unix timestamp when the session was created.
+        active_uploads:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActiveFileUpload'
+          description: List of currently active chunked uploads for this session.
+    ActiveFileUpload:
+      type: object
+      required:
+        - upload_id
+        - file_path
+        - encoded_file_name
+        - last_updated
+      properties:
+        upload_id:
+          type: string
+          description: Unique identifier for the chunked upload session.
+        file_path:
+          type: string
+          description: The logical virtual path of the file being uploaded.
+        encoded_file_name:
+          type: string
+          description: The internal encoded filename on disk.
+        last_updated:
+          type: object
+          properties:
+            secs_since_epoch:
+              type: integer
+              format: int64
+              description: Seconds since Unix epoch.
+            nanos_since_epoch:
+              type: integer
+              format: int32
+              description: Nanosecond offset from seconds since Unix epoch.
+          description: Timestamp when the upload was last updated.
     InitUploadResponse:
       type: object
       required:
@@ -135,14 +165,16 @@ paths:
           description: Session created successfully, cookie provided in headers.
         '400':
           description: Bad request (e.g. password does not meet requirements).
+        '401':
+          description: Unauthorized (invalid credentials or user does not exist).
     delete:
       summary: Destroy the active session
       description: Invalidates the active session identified by the sid cookie.
       responses:
         '204':
           description: Session successfully destroyed.
-        '400':
-          description: Missing or invalid session ID.
+        '401':
+          description: Unauthorized (missing or invalid session ID).
     options:
       summary: Pre-flight check
       security: []
@@ -170,8 +202,10 @@ paths:
       responses:
         '201':
           description: File uploaded and encrypted successfully.
-        '400':
-          description: Failed to add file.
+        '401':
+          description: Unauthorized.
+        '500':
+          description: Internal server error (Failed to encrypt or store file).
     get:
       summary: Download and decrypt a file
       description: Streams and decrypts the file on the fly based on the logical file path. Supports Range requests for partial content.
@@ -196,6 +230,13 @@ paths:
               schema:
                 type: string
               description: Indicates support for byte range requests.
+            Content-Range:
+              schema:
+                type: string
+              description: The range of bytes being returned.
+            Content-Length:
+              schema:
+                type: string
           content:
             application/octet-stream:
               schema:
@@ -219,10 +260,14 @@ paths:
               schema:
                 type: string
                 format: binary
-        '400':
-          description: Failed to process data or locate file.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: File not found.
         '416':
           description: Range not satisfiable.
+        '500':
+          description: Internal server error (Failed to process or decrypt data).
     patch:
       summary: Move or rename a file
       description: Allows renaming a file or moving it to a different logical folder.
@@ -243,7 +288,13 @@ paths:
         '204':
           description: File moved or renamed successfully.
         '400':
-          description: Failed to move or rename file.
+          description: Bad request (e.g., invalid path).
+        '401':
+          description: Unauthorized.
+        '404':
+          description: File or destination folder not found.
+        '500':
+          description: Internal server error (Failed to move or rename file).
     delete:
       summary: Delete a file
       description: Permanently deletes the file metadata and physical encrypted chunks from the server.
@@ -257,10 +308,15 @@ paths:
       responses:
         '204':
           description: File successfully deleted.
-        '400':
-          description: Failed to remove file.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: File not found.
+        '500':
+          description: Internal server error (Failed to remove physical file or database entry).
     options:
       summary: Pre-flight check
+      security: []
       parameters:
         - in: path
           name: file_path
@@ -290,6 +346,10 @@ paths:
                 $ref: '#/components/schemas/InitUploadResponse'
         '401':
           description: Unauthorized.
+        '429':
+          description: Too many active uploads.
+        '500':
+          description: Internal server error (Failed to initialize encryption).
   /file/upload/chunk/{upload_id}:
     put:
       summary: Upload a file chunk
@@ -318,10 +378,12 @@ paths:
       responses:
         '204':
           description: Chunk uploaded successfully.
-        '404':
-          description: Upload session not found.
         '401':
           description: Unauthorized.
+        '404':
+          description: Upload session not found.
+        '500':
+          description: Internal server error (Failed to encrypt or store chunk).
   /file/upload/finalize/{upload_id}:
     post:
       summary: Finalize a chunked upload
@@ -345,10 +407,12 @@ paths:
           description: File finalized and stored successfully.
         '400':
           description: Bad request (e.g., missing chunks).
-        '404':
-          description: Upload session not found.
         '401':
           description: Unauthorized.
+        '404':
+          description: Upload session not found.
+        '500':
+          description: Internal server error (Failed to finalize or store file metadata).
   /admin/session:
     get:
       summary: List all active sessions (Admin)
@@ -368,6 +432,7 @@ paths:
           description: Invalid or missing admin API key.
     options:
       summary: Pre-flight check
+      security: []
       responses:
         '204':
           description: CORS pre-flight response
@@ -388,11 +453,10 @@ paths:
         '204':
           description: Session terminated successfully.
         '401':
-          description: Invalid or missing admin API key.
-        '404':
-          description: Session not found.
+          description: Invalid or missing admin API key, or session not found.
     options:
       summary: Pre-flight check
+      security: []
       parameters:
         - in: path
           name: session_id
@@ -417,7 +481,11 @@ paths:
         '201':
           description: Folder created successfully.
         '400':
-          description: Failed to create folder.
+          description: Bad request (e.g., invalid path).
+        '401':
+          description: Unauthorized.
+        '500':
+          description: Internal server error (Failed to create folder).
     get:
       summary: List folder contents
       description: Returns a list of files and folders contained within the specified folder path.
@@ -438,7 +506,13 @@ paths:
                 items:
                   $ref: '#/components/schemas/FolderEntry'
         '400':
-          description: Failed to read folder contents.
+          description: Bad request (e.g., invalid path).
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Folder not found.
+        '500':
+          description: Internal server error (Failed to read folder contents).
     delete:
       summary: Delete a folder recursively
       description: Recursively deletes the folder, sub-folders, and all encrypted files and thumbnails inside it.
@@ -453,9 +527,16 @@ paths:
         '204':
           description: Complete recursive deletion successful.
         '400':
-          description: Failed to remove files/folders.
+          description: Bad request (e.g., invalid path).
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Folder not found.
+        '500':
+          description: Internal server error (Failed to remove files/folders).
     options:
       summary: Pre-flight check
+      security: []
       parameters:
         - in: path
           name: folder_path
@@ -484,10 +565,17 @@ paths:
               schema:
                 type: string
                 format: binary
-        '400':
-          description: Unsupported file type or failed to process thumbnail.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Original image file not found.
+        '415':
+          description: Unsupported media type (e.g., not a supported image format).
+        '500':
+          description: Internal server error (Failed to generate or process thumbnail).
     options:
       summary: Pre-flight check
+      security: []
       parameters:
         - in: path
           name: file_path
