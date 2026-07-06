@@ -220,7 +220,10 @@ pub async fn finalize_upload(
     let metadata = encryptor.get_metadata();
 
     let user_path = session.get_user_path();
-    let old_encoded_name = session.get_encoded_file_name(upload_state.file_path.clone()).await.ok();
+    let old_encoded_name = session
+        .get_encoded_file_name(upload_state.file_path.clone())
+        .await
+        .ok();
 
     session
         .add_file(
@@ -261,7 +264,10 @@ pub async fn put_file(
 
     let old_encoded_name = {
         let session = auth.session.clone();
-        session.get_encoded_file_name(file_path_buf.clone()).await.ok()
+        session
+            .get_encoded_file_name(file_path_buf.clone())
+            .await
+            .ok()
     };
 
     let encoded_file_name = uuid::Uuid::new_v4().to_string();

@@ -150,7 +150,10 @@ async fn test_thumbnail_deletion_cleanup() {
     let state = client.rocket().state::<AppState>().unwrap();
     let session_guard = state.sessions_by_id.read().await;
     let session = session_guard.get(&session_id).unwrap().clone();
-    let encoded_name = session.get_encoded_file_name(file_path.into()).await.unwrap();
+    let encoded_name = session
+        .get_encoded_file_name(file_path.into())
+        .await
+        .unwrap();
     drop(session_guard);
 
     let cache_dir = test_user.path.join(".cache");

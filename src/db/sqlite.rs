@@ -27,16 +27,16 @@ pub fn create_user_db_connection(
         .parse::<u64>()
         .unwrap_or(60000);
 
-    let synchronous_mode = std::env::var("JUSTENCRYPT_DB_SYNCHRONOUS_MODE")
-        .unwrap_or_else(|_| "NORMAL".to_string());
+    let synchronous_mode =
+        std::env::var("JUSTENCRYPT_DB_SYNCHRONOUS_MODE").unwrap_or_else(|_| "NORMAL".to_string());
 
     let cache_size_kb = std::env::var("JUSTENCRYPT_DB_CACHE_SIZE_KB")
         .unwrap_or_else(|_| "16000".to_string())
         .parse::<i64>()
         .unwrap_or(16000);
 
-    let temp_store_mode = std::env::var("JUSTENCRYPT_DB_TEMP_STORE")
-        .unwrap_or_else(|_| "MEMORY".to_string());
+    let temp_store_mode =
+        std::env::var("JUSTENCRYPT_DB_TEMP_STORE").unwrap_or_else(|_| "MEMORY".to_string());
 
     let journal_size_limit_bytes = std::env::var("JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES")
         .unwrap_or_else(|_| "67108864".to_string())
@@ -491,7 +491,6 @@ pub fn get_file(
     Ok(result)
 }
 
-
 pub fn get_file_decryption_data(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
@@ -539,8 +538,6 @@ pub fn get_file_decryption_data(
         }
     })
 }
-
-
 
 #[derive(Deserialize, Serialize)]
 pub struct FolderEntry {

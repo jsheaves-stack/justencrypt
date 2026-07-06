@@ -95,8 +95,7 @@ pub async fn delete_folder(
                 get_sharded_path(user_path.join(".cache"), &file.encoded_name).await;
 
             if encoded_thumbnail_file_path.exists() {
-                if let Err(e) =
-                    remove_sharded_path(&user_path, &encoded_thumbnail_file_path).await
+                if let Err(e) = remove_sharded_path(&user_path, &encoded_thumbnail_file_path).await
                 {
                     warn!(
                         "Failed to remove thumbnail file {:?}: {}",

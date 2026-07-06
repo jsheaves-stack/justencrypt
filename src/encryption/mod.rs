@@ -3,7 +3,7 @@ pub mod chunk_encryptor;
 
 use std::error::Error;
 
-pub use orion::kex::SecretKey;
+pub use orion::{auth, kex::SecretKey};
 
 pub const CHUNK_SIZE: usize = 64 * 1024;
 pub const NONCE_LEN: usize = 24;
@@ -45,7 +45,6 @@ impl FileEncryptionMetadata {
         &self,
         salt: &[u8],
     ) -> Result<FileEncryptionMetadata, Box<dyn Error>> {
-        use orion::auth;
         let secret_key = auth::SecretKey::from_slice(self.key.unprotected_as_bytes())?;
         let tag = auth::authenticate(&secret_key, salt)?;
         let derived_key = SecretKey::from_slice(tag.unprotected_as_bytes())?;
