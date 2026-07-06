@@ -68,6 +68,21 @@ components:
         file_name:
           type: string
           description: The logical name of the file or folder.
+        file_size:
+          type: integer
+          format: int64
+          nullable: true
+          description: The total size of the file in bytes, if this entry is a file.
+        created_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: The timestamp when the file was created, if this entry is a file.
+        last_modified_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: The timestamp when the file was last modified, if this entry is a file.
     ActiveSessionInfo:
       type: object
       properties:

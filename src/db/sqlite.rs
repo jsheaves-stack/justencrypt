@@ -541,9 +541,12 @@ pub fn get_file_decryption_data(
 
 #[derive(Deserialize, Serialize)]
 pub struct FolderEntry {
-    is_file: bool,
-    file_extension: Option<String>,
-    file_name: String,
+    pub is_file: bool,
+    pub file_extension: Option<String>,
+    pub file_name: String,
+    pub file_size: Option<u64>,
+    pub created_date: Option<String>,
+    pub last_modified_date: Option<String>,
 }
 
 pub fn get_folder(
@@ -570,21 +573,31 @@ pub fn get_folder(
             is_file: false,
             file_extension: None,
             file_name,
+            file_size: None,
+            created_date: None,
+            last_modified_date: None,
         });
     }
 
     trace!("Querying for files in folder.");
-    let mut file_stmt =
-        db.prepare("SELECT name, file_extension FROM files WHERE parent_folder_id = ?1")?;
+    let mut file_stmt = db.prepare(
+        "SELECT name, file_extension, total_size, created_at, updated_at FROM files WHERE parent_folder_id = ?1",
+    )?;
     let mut file_rows = file_stmt.query(params![folder_id])?;
 
     while let Some(row) = file_rows.next()? {
         let file_name: String = row.get(0)?;
+        let total_size_i64: i64 = row.get(2)?;
+        let created_at: Option<String> = row.get(3)?;
+        let updated_at: Option<String> = row.get(4)?;
         trace!("Found file: '{}'", file_name);
         entries.push(FolderEntry {
             is_file: true,
             file_extension: row.get(1)?,
             file_name,
+            file_size: Some(total_size_i64 as u64),
+            created_date: created_at,
+            last_modified_date: updated_at,
         });
     }
 

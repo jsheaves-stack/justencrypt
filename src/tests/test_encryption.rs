@@ -27,6 +27,8 @@ async fn test_encrypt_stream_at_offset() {
         .unwrap();
     assert!(written_chunks.contains(&1));
 
+    drop(encryptor);
+
     // Verify file size
     let metadata = fs::metadata(file_path).await.unwrap();
     assert_eq!(metadata.len(), (ENCRYPTED_CHUNK_SIZE * 2) as u64);

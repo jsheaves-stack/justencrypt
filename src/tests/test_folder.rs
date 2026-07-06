@@ -1,6 +1,10 @@
 use super::*;
 use crate::{
-    routes::folder::{create_folder, delete_folder, folder_options, get_folder},
+    db::sqlite::FolderEntry,
+    routes::{
+        file::put_file,
+        folder::{create_folder, delete_folder, folder_options, get_folder},
+    },
     AppState,
 };
 use rocket::{http::Status, local::asynchronous::Client, routes};
@@ -95,4 +99,61 @@ async fn test_create_folder_no_auth() {
         .await;
 
     assert_eq!(response.status(), Status::Unauthorized);
+}
+
+#[rocket::async_test]
+async fn test_get_folder_file_metadata() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket
+        .mount(
+            "/folder",
+            routes![create_folder, get_folder, delete_folder, folder_options],
+        )
+        .mount("/file", routes![put_file]);
+
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    let folder_path = "meta_folder";
+    let file_name = "test_meta.txt";
+    let file_content = "metadata test content";
+
+    // Create folder
+    let response = client
+        .put(format!("/folder/{}", folder_path))
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Created);
+
+    // Create file inside folder
+    let response = client
+        .put(format!("/file/{}/{}", folder_path, file_name))
+        .private_cookie(cookie.clone())
+        .body(file_content)
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Created);
+
+    // Get folder contents
+    let response = client
+        .get(format!("/folder/{}", folder_path))
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Ok);
+
+    let entries: Vec<FolderEntry> = response.into_json().await.unwrap();
+    assert_eq!(entries.len(), 1);
+
+    let entry = &entries[0];
+    assert_eq!(entry.file_name, file_name);
+    assert!(entry.is_file);
+    assert_eq!(entry.file_size, Some(file_content.len() as u64));
+    assert!(entry.created_date.is_some());
+    assert!(entry.last_modified_date.is_some());
 }
