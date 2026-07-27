@@ -549,6 +549,30 @@ pub struct FolderEntry {
     pub last_modified_date: Option<String>,
 }
 
+pub fn get_folder_size(
+    db: &PooledConnection<SqliteConnectionManager>,
+    folder_id: i64,
+) -> Result<u64, DbError> {
+    trace!("Calculating size for folder id {}", folder_id);
+    let size: i64 = db.query_row(
+        "
+        WITH RECURSIVE SubFolders AS (
+            SELECT id FROM folders WHERE id = ?1
+            UNION ALL
+            SELECT f.id FROM folders f
+            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
+        )
+        SELECT COALESCE(SUM(files.total_size), 0)
+        FROM files
+        WHERE files.parent_folder_id IN (SELECT id FROM SubFolders)
+    ",
+        params![folder_id],
+        |row| row.get(0),
+    )?;
+
+    Ok(size as u64)
+}
+
 pub fn get_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
@@ -563,17 +587,23 @@ pub fn get_folder(
     let mut entries = Vec::new();
 
     trace!("Querying for child folders.");
-    let mut folder_stmt = db.prepare("SELECT name FROM folders WHERE parent_folder_id = ?1")?;
+    let mut folder_stmt = db.prepare("SELECT id, name FROM folders WHERE parent_folder_id = ?1")?;
     let mut folder_rows = folder_stmt.query(params![folder_id])?;
 
     while let Some(row) = folder_rows.next()? {
-        let file_name: String = row.get(0)?;
-        trace!("Found child folder: '{}'", file_name);
+        let folder_id: i64 = row.get(0)?;
+        let file_name: String = row.get(1)?;
+        let folder_size = get_folder_size(db, folder_id)?;
+        trace!(
+            "Found child folder: '{}' with size: {}",
+            file_name,
+            folder_size
+        );
         entries.push(FolderEntry {
             is_file: false,
             file_extension: None,
             file_name,
-            file_size: None,
+            file_size: Some(folder_size),
             created_date: None,
             last_modified_date: None,
         });

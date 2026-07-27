@@ -157,3 +157,70 @@ async fn test_get_folder_file_metadata() {
     assert!(entry.created_date.is_some());
     assert!(entry.last_modified_date.is_some());
 }
+
+#[rocket::async_test]
+async fn test_get_folder_with_subfolder_size() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket
+        .mount(
+            "/folder",
+            routes![create_folder, get_folder, delete_folder, folder_options],
+        )
+        .mount("/file", routes![put_file]);
+
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    let main_folder = "main_folder_for_size";
+    let sub_folder = "sub_folder_for_size";
+    let file_name = "file_for_size.txt";
+    let file_content = "some content for size calculation";
+
+    // Create main folder
+    let response = client
+        .put(format!("/folder/{}", main_folder))
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Created);
+
+    // Create sub folder
+    let response = client
+        .put(format!("/folder/{}/{}", main_folder, sub_folder))
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Created);
+
+    // Create file inside sub folder
+    let response = client
+        .put(format!(
+            "/file/{}/{}/{}",
+            main_folder, sub_folder, file_name
+        ))
+        .private_cookie(cookie.clone())
+        .body(file_content)
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Created);
+
+    // Get main folder contents
+    let response = client
+        .get(format!("/folder/{}", main_folder))
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Ok);
+
+    let entries: Vec<FolderEntry> = response.into_json().await.unwrap();
+    assert_eq!(entries.len(), 1);
+
+    let entry = &entries[0];
+    assert_eq!(entry.file_name, sub_folder);
+    assert!(!entry.is_file);
+    assert_eq!(entry.file_size, Some(file_content.len() as u64));
+}
