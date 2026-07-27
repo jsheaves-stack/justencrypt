@@ -540,13 +540,29 @@ pub fn get_file_decryption_data(
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct FolderEntry {
-    pub is_file: bool,
+#[serde(tag = "type")]
+pub enum FolderContent {
+    File(File),
+    Folder(Folder),
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct File {
     pub file_extension: Option<String>,
     pub file_name: String,
     pub file_size: Option<u64>,
     pub created_date: Option<String>,
     pub last_modified_date: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Folder {
+    pub file_name: String,
+    pub file_size: Option<u64>,
+    pub created_date: Option<String>,
+    pub last_modified_date: Option<String>,
+    pub file_count: u64,
+    pub folder_count: u64,
 }
 
 pub fn get_folder_size(
@@ -573,10 +589,56 @@ pub fn get_folder_size(
     Ok(size as u64)
 }
 
+pub fn get_file_count(
+    db: &PooledConnection<SqliteConnectionManager>,
+    folder_id: i64,
+) -> Result<u64, DbError> {
+    trace!("Calculating file count for folder id {}", folder_id);
+    let count: i64 = db.query_row(
+        "
+        WITH RECURSIVE SubFolders AS (
+            SELECT id FROM folders WHERE id = ?1
+            UNION ALL
+            SELECT f.id FROM folders f
+            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
+        )
+        SELECT COUNT(files.id)
+        FROM files
+        WHERE files.parent_folder_id IN (SELECT id FROM SubFolders)
+    ",
+        params![folder_id],
+        |row| row.get(0),
+    )?;
+
+    Ok(count as u64)
+}
+
+pub fn get_folder_count(
+    db: &PooledConnection<SqliteConnectionManager>,
+    folder_id: i64,
+) -> Result<u64, DbError> {
+    trace!("Calculating folder count for folder id {}", folder_id);
+    let count: i64 = db.query_row(
+        "
+        WITH RECURSIVE SubFolders AS (
+            SELECT id FROM folders WHERE id = ?1
+            UNION ALL
+            SELECT f.id FROM folders f
+            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
+        )
+        SELECT COUNT(id) FROM SubFolders WHERE id != ?1
+    ",
+        params![folder_id],
+        |row| row.get(0),
+    )?;
+
+    Ok(count as u64)
+}
+
 pub fn get_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
-) -> Result<Vec<FolderEntry>, DbError> {
+) -> Result<Vec<FolderContent>, DbError> {
     trace!(
         "Entering sqlite::get_folder with folder_path_str: '{}'",
         folder_path_str
@@ -594,19 +656,21 @@ pub fn get_folder(
         let folder_id: i64 = row.get(0)?;
         let file_name: String = row.get(1)?;
         let folder_size = get_folder_size(db, folder_id)?;
+        let file_count = get_file_count(db, folder_id)?;
+        let folder_count = get_folder_count(db, folder_id)?;
         trace!(
             "Found child folder: '{}' with size: {}",
             file_name,
             folder_size
         );
-        entries.push(FolderEntry {
-            is_file: false,
-            file_extension: None,
+        entries.push(FolderContent::Folder(Folder {
             file_name,
             file_size: Some(folder_size),
             created_date: None,
             last_modified_date: None,
-        });
+            file_count,
+            folder_count,
+        }));
     }
 
     trace!("Querying for files in folder.");
@@ -621,14 +685,13 @@ pub fn get_folder(
         let created_at: Option<String> = row.get(3)?;
         let updated_at: Option<String> = row.get(4)?;
         trace!("Found file: '{}'", file_name);
-        entries.push(FolderEntry {
-            is_file: true,
+        entries.push(FolderContent::File(File {
             file_extension: row.get(1)?,
             file_name,
             file_size: Some(total_size_i64 as u64),
             created_date: created_at,
             last_modified_date: updated_at,
-        });
+        }));
     }
 
     trace!("Exiting sqlite::get_folder with {} entries.", entries.len());

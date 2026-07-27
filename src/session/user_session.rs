@@ -1,5 +1,5 @@
 use crate::{
-    db::sqlite::{self, FolderEntry},
+    db::sqlite::{self, FolderContent},
     encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
     enums::db_error::DbError,
 };
@@ -304,7 +304,7 @@ impl UserSession {
         Ok(result)
     }
 
-    pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<FolderEntry>, DbError> {
+    pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<FolderContent>, DbError> {
         trace!(
             "Entering UserSession::get_folder for path: {:?}",
             folder_path

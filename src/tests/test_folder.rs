@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    db::sqlite::FolderEntry,
+    db::sqlite::FolderContent,
     routes::{
         file::put_file,
         folder::{create_folder, delete_folder, folder_options, get_folder},
@@ -147,15 +147,18 @@ async fn test_get_folder_file_metadata() {
 
     assert_eq!(response.status(), Status::Ok);
 
-    let entries: Vec<FolderEntry> = response.into_json().await.unwrap();
+    let entries: Vec<FolderContent> = response.into_json().await.unwrap();
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];
-    assert_eq!(entry.file_name, file_name);
-    assert!(entry.is_file);
-    assert_eq!(entry.file_size, Some(file_content.len() as u64));
-    assert!(entry.created_date.is_some());
-    assert!(entry.last_modified_date.is_some());
+    if let FolderContent::File(file) = entry {
+        assert_eq!(file.file_name, file_name);
+        assert_eq!(file.file_size, Some(file_content.len() as u64));
+        assert!(file.created_date.is_some());
+        assert!(file.last_modified_date.is_some());
+    } else {
+        panic!("Expected a file");
+    }
 }
 
 #[rocket::async_test]
@@ -216,11 +219,16 @@ async fn test_get_folder_with_subfolder_size() {
 
     assert_eq!(response.status(), Status::Ok);
 
-    let entries: Vec<FolderEntry> = response.into_json().await.unwrap();
+    let entries: Vec<FolderContent> = response.into_json().await.unwrap();
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];
-    assert_eq!(entry.file_name, sub_folder);
-    assert!(!entry.is_file);
-    assert_eq!(entry.file_size, Some(file_content.len() as u64));
+    if let FolderContent::Folder(folder) = entry {
+        assert_eq!(folder.file_name, sub_folder);
+        assert_eq!(folder.file_size, Some(file_content.len() as u64));
+        assert_eq!(folder.file_count, 1);
+        assert_eq!(folder.folder_count, 0);
+    } else {
+        panic!("Expected a folder");
+    }
 }

@@ -1,5 +1,5 @@
 use crate::{
-    db::sqlite::FolderEntry,
+    db::sqlite::FolderContent,
     enums::{request_error::RequestError, request_success::RequestSuccess},
     util::{
         sharded_path::{get_sharded_path, remove_sharded_path},
@@ -19,7 +19,7 @@ pub fn folder_options(folder_path: UnrestrictedPath) -> Result<RequestSuccess, R
 pub async fn get_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
-) -> Result<Json<Vec<FolderEntry>>, RequestError> {
+) -> Result<Json<Vec<FolderContent>>, RequestError> {
     trace!("Entering route [GET /folder/{}]", folder_path);
 
     let folder_path_buf = folder_path.to_path_buf();

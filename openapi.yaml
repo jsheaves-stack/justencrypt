@@ -48,37 +48,73 @@ components:
         file_name:
           type: string
           description: The new logical name for the file.
-    FolderEntry:
+    Folder:
       type: object
       required:
-        - is_file
         - file_name
       properties:
-        is_file:
-          type: boolean
-          description: Indicates whether this entry is a file or a folder.
-        file_extension:
-          type: string
-          nullable: true
-          description: The file extension, if this entry is a file.
         file_name:
           type: string
-          description: The logical name of the file or folder.
+          description: The logical name of the folder.
         file_size:
           type: integer
           format: int64
           nullable: true
-          description: The total size of the file in bytes, if this entry is a file.
+          description: The total size of all files within the folder and its subfolders.
         created_date:
           type: string
           format: date-time
           nullable: true
-          description: The timestamp when the file was created, if this entry is a file.
+          description: The timestamp when the folder was created.
         last_modified_date:
           type: string
           format: date-time
           nullable: true
-          description: The timestamp when the file was last modified, if this entry is a file.
+          description: The timestamp when the folder was last modified.
+        file_count:
+          type: integer
+          format: int64
+          description: The total number of files within the folder and its subfolders.
+        folder_count:
+          type: integer
+          format: int64
+          description: The total number of subfolders within the folder.
+    File:
+      type: object
+      required:
+        - file_name
+      properties:
+        file_name:
+          type: string
+          description: The logical name of the file.
+        file_extension:
+          type: string
+          nullable: true
+          description: The file extension.
+        file_size:
+          type: integer
+          format: int64
+          nullable: true
+          description: The total size of the file in bytes.
+        created_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: The timestamp when the file was created.
+        last_modified_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: The timestamp when the file was last modified.
+    FolderContent:
+      oneOf:
+        - $ref: '#/components/schemas/File'
+        - $ref: '#/components/schemas/Folder'
+      discriminator:
+        propertyName: type
+        mapping:
+          File: '#/components/schemas/File'
+          Folder: '#/components/schemas/Folder'
     ActiveSessionInfo:
       type: object
       properties:
@@ -504,7 +540,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/FolderEntry'
+                  $ref: '#/components/schemas/FolderContent'
         '400':
           description: Bad request (e.g., invalid path).
         '401':
