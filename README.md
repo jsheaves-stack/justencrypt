@@ -1,117 +1,178 @@
 # JustEncrypt
 
-## Requirements
+**A secure file encryption service.**
 
-- Rust
-- Cargo
-- Sqlcipher
+[![Rust Version][rust-badge]][rust-link]
+[![License: MIT][license-badge]][license-link]
 
-For static builds:
-- x86_64-unknown-linux-musl toolchain
-- Musl
+[rust-badge]: https://img.shields.io/badge/Rust-1.70%2B-orange.svg
+[rust-link]: https://www.rust-lang.org/
+[license-badge]: https://img.shields.io/badge/License-MIT-blue.svg
+[license-link]: https://opensource.org/licenses/MIT
 
-## Installation & Setup
+JustEncrypt is a self-hostable, high-performance file encryption service accessible via a RESTful API. It's built with Rust and the Rocket web framework, with a strong emphasis on security and privacy.
 
-1. Clone the repository:
+## Features
 
-   ```sh
-   git clone https://github.com/jsheaves-stack/justencrypt.git
-   cd justencrypt
-   ```
+- **End-to-End Encryption:** Files are encrypted and decrypted on the fly.
+- **Chunked Uploads:** Supports uploading large files in chunks.
+- **Thumbnail Generation:** Automatically generates thumbnails for image files.
+- **User-Based Sessions:** Secure session management for multi-user environments.
+- **Detailed Configuration:** Highly configurable through environment variables.
+- **Docker Support:** Ready to be deployed as a Docker container.
 
-2. Install dependencies:
+## Technologies
 
-   Regular Build:
-   ```sh
-   cargo build --release
-   ```
+- **Language:** [Rust](https://www.rust-lang.org/)
+- **Web Framework:** [Rocket](https://rocket.rs/)
+- **Database:** [SQLite](https://www.sqlite.org/index.html) with [SQLCipher](https://www.zetetic.net/sqlcipher/) for database encryption.
+- **Encryption:** [Orion](https://docs.rs/orion/latest/orion/) for cryptographic operations.
+- **Serialization:** [Serde](https://serde.rs/)
 
-   Static build:
-   ```sh
-   cargo build --release --target x86_64-unknown-linux-musl
-   ```
+## Prerequisites
 
-3. Set up environment variables:
+- [Rust](https://www.rust-lang.org/tools/install) (1.70 or later)
+- [Cargo](https://doc.rust-lang.org/cargo/)
+- [SQLCipher](https://www.zetetic.net/sqlcipher/open-source/)
+- For static builds:
+    - `x86_64-unknown-linux-musl` toolchain
+    - `musl`
 
-   - Create a `.env` file in the project root and define the required environment variables (see below for details).
+## Getting Started
 
-4. Run the server:
+### 1. Clone the Repository
 
-   ```sh
-   cargo run --release
-   ```
+```sh
+git clone <repository-url>
+cd justencrypt
+```
 
-## Environment Variables
+### 2. Set Up Environment Variables
 
-The API uses environment variables for configuration. Below are the required variables and their descriptions:
+Create an `env/justencrypt.env` file. You can start with the provided example and uncomment the variables you need to change.
 
-| Variable Name                                 | Description |
-|-----------------------------------------------|-------------|
-| `JUSTENCRYPT_USER_DATA_PATH`                  | The path to store the user data. Default: `./user_data`. |
-| `JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER`     | Minimum number of idle SQLite connections per user session. Default: `0`. |
-| `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`     | Maximum number of concurrent SQLite connections per user session. Default: `2`. |
-| `JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS`         | Seconds a connection can sit idle before being closed. Default: `600` (10 minutes). |
-| `JUSTENCRYPT_DB_BUSY_TIMEOUT_MS`              | Milliseconds a connection waits when the database is locked before failing. Default: `60000` (60 seconds). |
-| `JUSTENCRYPT_DB_SYNCHRONOUS_MODE`             | SQLite PRAGMA synchronous setting. Options: `NORMAL`, `FULL`, `OFF`, `EXTRA`. Default: `NORMAL` (Safe in WAL mode, 10x-100x faster than `FULL`). |
-| `JUSTENCRYPT_DB_CACHE_SIZE_KB`                | SQLite PRAGMA cache_size in kilobytes per pool connection. Default: `16000` (16 MiB). |
-| `JUSTENCRYPT_DB_TEMP_STORE`                   | SQLite PRAGMA temp_store setting for temporary tables/indices. Options: `MEMORY`, `FILE`, `DEFAULT`. Default: `MEMORY`. |
-| `JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES`     | Maximum size in bytes the WAL file is allowed to grow before truncation. Default: `67108864` (64 MiB). |
-| `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds an r2d2 pool check-out will wait for an available connection. Default: `30`. |
-| `JUSTENCRYPT_ADDRESS`                         | The IP address Rocket will bind to. Default: `0.0.0.0`. |
-| `JUSTENCRYPT_PORT`                            | The port Rocket will listen on. Default: `8000`. |
-| `JUSTENCRYPT_WORKERS`                         | Number of worker threads for handling requests. Default: `16`. |
-| `JUSTENCRYPT_KEEP_ALIVE`                      | Keep-alive timeout in seconds. Default: `5`. |
-| `JUSTENCRYPT_ROCKET_LOG_LEVEL`                | Logging level for Rocket. Options: `Off`, `Debug`, `Normal`, `Critical`. Default: `Critical`. |
-| `JUSTENCRYPT_LOG_LEVEL`                       | Logging level for JustEncrypt. Options: `Off`, `Trace`, `Debug`, `Info`, `Warn`, `Error`. Default: `Warn`. |
-| `JUSTENCRYPT_ROCKET_SECRET_KEY`               | Required for securing private cookies. A suitable 256-bit base64 key can be generated using OpenSSL: `openssl rand -base64 32`. Required in release mode. |
-| `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` | The minimum password security score to allow for the server. Options: `0`, `1`, `2`, `3`, `4`. Default: `3`. |
-| `JUSTENCRYPT_TLS_KEY_PATH`                    | The path to the tls key file. Required in release mode. |
-| `JUSTENCRYPT_TLS_CERT_PATH`                   | The path to the tls cert file. Required in release mode. |
-| `JUSTENCRYPT_ALLOW_ORIGIN`                    | The Access-Control-Allow-Origin domain value. Default: `http://localhost:8000`. |
-| `JUSTENCRYPT_ADMIN_API_KEY`                   | The API key required to access administrative routes. If not set, admin routes are disabled. |
-| `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size allowed for form submissions. Default: `10 MiB`. |
-| `JUSTENCRYPT_LIMITS_DATA_FORM`                | Maximum size allowed for data-form submissions. Default: `10 MiB`. |
-| `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file upload size. Default: `64 GiB`. |
-| `JUSTENCRYPT_LIMITS_JSON`                     | Maximum JSON request payload size. Default: `10 MiB`. |
-| `JUSTENCRYPT_LIMITS_MSGPACK`                  | Maximum MessagePack request payload size. Default: `1 MiB`. |
-| `JUSTENCRYPT_LIMITS_FILE_JPG`                 | Maximum size allowed for JPG files. Default: `10 GiB`. |
-| `JUSTENCRYPT_LIMITS_BYTES`                    | Maximum size for raw byte payloads. Default: `10 MiB`. |
-| `JUSTENCRYPT_LIMITS_STRING`                   | Maximum size for string payloads. Default: `10 MiB`. |
+```sh
+mkdir -p env
+cp env/justencrypt.env.example env/justencrypt.env
+```
 
-Example `.env` file:
-```env
-JUSTENCRYPT_USER_DATA_PATH=./user_data
-JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER=0
-JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER=2
-JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS=600
-JUSTENCRYPT_DB_BUSY_TIMEOUT_MS=60000
-JUSTENCRYPT_DB_SYNCHRONOUS_MODE=NORMAL
-JUSTENCRYPT_DB_CACHE_SIZE_KB=16000
-JUSTENCRYPT_DB_TEMP_STORE=MEMORY
-JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES=67108864
-JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS=30
-JUSTENCRYPT_ADDRESS=0.0.0.0
-JUSTENCRYPT_PORT=8000
-JUSTENCRYPT_WORKERS=16
-JUSTENCRYPT_KEEP_ALIVE=5
-JUSTENCRYPT_ROCKET_LOG_LEVEL=Critical
-JUSTENCRYPT_LOG_LEVEL=Warn
-JUSTENCRYPT_ROCKET_SECRET_KEY=your_generated_secret_key
-JUSTENCRYPT_MAX_ACTIVE_UPLOADS=100
-JUSTENCRYPT_TLS_KEY_PATH=./default.key
-JUSTENCRYPT_TLS_CERT_PATH=./default.crt
-JUSTENCRYPT_ALLOW_ORIGIN=https://example.com
-JUSTENCRYPT_ADMIN_API_KEY=api_key
-JUSTENCRYPT_LIMITS_FORM=10MiB
-JUSTENCRYPT_LIMITS_DATA_FORM=10MiB
-JUSTENCRYPT_LIMITS_FILE=64GiB
-JUSTENCRYPT_LIMITS_JSON=10MiB
-JUSTENCRYPT_LIMITS_MSGPACK=1MiB
-JUSTENCRYPT_LIMITS_FILE_JPG=10GiB
-JUSTENCRYPT_LIMITS_BYTES=10MiB
-JUSTENCRYPT_LIMITS_STRING=10MiB
+### 3. Build and Run
+
+You can run the application using `cargo`:
+
+```sh
+cargo run --release
+```
+
+The server will start on the address and port specified in your configuration (default: `http://0.0.0.0:8000`).
+
+## Configuration
+
+The application is configured through environment variables, which are loaded from the `env/justencrypt.env` file. The following table details the available variables and their default values.
+
+| Variable Name                                 | Description | Default |
+|-----------------------------------------------|-------------|---------|
+| `JUSTENCRYPT_ADDRESS`                         | The IP address Rocket will bind to. | `0.0.0.0` |
+| `JUSTENCRYPT_PORT`                            | The port Rocket will listen on. | `8000` |
+| `JUSTENCRYPT_WORKERS`                         | Number of worker threads for handling requests. | `16` |
+| `JUSTENCRYPT_KEEP_ALIVE`                      | Keep-alive timeout in seconds. | `5` |
+| `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` | The minimum password security score (`0`-`4`). | `3` |
+| `JUSTENCRYPT_ROCKET_LOG_LEVEL`                | Logging level for Rocket (`Off`, `Debug`, `Normal`, `Critical`). | `Critical` |
+| `JUSTENCRYPT_LOG_LEVEL`                       | Logging level for the application (`Off`, `Trace`, `Debug`, `Info`, `Warn`, `Error`). | `Warn` |
+| `JUSTENCRYPT_USER_DATA_PATH`                  | The path to store user data. | `./user_data` |
+| `JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER`     | Minimum number of idle SQLite connections per user. | `0` |
+| `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`     | Maximum number of concurrent SQLite connections per user. | `2` |
+| `JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS`         | Seconds a connection can be idle before being closed. | `600` |
+| `JUSTENCRYPT_DB_BUSY_TIMEOUT_MS`              | Milliseconds to wait when the database is locked. | `60000` |
+| `JUSTENCRYPT_DB_SYNCHRONOUS_MODE`             | SQLite PRAGMA synchronous setting (`NORMAL`, `FULL`, `OFF`). | `NORMAL` |
+| `JUSTENCRYPT_DB_CACHE_SIZE_KB`                | SQLite PRAGMA cache_size in kilobytes. | `16000` |
+| `JUSTENCRYPT_DB_TEMP_STORE`                   | SQLite PRAGMA temp_store setting (`MEMORY`, `FILE`). | `MEMORY` |
+| `JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES`     | Max size in bytes for the WAL file. | `67108864` |
+| `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds to wait for an available DB connection. | `30` |
+| `JUSTENCRYPT_ROCKET_SECRET_KEY`               | **Required.** A 256-bit base64 key for securing cookies. Generate one with `openssl rand -base64 32`. | (none) |
+| `JUSTENCRYPT_TLS_KEY_PATH`                    | Path to the TLS key file for HTTPS. | (none) |
+| `JUSTENCRYPT_TLS_CERT_PATH`                   | Path to the TLS cert file for HTTPS. | (none) |
+| `JUSTENCRYPT_ALLOW_ORIGIN`                    | Access-Control-Allow-Origin domain for CORS. | (none) |
+| `JUSTENCRYPT_ADMIN_API_KEY`                   | API key to enable and access administrative routes. | (none) |
+| `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size for form submissions. | `10MiB` |
+| `JUSTENCRYPT_LIMITS_DATA_FORM`                | Maximum size for data-form submissions. | `10MiB` |
+| `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file upload size. | `64GiB` |
+| `JUSTENCRYPT_LIMITS_JSON`                     | Maximum JSON payload size. | `10MiB` |
+| `JUSTENCRYPT_LIMITS_MSGPACK`                  | Maximum MessagePack payload size. | `1MiB` |
+| `JUSTENCRYPT_LIMITS_FILE_JPG`                 | Maximum size for JPG files. | `10GiB` |
+| `JUSTENCRYPT_LIMITS_BYTES`                    | Maximum size for raw byte payloads. | `10MiB` |
+| `JUSTENCRYPT_LIMITS_STRING`                   | Maximum size for string payloads. | `10MiB` |
+
+## API Endpoints
+
+### Info (`/`)
+- `GET /`: Get server information.
+
+### Session (`/session`)
+- `POST /`: Create a new session (login).
+- `DELETE /`: Destroy the current session (logout).
+
+### File (`/file`)
+- `GET /<file_path..>`: Download a file.
+- `PUT /<file_path..>`: Upload a file (simple upload).
+- `DELETE /<file_path..>`: Delete a file.
+- `PATCH /<file_path..>`: Rename or move a file.
+- `POST /upload/initiate/<file_path..>`: Initiate a chunked upload.
+- `PUT /upload/chunk/<upload_id>?<offset>`: Upload a chunk of a file.
+- `POST /upload/finalize/<upload_id>?<total_size>`: Finalize a chunked upload.
+
+### Folder (`/folder`)
+- `GET /<folder_path..>`: List the contents of a folder.
+- `PUT /<folder_path..>`: Create a new folder.
+- `DELETE /<folder_path..>`: Delete a folder.
+
+### Thumbnail (`/thumbnail`)
+- `GET /<file_path..>`: Get a thumbnail for a file.
+
+### Admin (`/admin`)
+- `GET /session`: Get information about the current session.
+- `DELETE /session/<session_id>`: Delete a specific session.
+
+## Building and Running
+
+### Standard Build
+
+```sh
+# Build for development
+cargo build
+
+# Build for release
+cargo build --release
+```
+
+### Static Build
+
+To create a statically linked binary for Linux:
+
+```sh
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+### Docker
+
+The repository includes a `Dockerfile` for building and running the application in a container.
+
+```sh
+# Build the Docker image
+docker build -t justencrypt .
+
+# Run the container
+docker run -d -p 8000:8000 --env-file env/justencrypt.env --name justencrypt justencrypt
+```
+
+## Testing
+
+Run the test suite using `cargo`:
+
+```sh
+cargo test
 ```
 
 ## License
 
-This project is open-source and licensed under the MIT License.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
