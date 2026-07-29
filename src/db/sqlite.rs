@@ -565,76 +565,6 @@ pub struct Folder {
     pub folder_count: u64,
 }
 
-pub fn get_folder_size(
-    db: &PooledConnection<SqliteConnectionManager>,
-    folder_id: i64,
-) -> Result<u64, DbError> {
-    trace!("Calculating size for folder id {}", folder_id);
-    let size: i64 = db.query_row(
-        "
-        WITH RECURSIVE SubFolders AS (
-            SELECT id FROM folders WHERE id = ?1
-            UNION ALL
-            SELECT f.id FROM folders f
-            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
-        )
-        SELECT COALESCE(SUM(files.total_size), 0)
-        FROM files
-        WHERE files.parent_folder_id IN (SELECT id FROM SubFolders)
-    ",
-        params![folder_id],
-        |row| row.get(0),
-    )?;
-
-    Ok(size as u64)
-}
-
-pub fn get_file_count(
-    db: &PooledConnection<SqliteConnectionManager>,
-    folder_id: i64,
-) -> Result<u64, DbError> {
-    trace!("Calculating file count for folder id {}", folder_id);
-    let count: i64 = db.query_row(
-        "
-        WITH RECURSIVE SubFolders AS (
-            SELECT id FROM folders WHERE id = ?1
-            UNION ALL
-            SELECT f.id FROM folders f
-            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
-        )
-        SELECT COUNT(files.id)
-        FROM files
-        WHERE files.parent_folder_id IN (SELECT id FROM SubFolders)
-    ",
-        params![folder_id],
-        |row| row.get(0),
-    )?;
-
-    Ok(count as u64)
-}
-
-pub fn get_folder_count(
-    db: &PooledConnection<SqliteConnectionManager>,
-    folder_id: i64,
-) -> Result<u64, DbError> {
-    trace!("Calculating folder count for folder id {}", folder_id);
-    let count: i64 = db.query_row(
-        "
-        WITH RECURSIVE SubFolders AS (
-            SELECT id FROM folders WHERE id = ?1
-            UNION ALL
-            SELECT f.id FROM folders f
-            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
-        )
-        SELECT COUNT(id) FROM SubFolders WHERE id != ?1
-    ",
-        params![folder_id],
-        |row| row.get(0),
-    )?;
-
-    Ok(count as u64)
-}
-
 pub fn get_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
@@ -649,15 +579,37 @@ pub fn get_folder(
     let mut entries = Vec::new();
 
     trace!("Querying for child folders.");
-    let mut folder_stmt = db.prepare("SELECT id, name FROM folders WHERE parent_folder_id = ?1")?;
+    let mut folder_stmt = db.prepare(
+        "
+        WITH RECURSIVE SubFolders AS (
+            SELECT id AS base_folder_id, id AS descendant_id
+            FROM folders
+            WHERE parent_folder_id = ?1
+            UNION ALL
+            SELECT sf.base_folder_id, f.id
+            FROM folders f
+            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.descendant_id
+        )
+        SELECT 
+            f.name,
+            COALESCE(SUM(files.total_size), 0) AS folder_size,
+            COUNT(files.id) AS file_count,
+            COUNT(DISTINCT sf.descendant_id) - 1 AS folder_count
+        FROM folders f
+        JOIN SubFolders sf ON f.id = sf.base_folder_id
+        LEFT JOIN files ON files.parent_folder_id = sf.descendant_id
+        WHERE f.parent_folder_id = ?1
+        GROUP BY f.id, f.name
+        ",
+    )?;
+
     let mut folder_rows = folder_stmt.query(params![folder_id])?;
 
     while let Some(row) = folder_rows.next()? {
-        let folder_id: i64 = row.get(0)?;
-        let file_name: String = row.get(1)?;
-        let folder_size = get_folder_size(db, folder_id)?;
-        let file_count = get_file_count(db, folder_id)?;
-        let folder_count = get_folder_count(db, folder_id)?;
+        let file_name: String = row.get(0)?;
+        let folder_size: i64 = row.get(1)?;
+        let file_count: i64 = row.get(2)?;
+        let folder_count: i64 = row.get(3)?;
         trace!(
             "Found child folder: '{}' with size: {}",
             file_name,
@@ -665,11 +617,11 @@ pub fn get_folder(
         );
         entries.push(FolderContent::Folder(Folder {
             file_name,
-            file_size: Some(folder_size),
+            file_size: Some(folder_size as u64),
             created_date: None,
             last_modified_date: None,
-            file_count,
-            folder_count,
+            file_count: file_count as u64,
+            folder_count: folder_count as u64,
         }));
     }
 
