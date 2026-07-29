@@ -57,7 +57,7 @@ pub fn create_user_db_connection(
         conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
-        if let Err(e) = conn.query_row("SELECT 1", [], |_| Ok(())) {
+        if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())) {
             error!("Failed to verify database password: {}", e);
             return Err(DbError::Rusqlite(e));
         }
@@ -77,7 +77,7 @@ pub fn create_user_db_connection(
         conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
-        conn.query_row("SELECT 1", [], |_| Ok(()))?;
+        conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(()))?;
 
         match conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get::<_, String>(0)) {
             Ok(mode) => {
@@ -187,7 +187,7 @@ fn get_folder_id_and_create_if_missing(
             None => {
                 trace!("Folder '{}' not found, creating it.", name);
                 tx.execute(
-                    "INSERT OR IGNORE INTO folders (parent_folder_id, name) VALUES (?1, ?2)",
+                    "INSERT OR IGNORE INTO folders (parent_folder_id, name, created_at) VALUES (?1, ?2, CURRENT_TIMESTAMP)",
                     params![current_id, name],
                 )?;
                 let new_id = tx.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;

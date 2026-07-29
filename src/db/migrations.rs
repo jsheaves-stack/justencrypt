@@ -33,23 +33,12 @@ pub fn get_migrations() -> Migrations<'static> {
         ),
         M::up(
             r#"
-                CREATE TABLE IF NOT EXISTS new_folders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    parent_folder_id INTEGER,
-                    name TEXT NOT NULL,
-                    total_folder_size BIGINT NOT NULL DEFAULT 0,
-                    total_file_count BIGINT NOT NULL DEFAULT 0,
-                    total_folder_count BIGINT NOT NULL DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (parent_folder_id) REFERENCES new_folders(id),
-                    UNIQUE(parent_folder_id, name)
-                );
+                ALTER TABLE folders ADD COLUMN total_folder_size BIGINT NOT NULL DEFAULT 0;
+                ALTER TABLE folders ADD COLUMN total_file_count BIGINT NOT NULL DEFAULT 0;
+                ALTER TABLE folders ADD COLUMN total_folder_count BIGINT NOT NULL DEFAULT 0;
+                ALTER TABLE folders ADD COLUMN created_at DATETIME;
 
-                INSERT INTO new_folders (id, parent_folder_id, name)
-                SELECT id, parent_folder_id, name FROM folders;
-
-                DROP TABLE folders;
-                ALTER TABLE new_folders RENAME TO folders;
+                UPDATE folders SET created_at = CURRENT_TIMESTAMP;
 
                 UPDATE folders 
                 SET 
