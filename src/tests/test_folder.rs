@@ -228,6 +228,7 @@ async fn test_get_folder_with_subfolder_size() {
         assert_eq!(folder.file_size, Some(file_content.len() as u64));
         assert_eq!(folder.file_count, 1);
         assert_eq!(folder.folder_count, 0);
+        assert!(folder.created_date.is_some());
     } else {
         panic!("Expected a folder");
     }

@@ -580,27 +580,7 @@ pub fn get_folder(
 
     trace!("Querying for child folders.");
     let mut folder_stmt = db.prepare(
-        "
-        WITH RECURSIVE SubFolders AS (
-            SELECT id AS base_folder_id, id AS descendant_id
-            FROM folders
-            WHERE parent_folder_id = ?1
-            UNION ALL
-            SELECT sf.base_folder_id, f.id
-            FROM folders f
-            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.descendant_id
-        )
-        SELECT 
-            f.name,
-            COALESCE(SUM(files.total_size), 0) AS folder_size,
-            COUNT(files.id) AS file_count,
-            COUNT(DISTINCT sf.descendant_id) - 1 AS folder_count
-        FROM folders f
-        JOIN SubFolders sf ON f.id = sf.base_folder_id
-        LEFT JOIN files ON files.parent_folder_id = sf.descendant_id
-        WHERE f.parent_folder_id = ?1
-        GROUP BY f.id, f.name
-        ",
+        "SELECT name, total_folder_size, total_file_count, total_folder_count, created_at FROM folders WHERE parent_folder_id = ?1"
     )?;
 
     let mut folder_rows = folder_stmt.query(params![folder_id])?;
@@ -610,6 +590,7 @@ pub fn get_folder(
         let folder_size: i64 = row.get(1)?;
         let file_count: i64 = row.get(2)?;
         let folder_count: i64 = row.get(3)?;
+        let created_at: Option<String> = row.get(4)?;
         trace!(
             "Found child folder: '{}' with size: {}",
             file_name,
@@ -618,7 +599,7 @@ pub fn get_folder(
         entries.push(FolderContent::Folder(Folder {
             file_name,
             file_size: Some(folder_size as u64),
-            created_date: None,
+            created_date: created_at,
             last_modified_date: None,
             file_count: file_count as u64,
             folder_count: folder_count as u64,
