@@ -656,6 +656,83 @@ pub fn add_folder(
     Ok(())
 }
 
+pub fn rename_folder(
+    db: &mut PooledConnection<SqliteConnectionManager>,
+    folder_path_str: &str,
+    new_folder_name_str: &str,
+) -> Result<(), DbError> {
+    trace!(
+        "Entering sqlite::rename_folder with folder_path_str: '{}', new_folder_name_str: '{}'",
+        folder_path_str,
+        new_folder_name_str
+    );
+    
+    let folder_id = get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
+    
+    if new_folder_name_str.is_empty() || new_folder_name_str.contains('/') {
+        return Err(DbError::InvalidInput("Invalid folder name".to_string()));
+    }
+
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    
+    tx.execute(
+        "UPDATE folders SET name = ?1 WHERE id = ?2",
+        params![new_folder_name_str, folder_id],
+    )
+    .map(|_| ())
+    .map_err(|e| {
+        error!("Failed to rename folder in the db: {}", e);
+        DbError::FailedToUpdateFileInDb(e.to_string())
+    })?;
+
+    tx.commit()?;
+    trace!("Transaction committed. Exiting sqlite::rename_folder successfully.");
+    Ok(())
+}
+
+pub fn move_folder(
+    db: &mut PooledConnection<SqliteConnectionManager>,
+    folder_path_str: &str,
+    destination_folder_str: &str,
+) -> Result<(), DbError> {
+    trace!(
+        "Entering sqlite::move_folder with folder_path_str: '{}', destination_folder_str: '{}'",
+        folder_path_str,
+        destination_folder_str
+    );
+
+    let norm_src = folder_path_str.trim_matches('/');
+    let norm_dst = destination_folder_str.trim_matches('/');
+    
+    if norm_dst == norm_src || norm_dst.starts_with(&format!("{}/", norm_src)) {
+        return Err(DbError::InvalidInput("Cannot move a folder into itself or its subfolders".to_string()));
+    }
+
+    let folder_id = get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
+    
+    if folder_id == 1 {
+        return Err(DbError::InvalidInput("Cannot move the root folder".to_string()));
+    }
+
+    let destination_parent_folder_id = get_folder_id_and_create_if_missing(db, destination_folder_str)?;
+
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    
+    tx.execute(
+        "UPDATE folders SET parent_folder_id = ?1 WHERE id = ?2",
+        params![destination_parent_folder_id, folder_id],
+    )
+    .map(|_| ())
+    .map_err(|e| {
+        error!("Failed to move folder in the db: {}", e);
+        DbError::FailedToUpdateFileInDb(e.to_string())
+    })?;
+
+    tx.commit()?;
+    trace!("Transaction committed. Exiting sqlite::move_folder successfully.");
+    Ok(())
+}
+
 pub fn rename_file(
     db: &mut PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,

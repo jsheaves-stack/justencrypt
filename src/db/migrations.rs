@@ -171,5 +171,34 @@ pub fn get_migrations() -> Migrations<'static> {
                 END;
             "#,
         ),
+        M::up(
+            r#"
+                CREATE TRIGGER folders_after_update_parent
+                AFTER UPDATE ON folders
+                WHEN OLD.parent_folder_id IS NOT NEW.parent_folder_id
+                BEGIN
+                    UPDATE folders
+                    SET total_folder_size = total_folder_size - OLD.total_folder_size,
+                        total_file_count = total_file_count - OLD.total_file_count,
+                        total_folder_count = total_folder_count - OLD.total_folder_count - 1
+                    WHERE id IN (
+                        WITH RECURSIVE ParentFolders AS (
+                            SELECT OLD.parent_folder_id AS id UNION ALL
+                            SELECT f.parent_folder_id FROM folders f INNER JOIN ParentFolders pf ON f.id = pf.id WHERE f.parent_folder_id IS NOT NULL
+                        ) SELECT id FROM ParentFolders
+                    );
+                    UPDATE folders
+                    SET total_folder_size = total_folder_size + NEW.total_folder_size,
+                        total_file_count = total_file_count + NEW.total_file_count,
+                        total_folder_count = total_folder_count + NEW.total_folder_count + 1
+                    WHERE id IN (
+                        WITH RECURSIVE ParentFolders AS (
+                            SELECT NEW.parent_folder_id AS id UNION ALL
+                            SELECT f.parent_folder_id FROM folders f INNER JOIN ParentFolders pf ON f.id = pf.id WHERE f.parent_folder_id IS NOT NULL
+                        ) SELECT id FROM ParentFolders
+                    );
+                END;
+            "#,
+        ),
     ])
 }

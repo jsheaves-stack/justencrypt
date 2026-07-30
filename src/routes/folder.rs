@@ -7,7 +7,7 @@ use crate::{
     },
     web::forwarding_guards::AuthenticatedSession,
 };
-use rocket::{delete, get, options, put, serde::json::Json};
+use rocket::{delete, get, options, patch, put, serde::json::Json};
 
 #[options("/<folder_path..>")]
 pub fn folder_options(folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
@@ -159,4 +159,39 @@ pub async fn delete_folder(
     }
 
     Ok(RequestSuccess::NoContent)
+}
+
+#[patch("/<folder_path..>", data = "<patch_data>")]
+pub async fn patch_folder(
+    folder_path: UnrestrictedPath,
+    auth: AuthenticatedSession,
+    patch_data: Json<PatchFolderData>,
+) -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route [PATCH /folder/{}]", folder_path);
+
+    let mut current_path_buf = folder_path.to_path_buf();
+
+    if let Some(new_name) = &patch_data.folder_name {
+        let session = auth.session.clone();
+        session
+            .rename_folder(current_path_buf.clone(), new_name.clone())
+            .await?;
+            
+        current_path_buf.set_file_name(new_name);
+    }
+
+    if let Some(destination_folder) = &patch_data.parent_folder_path {
+        let session = auth.session.clone();
+        session
+            .move_folder(current_path_buf, destination_folder.clone())
+            .await?;
+    }
+
+    Ok(RequestSuccess::NoContent)
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct PatchFolderData {
+    pub folder_name: Option<String>,
+    pub parent_folder_path: Option<String>,
 }

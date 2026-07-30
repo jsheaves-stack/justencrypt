@@ -5,6 +5,7 @@ mod test_file;
 mod test_file_delete_patch;
 mod test_folder;
 mod test_folder_delete;
+mod test_folder_patch;
 mod test_session;
 mod test_thumbnail;
 

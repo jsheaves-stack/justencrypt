@@ -396,19 +396,21 @@ pub async fn patch_file(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [PATCH /file/{}]", file_path);
 
-    let file_path_buf = file_path.to_path_buf();
+    let mut current_path_buf = file_path.to_path_buf();
 
     if let Some(new_name) = &patch_data.file_name {
         let session = auth.session.clone();
         session
-            .rename_file(file_path_buf.clone(), new_name.clone())
+            .rename_file(current_path_buf.clone(), new_name.clone())
             .await?;
+            
+        current_path_buf.set_file_name(new_name);
     }
 
     if let Some(destination_folder) = &patch_data.parent_folder_path {
         let session = auth.session.clone();
         session
-            .move_file(file_path_buf, destination_folder.clone())
+            .move_file(current_path_buf, destination_folder.clone())
             .await?;
     }
 

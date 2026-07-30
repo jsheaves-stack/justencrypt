@@ -570,6 +570,41 @@ paths:
           description: Folder not found.
         '500':
           description: Internal server error (Failed to remove files/folders).
+    patch:
+      summary: Rename or move a folder
+      description: Renames a folder or moves it to a different parent folder path.
+      parameters:
+        - in: path
+          name: folder_path
+          required: true
+          schema:
+            type: string
+          description: The logical path of the folder to modify.
+      requestBody:
+        description: The patch data containing the new folder name or new parent folder path.
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                folder_name:
+                  type: string
+                  description: New name for the folder.
+                parent_folder_path:
+                  type: string
+                  description: New destination folder path.
+      responses:
+        '204':
+          description: Folder successfully renamed/moved.
+        '400':
+          description: Bad request.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Folder not found.
+        '500':
+          description: Internal server error.
     options:
       summary: Pre-flight check
       security: []

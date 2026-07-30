@@ -199,6 +199,54 @@ impl UserSession {
         Ok(())
     }
 
+    pub async fn rename_folder(
+        &self,
+        folder_path: PathBuf,
+        new_folder_name: String,
+    ) -> Result<(), DbError> {
+        trace!(
+            "Entering UserSession::rename_folder for path: {:?}, new_name: {}",
+            folder_path,
+            new_folder_name
+        );
+
+        let folder_path_str = folder_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
+
+        self.with_db(move |mut db| {
+            trace!("Inside spawn_blocking for rename_folder");
+            sqlite::rename_folder(&mut db, &folder_path_str, &new_folder_name)
+        })
+        .await?;
+
+        trace!("Exiting UserSession::rename_folder successfully.");
+
+        Ok(())
+    }
+
+    pub async fn move_folder(
+        &self,
+        folder_path: PathBuf,
+        destination_folder: String,
+    ) -> Result<(), DbError> {
+        trace!(
+            "Entering UserSession::move_folder for path: {:?}, destination: {}",
+            folder_path,
+            destination_folder
+        );
+
+        let folder_path_str = folder_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
+
+        self.with_db(move |mut db| {
+            trace!("Inside spawn_blocking for move_folder");
+            sqlite::move_folder(&mut db, &folder_path_str, &destination_folder)
+        })
+        .await?;
+
+        trace!("Exiting UserSession::move_folder successfully.");
+
+        Ok(())
+    }
+
     pub async fn delete_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
         trace!(
             "Entering UserSession::delete_folder for path: {:?}",
