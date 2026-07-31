@@ -1,7 +1,9 @@
 use log::LevelFilter;
 use rocket::{
+    async_trait,
     config::{Config, TlsConfig},
     data::{ByteUnit, Limits},
+    fairing::{Fairing, Info, Kind},
     figment::Figment,
     launch,
     shield::{Hsts, Shield},
@@ -39,6 +41,33 @@ pub struct AppState {
     pub sessions_by_id: RwLock<HashMap<String, Arc<UserSession>>>,
     pub token_to_id: RwLock<HashMap<String, String>>,
     pub thumbnail_semaphore: Arc<Semaphore>,
+}
+
+pub struct CleanupOnShutdown;
+
+#[async_trait]
+impl Fairing for CleanupOnShutdown {
+    fn info(&self) -> Info {
+        Info {
+            name: "Cleanup on Shutdown",
+            kind: Kind::Shutdown,
+        }
+    }
+
+    async fn on_shutdown(&self, rocket: &rocket::Rocket<rocket::Orbit>) {
+        info!("Shutdown signal received. Cleaning up active uploads for all sessions.");
+        if let Some(state) = rocket.state::<AppState>() {
+            let sessions = state.sessions_by_id.read().await;
+            for session in sessions.values() {
+                if let Err(e) = session.cleanup_own_uploads().await {
+                    error!(
+                        "Error during shutdown cleanup for user {}: {}",
+                        session.username, e
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
@@ -238,6 +267,7 @@ async fn rocket() -> _ {
     let mut rocket = rocket::custom(app_config)
         .attach(Cors)
         .attach(Shield::default().enable(hsts))
+        .attach(CleanupOnShutdown)
         .manage(state)
         .mount("/", routes![get_server_info])
         .mount(
@@ -256,14 +286,20 @@ async fn rocket() -> _ {
         .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
         .mount(
             "/folder",
-            routes![get_folder, create_folder, folder_options, delete_folder, patch_folder],
+            routes![
+                get_folder,
+                create_folder,
+                folder_options,
+                delete_folder,
+                patch_folder
+            ],
         )
         .mount(
             "/session",
             routes![create_session, destroy_session, session_options,],
         );
 
-    if std::env::var("JUSTENCRYPT_ADMIN_API_KEY").is_ok() {
+    if env::var("JUSTENCRYPT_ADMIN_API_KEY").is_ok() {
         trace!("JUSTENCRYPT_ADMIN_API_KEY is set, mounting admin routes.");
         rocket = rocket.mount(
             "/admin",

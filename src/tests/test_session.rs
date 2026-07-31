@@ -1,12 +1,13 @@
 use super::*;
 use crate::routes::session::{create_session, destroy_session, session_options};
 use rocket::{
+    async_test,
     http::{ContentType, Status},
     local::asynchronous::Client,
     routes,
 };
 
-#[rocket::async_test]
+#[async_test]
 async fn test_create_session_success() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/session", routes![create_session, session_options]);
@@ -34,7 +35,7 @@ async fn test_create_session_success() {
     assert!(cookies.iter().any(|c| c.name() == "sid"));
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_create_session_invalid_password() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/session", routes![create_session, session_options]);
@@ -60,7 +61,7 @@ async fn test_create_session_invalid_password() {
     assert_eq!(response.status(), Status::Unauthorized);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_destroy_session_success() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/session", routes![destroy_session, session_options]);
@@ -79,7 +80,7 @@ async fn test_destroy_session_success() {
     assert_eq!(response.status(), Status::NoContent);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_destroy_session_no_auth() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount("/session", routes![destroy_session, session_options]);

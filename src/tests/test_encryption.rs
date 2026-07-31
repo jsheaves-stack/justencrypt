@@ -1,9 +1,9 @@
 use crate::encryption::{chunk_encryptor::ChunkEncryptor, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE};
-use rocket::tokio::fs;
+use rocket::{async_test, tokio::fs};
 use std::{collections::HashSet, io::Cursor};
 use tempfile::tempdir;
 
-#[rocket::async_test]
+#[async_test]
 async fn test_encrypt_stream_at_offset() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("test_encrypt_offset.enc");
@@ -34,7 +34,7 @@ async fn test_encrypt_stream_at_offset() {
     assert_eq!(metadata.len(), (ENCRYPTED_CHUNK_SIZE * 2) as u64);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_encrypt_stream_at_invalid_offset() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("test_invalid_offset.enc");

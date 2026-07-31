@@ -1,3 +1,4 @@
+use rocket::async_trait;
 use std::sync::Arc;
 
 use rocket::{http::Status, outcome::Outcome, request::FromRequest, Request, State};
@@ -10,7 +11,7 @@ pub struct AuthenticatedSession {
 
 pub struct RangeHeader(pub Option<String>);
 
-#[rocket::async_trait]
+#[async_trait]
 impl<'r> FromRequest<'r> for RangeHeader {
     type Error = RequestError;
 
@@ -25,7 +26,7 @@ impl<'r> FromRequest<'r> for RangeHeader {
 
 pub struct AdminGuard;
 
-#[rocket::async_trait]
+#[async_trait]
 impl<'r> FromRequest<'r> for AdminGuard {
     type Error = RequestError;
 
@@ -48,7 +49,7 @@ impl<'r> FromRequest<'r> for AdminGuard {
     }
 }
 
-#[rocket::async_trait]
+#[async_trait]
 impl<'r> FromRequest<'r> for AuthenticatedSession {
     type Error = RequestError;
 

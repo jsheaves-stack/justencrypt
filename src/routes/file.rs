@@ -29,6 +29,7 @@ use rocket::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
+    env,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -59,7 +60,7 @@ pub async fn init_upload(
 
     let mut active_uploads = session.active_uploads.lock().await;
 
-    let max_uploads = std::env::var("JUSTENCRYPT_MAX_ACTIVE_UPLOADS")
+    let max_uploads = env::var("JUSTENCRYPT_MAX_ACTIVE_UPLOADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok());
 
@@ -104,11 +105,25 @@ pub async fn init_upload(
     let upload_id = Uuid::new_v4().to_string();
     let encoded_file_name = Uuid::new_v4().to_string();
     let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
+    let encoded_file_path_part = encoded_file_path.with_extension("part");
 
-    let encryptor = ChunkEncryptor::new(encoded_file_path).await.map_err(|e| {
-        error!("Failed to create ChunkEncryptor: {}", e);
-        RequestError::FailedToProcessData
-    })?;
+    if let Err(e) = session
+        .add_active_upload_db(
+            upload_id.clone(),
+            encoded_file_name.clone(),
+            file_path.to_path_buf().to_string_lossy().to_string(),
+        )
+        .await
+    {
+        error!("Failed to add active upload to db: {}", e);
+    }
+
+    let encryptor = ChunkEncryptor::new(encoded_file_path_part)
+        .await
+        .map_err(|e| {
+            error!("Failed to create ChunkEncryptor: {}", e);
+            RequestError::FailedToProcessData
+        })?;
 
     let upload_state = UploadState {
         file_path: file_path.to_path_buf(),
@@ -225,13 +240,29 @@ pub async fn finalize_upload(
         .await
         .ok();
 
-    session
+    let encoded_file_path =
+        get_sharded_path(user_path.clone(), &upload_state.encoded_file_name).await;
+    let encoded_file_path_part = encoded_file_path.with_extension("part");
+
+    if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {
+        error!("Failed to rename part file to final file: {}", e);
+        let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
+        return Err(RequestError::FailedToProcessData);
+    }
+
+    if let Err(e) = session
         .add_file(
             upload_state.file_path,
             upload_state.encoded_file_name,
             metadata,
         )
-        .await?;
+        .await
+    {
+        let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+        return Err(e.into());
+    }
+
+    let _ = session.remove_active_upload_db(upload_id.clone()).await;
 
     if let Some(old_name) = old_encoded_name {
         let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
@@ -270,28 +301,81 @@ pub async fn put_file(
             .ok()
     };
 
-    let encoded_file_name = uuid::Uuid::new_v4().to_string();
+    let encoded_file_name = Uuid::new_v4().to_string();
     let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
+    let encoded_file_path_part = encoded_file_path.with_extension("part");
 
-    let mut encryptor = ChunkEncryptor::new(encoded_file_path).await.map_err(|e| {
-        error!("Failed to create ChunkEncryptor: {}", e);
-        RequestError::FailedToProcessData
-    })?;
+    let upload_id = Uuid::new_v4().to_string();
+    if let Err(e) = auth
+        .session
+        .add_active_upload_db(
+            upload_id.clone(),
+            encoded_file_name.clone(),
+            file_path_buf.to_string_lossy().to_string(),
+        )
+        .await
+    {
+        error!("Failed to add active upload to db for put_file: {}", e);
+    }
+
+    let encryptor = ChunkEncryptor::new(encoded_file_path_part.clone())
+        .await
+        .map_err(|e| e.to_string());
+    let mut encryptor = match encryptor {
+        Ok(enc) => enc,
+        Err(e) => {
+            error!("Failed to create ChunkEncryptor: {}", e);
+            let _ = auth
+                .session
+                .remove_active_upload_db(upload_id.clone())
+                .await;
+            return Err(RequestError::FailedToProcessData);
+        }
+    };
 
     let mut stream = data.open(5.gibibytes());
-    encryptor.encrypt_stream(&mut stream).await.map_err(|e| {
+    let encrypt_result = encryptor
+        .encrypt_stream(&mut stream)
+        .await
+        .map_err(|e| e.to_string());
+    if let Err(e) = encrypt_result {
         error!("Encryption error: {}", e);
-        RequestError::FailedToProcessData
-    })?;
+        let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
+        let _ = auth
+            .session
+            .remove_active_upload_db(upload_id.clone())
+            .await;
+        return Err(RequestError::FailedToProcessData);
+    }
+
+    if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {
+        error!("Failed to rename part file to final file: {}", e);
+        let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
+        let _ = auth
+            .session
+            .remove_active_upload_db(upload_id.clone())
+            .await;
+        return Err(RequestError::FailedToProcessData);
+    }
 
     let metadata = encryptor.get_metadata();
 
     {
         let session = auth.session.clone();
-        session
+        if let Err(e) = session
             .add_file(file_path_buf, encoded_file_name, metadata)
-            .await?;
+            .await
+        {
+            let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+            let _ = session.remove_active_upload_db(upload_id.clone()).await;
+            return Err(e.into());
+        }
     }
+
+    let _ = auth
+        .session
+        .remove_active_upload_db(upload_id.clone())
+        .await;
 
     if let Some(old_name) = old_encoded_name {
         let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
@@ -403,7 +487,7 @@ pub async fn patch_file(
         session
             .rename_file(current_path_buf.clone(), new_name.clone())
             .await?;
-            
+
         current_path_buf.set_file_name(new_name);
     }
 

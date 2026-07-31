@@ -4,9 +4,9 @@ use crate::{
     util::sharded_path::get_sharded_path,
     AppState,
 };
-use rocket::{http::Status, local::asynchronous::Client, routes, tokio};
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes, tokio};
 
-#[rocket::async_test]
+#[async_test]
 async fn test_put_file() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -47,7 +47,7 @@ async fn test_put_file() {
     assert!(tokio::fs::metadata(sharded_path).await.is_ok());
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_file() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -86,7 +86,7 @@ async fn test_get_file() {
     assert_eq!(body, file_content);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_put_file_no_auth() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -109,7 +109,7 @@ async fn test_put_file_no_auth() {
     assert_eq!(response.status(), Status::Unauthorized);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_put_file_empty_content() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -135,7 +135,7 @@ async fn test_put_file_empty_content() {
     assert_eq!(response.status(), Status::Created);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_file_range_first_chunk() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -171,7 +171,7 @@ async fn test_get_file_range_first_chunk() {
     assert_eq!(response.into_string().await.unwrap(), "A".repeat(100));
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_file_range_cross_chunks() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -214,7 +214,7 @@ async fn test_get_file_range_cross_chunks() {
     assert_eq!(body, file_content[start..=end]);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_file_range_last_byte() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -250,7 +250,7 @@ async fn test_get_file_range_last_byte() {
     assert_eq!(response.into_string().await.unwrap(), "d");
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_file_range_no_end() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -282,7 +282,7 @@ async fn test_get_file_range_no_end() {
     assert_eq!(response.into_string().await.unwrap(), "56789");
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_file_range_invalid() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(

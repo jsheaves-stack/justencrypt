@@ -89,6 +89,7 @@ The application is configured through environment variables, which are loaded fr
 | `JUSTENCRYPT_DB_TEMP_STORE`                   | SQLite PRAGMA temp_store setting (`MEMORY`, `FILE`). | `MEMORY` |
 | `JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES`     | Max size in bytes for the WAL file. | `67108864` |
 | `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds to wait for an available DB connection. | `30` |
+| `JUSTENCRYPT_MAX_ACTIVE_UPLOADS`              | Maximum number of concurrent active uploads allowed. | (none) |
 | `JUSTENCRYPT_ROCKET_SECRET_KEY`               | **Required.** A 256-bit base64 key for securing cookies. Generate one with `openssl rand -base64 32`. | (none) |
 | `JUSTENCRYPT_TLS_KEY_PATH`                    | Path to the TLS key file for HTTPS. | (none) |
 | `JUSTENCRYPT_TLS_CERT_PATH`                   | Path to the TLS cert file for HTTPS. | (none) |
@@ -125,6 +126,7 @@ The application is configured through environment variables, which are loaded fr
 - `GET /<folder_path..>`: List the contents of a folder.
 - `PUT /<folder_path..>`: Create a new folder.
 - `DELETE /<folder_path..>`: Delete a folder.
+- `PATCH /<folder_path..>`: Rename or move a folder.
 
 ### Thumbnail (`/thumbnail`)
 - `GET /<file_path..>`: Get a thumbnail for a file.

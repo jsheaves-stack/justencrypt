@@ -3,9 +3,9 @@ use crate::{
     encryption::CHUNK_SIZE,
     routes::file::{finalize_upload, get_file, init_upload, upload_chunk, InitUploadResponse},
 };
-use rocket::{http::Status, local::asynchronous::Client, routes};
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
 
-#[rocket::async_test]
+#[async_test]
 async fn test_chunked_upload_success() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -78,7 +78,7 @@ async fn test_chunked_upload_success() {
     assert_eq!(body, format!("{}{}", chunk1, chunk2));
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_chunked_upload_missing_chunks() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/file", routes![init_upload, upload_chunk, finalize_upload]);
@@ -149,7 +149,7 @@ async fn test_chunked_upload_missing_chunks() {
     assert_eq!(response.status(), Status::Created);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_chunked_upload_unauthorized() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount("/file", routes![init_upload, upload_chunk, finalize_upload]);
@@ -166,7 +166,7 @@ async fn test_chunked_upload_unauthorized() {
     assert_eq!(response.status(), Status::Unauthorized);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_chunked_upload_invalid_offset() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/file", routes![init_upload, upload_chunk, finalize_upload]);
@@ -195,7 +195,7 @@ async fn test_chunked_upload_invalid_offset() {
     assert_eq!(response.status(), Status::InternalServerError); // encrypt_stream_at_offset returns Err which becomes InternalServerError
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_chunked_upload_not_found() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/file", routes![init_upload, upload_chunk, finalize_upload]);

@@ -1,12 +1,13 @@
 use super::*;
 use crate::routes::admin::{admin_options, delete_session, delete_session_options, get_session};
 use rocket::{
+    async_test,
     http::{Header, Status},
     local::asynchronous::Client,
     routes,
 };
 
-#[rocket::async_test]
+#[async_test]
 async fn test_delete_session_success() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -53,7 +54,7 @@ async fn test_delete_session_success() {
     assert!(!body.contains(&session_id));
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_session_with_valid_key() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount("/admin", routes![get_session, admin_options]);
@@ -74,7 +75,7 @@ async fn test_get_session_with_valid_key() {
     assert_eq!(body, "[]");
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_session_with_invalid_key() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount("/admin", routes![get_session, admin_options]);
@@ -93,7 +94,7 @@ async fn test_get_session_with_invalid_key() {
     assert_eq!(response.status(), Status::Unauthorized);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_session_missing_key() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount("/admin", routes![get_session, admin_options]);

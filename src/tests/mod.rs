@@ -72,7 +72,7 @@ pub async fn create_test_session(
     let user_token = Uuid::new_v4().to_string();
     let passphrase = SecretString::from_str("test_password").unwrap();
 
-    let user_session = match UserSession::open(&temp_user, &passphrase).await {
+    let user_session = match UserSession::open(&temp_user, &passphrase, None).await {
         Ok(session) => Arc::new(session),
         Err(e) => panic!("Failed to open user session: {}", e),
     };

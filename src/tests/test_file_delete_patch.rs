@@ -8,12 +8,13 @@ use crate::{
     AppState,
 };
 use rocket::{
+    async_test,
     http::{ContentType, Status},
     local::asynchronous::Client,
     routes, tokio,
 };
 
-#[rocket::async_test]
+#[async_test]
 async fn test_delete_file_success() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -72,7 +73,7 @@ async fn test_delete_file_success() {
     assert!(db_lookup.is_err());
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_patch_file_rename() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -125,7 +126,7 @@ async fn test_patch_file_rename() {
     assert_ne!(response.status(), Status::Ok);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_patch_file_move() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
@@ -177,7 +178,7 @@ async fn test_patch_file_move() {
     assert_eq!(response.status(), Status::Ok);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_file_not_found() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/file", routes![get_file]);

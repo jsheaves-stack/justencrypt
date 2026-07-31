@@ -1,3 +1,4 @@
+use rocket::async_trait;
 use std::env;
 
 use rocket::{
@@ -8,7 +9,7 @@ use rocket::{
 
 pub struct Cors;
 
-#[rocket::async_trait]
+#[async_trait]
 impl Fairing for Cors {
     fn info(&self) -> Info {
         trace!("Entering fairing::Cors::info");

@@ -7,9 +7,9 @@ use crate::{
     },
     AppState,
 };
-use rocket::{http::Status, local::asynchronous::Client, routes};
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
 
-#[rocket::async_test]
+#[async_test]
 async fn test_create_folder() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -47,7 +47,7 @@ async fn test_create_folder() {
     assert_eq!(2, folder_id);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_folder() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -80,7 +80,7 @@ async fn test_get_folder() {
     assert_eq!(response.status(), Status::Ok);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_create_folder_no_auth() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -101,7 +101,7 @@ async fn test_create_folder_no_auth() {
     assert_eq!(response.status(), Status::Unauthorized);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_folder_file_metadata() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
@@ -161,7 +161,7 @@ async fn test_get_folder_file_metadata() {
     }
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_folder_with_subfolder_size() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket

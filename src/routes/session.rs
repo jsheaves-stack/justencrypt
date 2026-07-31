@@ -11,7 +11,7 @@ use rocket::{
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use std::{env, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashSet, env, path::PathBuf, str::FromStr, sync::Arc};
 use zxcvbn::{zxcvbn, Score};
 
 #[derive(Deserialize)]
@@ -85,16 +85,26 @@ pub async fn create_session(
 
     trace!("Attempting to open user session for user: {}", user_name);
 
-    let session = Arc::new(match UserSession::open(&user_name, &passphrase).await {
-        Ok(a) => {
-            trace!("User session opened successfully.");
-            a
-        }
-        Err(e) => {
-            warn!("Failed to open user session: {}", e);
-            return Err(RequestError::Unauthorized);
-        }
-    });
+    let existing_pool = {
+        let sessions = state.sessions_by_id.read().await;
+        sessions
+            .values()
+            .find(|s| s.username == user_name)
+            .map(|s| s.db_pool.clone())
+    };
+
+    let session = Arc::new(
+        match UserSession::open(&user_name, &passphrase, existing_pool).await {
+            Ok(a) => {
+                trace!("User session opened successfully.");
+                a
+            }
+            Err(e) => {
+                warn!("Failed to open user session: {}", e);
+                return Err(RequestError::Unauthorized);
+            }
+        },
+    );
 
     let (user_token, session_id) = {
         let session_read = session.clone();
@@ -122,9 +132,26 @@ pub async fn create_session(
         .token_to_id
         .write()
         .await
-        .insert(user_token, session_id);
+        .insert(user_token, session_id.clone());
 
     trace!("Session added to active session map.");
+
+    let active_session_ids = {
+        let sessions = state.sessions_by_id.read().await;
+        sessions.keys().cloned().collect::<HashSet<_>>()
+    };
+
+    if let Some(session_ref) = state.sessions_by_id.read().await.get(&session_id) {
+        if let Err(e) = session_ref
+            .cleanup_orphaned_uploads(active_session_ids)
+            .await
+        {
+            error!(
+                "Failed to clean up orphaned uploads on session creation: {}",
+                e
+            );
+        }
+    }
 
     trace!("Exiting route [POST /session] successfully.");
 

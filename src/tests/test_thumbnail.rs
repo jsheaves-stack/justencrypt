@@ -1,13 +1,17 @@
 use super::*;
-use crate::routes::thumbnail::{get_thumbnail, thumbnail_options};
-use rocket::{http::Status, local::asynchronous::Client, routes};
+use crate::routes::{
+    file::{delete_file, put_file},
+    thumbnail::{get_thumbnail, thumbnail_options},
+};
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
+use std::io::Cursor;
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_thumbnail_success() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
         .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
-        .mount("/file", routes![crate::routes::file::put_file]);
+        .mount("/file", routes![put_file]);
 
     let client = Client::tracked(rocket).await.expect("valid rocket");
     let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
@@ -17,7 +21,7 @@ async fn test_get_thumbnail_success() {
 
     // Actually, I'll generate a tiny valid JPEG.
     let mut img_data = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut img_data);
+    let mut cursor = Cursor::new(&mut img_data);
     let tiny_img = image::DynamicImage::new_rgb8(10, 10);
     tiny_img
         .write_to(&mut cursor, image::ImageFormat::Jpeg)
@@ -54,12 +58,12 @@ async fn test_get_thumbnail_success() {
     assert_eq!(body, body_hit);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_thumbnail_true_cache_resiliency() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
         .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
-        .mount("/file", routes![crate::routes::file::put_file]);
+        .mount("/file", routes![put_file]);
 
     let client = Client::tracked(rocket).await.expect("valid rocket");
     let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
@@ -106,18 +110,12 @@ async fn test_thumbnail_true_cache_resiliency() {
     assert_eq!(orig_body, regen_body);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_thumbnail_deletion_cleanup() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
         .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
-        .mount(
-            "/file",
-            routes![
-                crate::routes::file::put_file,
-                crate::routes::file::delete_file
-            ],
-        );
+        .mount("/file", routes![put_file, delete_file]);
 
     let client = Client::tracked(rocket).await.expect("valid rocket");
     let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
@@ -172,7 +170,7 @@ async fn test_thumbnail_deletion_cleanup() {
     assert!(!sharded_thumb.exists());
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_thumbnail_not_found() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/thumbnail", routes![get_thumbnail, thumbnail_options]);

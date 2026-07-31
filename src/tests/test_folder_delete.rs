@@ -6,9 +6,9 @@ use crate::{
     },
     AppState,
 };
-use rocket::{http::Status, local::asynchronous::Client, routes};
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
 
-#[rocket::async_test]
+#[async_test]
 async fn test_delete_folder_success() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
@@ -68,7 +68,7 @@ async fn test_delete_folder_success() {
     assert!(lookup_result.is_err() || lookup_result.unwrap().is_none());
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_delete_folder_not_found() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount("/folder", routes![delete_folder]);

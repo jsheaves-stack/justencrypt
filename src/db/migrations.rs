@@ -1,13 +1,17 @@
 use rusqlite_migration::{Migrations, M};
 
 pub fn get_migrations() -> Migrations<'static> {
-    Migrations::new(vec![
-        M::up(
-            r#"
+    Migrations::new(vec![M::up(
+        r#"
                 CREATE TABLE IF NOT EXISTS folders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     parent_folder_id INTEGER,
                     name TEXT NOT NULL,
+                    total_folder_size BIGINT NOT NULL DEFAULT 0,
+                    total_file_count BIGINT NOT NULL DEFAULT 0,
+                    total_folder_count BIGINT NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (parent_folder_id) REFERENCES folders(id),
                     UNIQUE(parent_folder_id, name)
                 );
@@ -28,51 +32,15 @@ pub fn get_migrations() -> Migrations<'static> {
                     UNIQUE(encoded_name)
                 );
 
+                CREATE TABLE IF NOT EXISTS active_uploads (
+                    upload_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    encoded_file_name TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
                 INSERT OR IGNORE INTO folders (id, parent_folder_id, name) VALUES (1, NULL, 'ROOT');
-            "#,
-        ),
-        M::up(
-            r#"
-                ALTER TABLE folders ADD COLUMN total_folder_size BIGINT NOT NULL DEFAULT 0;
-                ALTER TABLE folders ADD COLUMN total_file_count BIGINT NOT NULL DEFAULT 0;
-                ALTER TABLE folders ADD COLUMN total_folder_count BIGINT NOT NULL DEFAULT 0;
-                ALTER TABLE folders ADD COLUMN created_at DATETIME;
-
-                UPDATE folders SET created_at = CURRENT_TIMESTAMP;
-
-                UPDATE folders 
-                SET 
-                    total_folder_size = COALESCE((
-                        WITH RECURSIVE SubFolders AS (
-                            SELECT folders.id AS id
-                            UNION ALL
-                            SELECT f.id FROM folders f
-                            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
-                        )
-                        SELECT SUM(files.total_size)
-                        FROM files
-                        WHERE files.parent_folder_id IN (SELECT id FROM SubFolders)
-                    ), 0),
-                    total_file_count = (
-                        WITH RECURSIVE SubFolders AS (
-                            SELECT folders.id AS id
-                            UNION ALL
-                            SELECT f.id FROM folders f
-                            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
-                        )
-                        SELECT COUNT(files.id)
-                        FROM files
-                        WHERE files.parent_folder_id IN (SELECT id FROM SubFolders)
-                    ),
-                    total_folder_count = (
-                        WITH RECURSIVE SubFolders AS (
-                            SELECT folders.id AS id
-                            UNION ALL
-                            SELECT f.id FROM folders f
-                            INNER JOIN SubFolders sf ON f.parent_folder_id = sf.id
-                        )
-                        SELECT COUNT(id) FROM SubFolders WHERE id != folders.id
-                    );
 
                 CREATE TRIGGER files_after_insert
                 AFTER INSERT ON files
@@ -169,10 +137,7 @@ pub fn get_migrations() -> Migrations<'static> {
                         SELECT id FROM ParentFolders
                     );
                 END;
-            "#,
-        ),
-        M::up(
-            r#"
+
                 CREATE TRIGGER folders_after_update_parent
                 AFTER UPDATE ON folders
                 WHEN OLD.parent_folder_id IS NOT NEW.parent_folder_id
@@ -198,7 +163,36 @@ pub fn get_migrations() -> Migrations<'static> {
                         ) SELECT id FROM ParentFolders
                     );
                 END;
+
+                CREATE TRIGGER files_after_update_timestamp
+                AFTER UPDATE ON files
+                FOR EACH ROW
+                WHEN NEW.updated_at = OLD.updated_at
+                BEGIN
+                    UPDATE files SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+                END;
+
+                CREATE TRIGGER folders_after_update_timestamp
+                AFTER UPDATE ON folders
+                FOR EACH ROW
+                WHEN NEW.updated_at = OLD.updated_at
+                BEGIN
+                    UPDATE folders SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+                END;
+
+                CREATE TRIGGER prevent_root_folder_update
+                BEFORE UPDATE ON folders
+                WHEN OLD.id = 1 AND (OLD.name != NEW.name OR NEW.parent_folder_id IS NOT NULL OR NEW.id != 1)
+                BEGIN
+                    SELECT RAISE(ABORT, 'Cannot rename or move ROOT folder');
+                END;
+
+                CREATE TRIGGER prevent_root_folder_delete
+                BEFORE DELETE ON folders
+                WHEN OLD.id = 1
+                BEGIN
+                    SELECT RAISE(ABORT, 'Cannot delete ROOT folder');
+                END;
             "#,
-        ),
-    ])
+    )])
 }

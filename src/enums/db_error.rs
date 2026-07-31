@@ -40,4 +40,7 @@ pub enum DbError {
 
     #[error("Not found")]
     NotFound,
+
+    #[error("Failed to query db: {0}")]
+    FailedToQueryDb(String),
 }

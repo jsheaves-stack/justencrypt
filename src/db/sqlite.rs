@@ -13,6 +13,30 @@ use std::{
     time::Duration,
 };
 
+pub fn verify_user_db_password(db_path: &Path, password: &SecretString) -> Result<(), DbError> {
+    trace!(
+        "Entering sqlite::verify_user_db_password for db_path: {:?}",
+        db_path
+    );
+
+    let busy_timeout_ms = std::env::var("JUSTENCRYPT_DB_BUSY_TIMEOUT_MS")
+        .unwrap_or_else(|_| "60000".to_string())
+        .parse::<u64>()
+        .unwrap_or(60000);
+
+    let conn = rusqlite::Connection::open(db_path)?;
+    conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
+    conn.pragma_update(None, "key", password.expose_secret())?;
+
+    if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())) {
+        error!("Failed to verify database password: {}", e);
+        return Err(DbError::Rusqlite(e));
+    }
+
+    trace!("Password verified successfully.");
+    Ok(())
+}
+
 pub fn create_user_db_connection(
     db_path: PathBuf,
     password: SecretString,
@@ -666,15 +690,15 @@ pub fn rename_folder(
         folder_path_str,
         new_folder_name_str
     );
-    
+
     let folder_id = get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
-    
+
     if new_folder_name_str.is_empty() || new_folder_name_str.contains('/') {
         return Err(DbError::InvalidInput("Invalid folder name".to_string()));
     }
 
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    
+
     tx.execute(
         "UPDATE folders SET name = ?1 WHERE id = ?2",
         params![new_folder_name_str, folder_id],
@@ -703,21 +727,26 @@ pub fn move_folder(
 
     let norm_src = folder_path_str.trim_matches('/');
     let norm_dst = destination_folder_str.trim_matches('/');
-    
+
     if norm_dst == norm_src || norm_dst.starts_with(&format!("{}/", norm_src)) {
-        return Err(DbError::InvalidInput("Cannot move a folder into itself or its subfolders".to_string()));
+        return Err(DbError::InvalidInput(
+            "Cannot move a folder into itself or its subfolders".to_string(),
+        ));
     }
 
     let folder_id = get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
-    
+
     if folder_id == 1 {
-        return Err(DbError::InvalidInput("Cannot move the root folder".to_string()));
+        return Err(DbError::InvalidInput(
+            "Cannot move the root folder".to_string(),
+        ));
     }
 
-    let destination_parent_folder_id = get_folder_id_and_create_if_missing(db, destination_folder_str)?;
+    let destination_parent_folder_id =
+        get_folder_id_and_create_if_missing(db, destination_folder_str)?;
 
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    
+
     tx.execute(
         "UPDATE folders SET parent_folder_id = ?1 WHERE id = ?2",
         params![destination_parent_folder_id, folder_id],
@@ -933,4 +962,61 @@ pub fn delete_folder_by_id(
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::delete_folder_by_id successfully.");
     Ok(())
+}
+
+pub fn add_active_upload(
+    db: &rusqlite::Connection,
+    upload_id: &str,
+    session_id: &str,
+    encoded_file_name: &str,
+    file_path: &str,
+) -> Result<(), DbError> {
+    trace!(
+        "Entering sqlite::add_active_upload for upload_id: {}",
+        upload_id
+    );
+    db.execute(
+        "INSERT OR REPLACE INTO active_uploads (upload_id, session_id, encoded_file_name, file_path) VALUES (?1, ?2, ?3, ?4)",
+        params![upload_id, session_id, encoded_file_name, file_path],
+    )
+    .map(|_| {
+        trace!("Exiting sqlite::add_active_upload successfully.");
+    })
+    .map_err(|e| DbError::FailedToAddFileToDb(e.to_string()))
+}
+
+pub fn remove_active_upload(db: &rusqlite::Connection, upload_id: &str) -> Result<(), DbError> {
+    trace!(
+        "Entering sqlite::remove_active_upload for upload_id: {}",
+        upload_id
+    );
+    db.execute(
+        "DELETE FROM active_uploads WHERE upload_id = ?1",
+        params![upload_id],
+    )
+    .map(|_| {
+        trace!("Exiting sqlite::remove_active_upload successfully.");
+    })
+    .map_err(|e| DbError::FailedToDeleteFileFromDb(e.to_string()))
+}
+
+pub fn get_all_active_uploads(
+    db: &rusqlite::Connection,
+) -> Result<Vec<(String, String, String)>, DbError> {
+    trace!("Entering sqlite::get_all_active_uploads");
+    let mut stmt = db
+        .prepare("SELECT upload_id, session_id, encoded_file_name FROM active_uploads")
+        .map_err(|e| DbError::FailedToQueryDb(e.to_string()))?;
+
+    let rows = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(|e| DbError::FailedToQueryDb(e.to_string()))?;
+
+    let mut uploads = Vec::new();
+    for row in rows {
+        uploads.push(row.map_err(|e| DbError::FailedToQueryDb(e.to_string()))?);
+    }
+
+    trace!("Exiting sqlite::get_all_active_uploads successfully.");
+    Ok(uploads)
 }

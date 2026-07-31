@@ -2,6 +2,7 @@ use crate::{
     db::sqlite::{self, FolderContent},
     encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
     enums::db_error::DbError,
+    util::sharded_path,
 };
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -15,6 +16,7 @@ use std::{
     sync::Arc,
     time::SystemTime,
 };
+use uuid::Uuid;
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct EncodedFile {
@@ -32,8 +34,8 @@ pub struct UploadState {
 }
 
 pub struct UserSession {
-    user_path: PathBuf,
-    db_pool: Pool<SqliteConnectionManager>,
+    pub user_path: PathBuf,
+    pub db_pool: Pool<SqliteConnectionManager>,
     pub username: String,
     pub created_at: SystemTime,
     pub session_id: String,
@@ -42,9 +44,12 @@ pub struct UserSession {
 }
 
 impl UserSession {
-    pub async fn open(user_name: &str, passphrase: &SecretString) -> Result<Self, DbError> {
+    pub async fn open(
+        user_name: &str,
+        passphrase: &SecretString,
+        existing_pool: Option<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+    ) -> Result<Self, DbError> {
         trace!("Entering UserSession::open for user: '{}'", user_name);
-        // Validate user_name to prevent path traversal
         if user_name.is_empty() || user_name.contains(['/', '\\', '.']) || user_name.len() > 64 {
             return Err(DbError::InvalidInput(
                 "Invalid user name format or length.".to_string(),
@@ -55,48 +60,48 @@ impl UserSession {
         let passphrase = passphrase.clone();
         let user_name_clone = user_name.clone();
 
-        let result = task::spawn_blocking(move || {
+        let session = task::spawn_blocking(move || {
             trace!("Inside spawn_blocking for UserSession::open");
 
             let user_data_path = env::var("JUSTENCRYPT_USER_DATA_PATH")
                 .unwrap_or_else(|_| String::from("./user_data"));
 
-            trace!("User data path: {}", user_data_path);
-
             let user_path = PathBuf::from(&user_data_path).join(&user_name);
-
-            trace!("Constructed user path: {:?}", user_path);
 
             if !user_path.exists() {
                 trace!("User path does not exist.");
-
                 return Err(DbError::UserDoesNotExist);
             }
 
             let user_db_path = user_path.join(format!("{user_name}.db"));
 
-            trace!("User DB path: {:?}", user_db_path);
+            let db_pool = if let Some(pool) = existing_pool {
+                trace!("Using existing database pool.");
+                sqlite::verify_user_db_password(&user_db_path, &passphrase)?;
+                pool
+            } else {
+                trace!("Creating new database pool.");
+                sqlite::create_user_db_connection(user_db_path, passphrase)?
+            };
 
-            let db_pool = sqlite::create_user_db_connection(user_db_path, passphrase)?;
-
-            trace!("DB connection pool created.");
+            trace!("DB connection pool ready.");
 
             Ok(Self {
                 user_path,
                 db_pool,
                 username: user_name_clone,
                 created_at: SystemTime::now(),
-                session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
-                user_token: SecretString::from(uuid::Uuid::new_v4().hyphenated().to_string()),
+                session_id: Uuid::new_v4().hyphenated().to_string(),
+                user_token: SecretString::from(Uuid::new_v4().hyphenated().to_string()),
                 active_uploads: Mutex::new(HashMap::new()),
             })
         })
         .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?;
+        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
         trace!("Exiting UserSession::open successfully.");
 
-        result
+        Ok(session)
     }
 
     async fn with_db<F, R>(&self, f: F) -> Result<R, DbError>
@@ -139,6 +144,85 @@ impl UserSession {
 
         trace!("Exiting UserSession::get_encoded_file_name.");
         Ok(result)
+    }
+
+    pub async fn add_active_upload_db(
+        &self,
+        upload_id: String,
+        encoded_file_name: String,
+        file_path: String,
+    ) -> Result<(), DbError> {
+        let session_id = self.session_id.clone();
+        self.with_db(move |db| {
+            sqlite::add_active_upload(&db, &upload_id, &session_id, &encoded_file_name, &file_path)
+        })
+        .await
+    }
+
+    pub async fn remove_active_upload_db(&self, upload_id: String) -> Result<(), DbError> {
+        self.with_db(move |db| sqlite::remove_active_upload(&db, &upload_id))
+            .await
+    }
+
+    pub async fn cleanup_orphaned_uploads(
+        &self,
+        active_session_ids: HashSet<String>,
+    ) -> Result<(), DbError> {
+        trace!("Entering cleanup_orphaned_uploads for session");
+        let active_uploads_db = self
+            .with_db(|db| sqlite::get_all_active_uploads(&db))
+            .await?;
+
+        for (upload_id, session_id, encoded_file_name) in active_uploads_db {
+            if active_session_ids.contains(&session_id) {
+                continue;
+            }
+
+            let part_path =
+                sharded_path::get_sharded_path(self.user_path.clone(), &encoded_file_name)
+                    .await
+                    .with_extension("part");
+
+            if part_path.exists() {
+                let _ = sharded_path::remove_sharded_path(&self.user_path, &part_path).await;
+            }
+
+            let _ = self
+                .with_db(move |db| sqlite::remove_active_upload(&db, &upload_id))
+                .await;
+        }
+
+        trace!("Exiting cleanup_orphaned_uploads successfully.");
+        Ok(())
+    }
+
+    pub async fn cleanup_own_uploads(&self) -> Result<(), DbError> {
+        trace!("Entering cleanup_own_uploads for session");
+        let active_uploads_db = self
+            .with_db(|db| sqlite::get_all_active_uploads(&db))
+            .await?;
+
+        for (upload_id, session_id, encoded_file_name) in active_uploads_db {
+            if session_id != self.session_id {
+                continue;
+            }
+
+            let part_path =
+                sharded_path::get_sharded_path(self.user_path.clone(), &encoded_file_name)
+                    .await
+                    .with_extension("part");
+
+            if part_path.exists() {
+                let _ = sharded_path::remove_sharded_path(&self.user_path, &part_path).await;
+            }
+
+            let _ = self
+                .with_db(move |db| sqlite::remove_active_upload(&db, &upload_id))
+                .await;
+        }
+
+        trace!("Exiting cleanup_own_uploads successfully.");
+        Ok(())
     }
 
     pub async fn add_file(
@@ -210,7 +294,10 @@ impl UserSession {
             new_folder_name
         );
 
-        let folder_path_str = folder_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
+        let folder_path_str = folder_path
+            .to_str()
+            .ok_or(DbError::InvalidPath)?
+            .to_string();
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for rename_folder");
@@ -234,7 +321,10 @@ impl UserSession {
             destination_folder
         );
 
-        let folder_path_str = folder_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
+        let folder_path_str = folder_path
+            .to_str()
+            .ok_or(DbError::InvalidPath)?
+            .to_string();
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for move_folder");

@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rocket::{delete, get, options, serde::json::Json, State};
 use secrecy::ExposeSecret;
@@ -53,7 +53,7 @@ pub async fn get_session(
             username: session.username.clone(),
             created_at: session
                 .created_at
-                .duration_since(std::time::UNIX_EPOCH)
+                .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
             active_uploads,

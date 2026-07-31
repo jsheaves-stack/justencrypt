@@ -176,7 +176,7 @@ pub async fn patch_folder(
         session
             .rename_folder(current_path_buf.clone(), new_name.clone())
             .await?;
-            
+
         current_path_buf.set_file_name(new_name);
     }
 
