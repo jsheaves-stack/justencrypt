@@ -1,5 +1,6 @@
 pub mod chunk_decryptor;
 pub mod chunk_encryptor;
+pub mod sync_chunk_decryptor;
 
 use std::error::Error;
 

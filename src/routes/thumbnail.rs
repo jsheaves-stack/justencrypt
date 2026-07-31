@@ -1,5 +1,8 @@
 use crate::{
-    encryption::{chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor},
+    encryption::{
+        chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor,
+        sync_chunk_decryptor::SyncChunkDecryptReader,
+    },
     enums::{request_error::RequestError, request_success::RequestSuccess},
     util::{sharded_path::get_sharded_path, unrestricted_path::UnrestrictedPath},
     web::forwarding_guards::AuthenticatedSession,
@@ -13,7 +16,7 @@ use rocket::{
     tokio::{self, fs},
     State,
 };
-use std::io::Cursor;
+use std::io::{BufReader, Cursor};
 
 #[options("/<_file_path..>")]
 pub fn thumbnail_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
@@ -79,26 +82,20 @@ pub async fn get_thumbnail(
     if !encoded_thumbnail_file_path.exists() {
         let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
 
-        let mut decryptor = ChunkDecryptor::new(encoded_file_path, parent_metadata)
-            .await
-            .map_err(|e| {
-                error!("Failed to create ChunkDecryptor: {}", e);
-                RequestError::FailedToProcessData
-            })?;
-
-        let decrypted_original_image_data = decryptor.decrypt_all().await.map_err(|e| {
-            error!("Decryption error: {}", e);
-            RequestError::FailedToProcessData
-        })?;
-
         let mut thumbnail_buffer: Cursor<Vec<u8>> = tokio::task::spawn_blocking(move || {
-            let mut buf = Cursor::new(Vec::new());
-            let img =
-                image::load_from_memory_with_format(&decrypted_original_image_data, image_format)
-                    .map_err(|e| {
-                    error!("Image load error: {}", e);
+            let decrypt_reader = SyncChunkDecryptReader::new(encoded_file_path, parent_metadata)
+                .map_err(|e| {
+                    error!("Failed to create SyncChunkDecryptReader: {}", e);
                     RequestError::FailedToProcessData
                 })?;
+
+            let buf_reader = BufReader::new(decrypt_reader);
+
+            let mut buf = Cursor::new(Vec::new());
+            let img = image::load(buf_reader, image_format).map_err(|e| {
+                error!("Image load error: {}", e);
+                RequestError::FailedToProcessData
+            })?;
 
             img.thumbnail(150, 150)
                 .write_to(&mut buf, image_format)
