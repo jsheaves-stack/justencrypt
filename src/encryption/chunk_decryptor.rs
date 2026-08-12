@@ -1,10 +1,11 @@
+use crate::enums::encryption_error::EncryptionError;
 use orion::aead;
 use rocket::tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
     sync::mpsc::Sender,
 };
-use std::{error::Error, path::PathBuf};
+use std::path::PathBuf;
 
 use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE};
 
@@ -17,7 +18,7 @@ impl ChunkDecryptor {
     pub async fn new(
         file_path: PathBuf,
         metadata: FileEncryptionMetadata,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, EncryptionError> {
         Ok(ChunkDecryptor {
             file_path,
             metadata,
@@ -33,14 +34,14 @@ impl ChunkDecryptor {
         file: &mut File,
         chunk_index: u64,
         encrypted_buffer: &mut [u8],
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    ) -> Result<Vec<u8>, EncryptionError> {
         let mut bytes_read = 0;
 
         while bytes_read < ENCRYPTED_CHUNK_SIZE {
             match file.read(&mut encrypted_buffer[bytes_read..]).await {
                 Ok(0) => break,
                 Ok(n) => bytes_read += n,
-                Err(e) => return Err(format!("Read error at chunk {}: {}", chunk_index, e).into()),
+                Err(e) => return Err(EncryptionError::Io(e)),
             }
         }
 
@@ -51,11 +52,11 @@ impl ChunkDecryptor {
         let decrypted_payload = aead::open(&self.metadata.key, &encrypted_buffer[..bytes_read])
             .map_err(|e| {
                 error!("Decryption mismatch at chunk {}: {:?}", chunk_index, e);
-                format!("Decryption error at chunk {}", chunk_index)
+                EncryptionError::Crypto(e)
             })?;
 
         if decrypted_payload.len() < 8 {
-            return Err(format!("Chunk {} is malformed (too short)", chunk_index).into());
+            return Err(EncryptionError::MalformedChunk(chunk_index));
         }
 
         let mut index_bytes = [0u8; 8];
@@ -65,17 +66,21 @@ impl ChunkDecryptor {
         let stored_index = u64::from_le_bytes(index_bytes);
 
         if stored_index != chunk_index {
-            return Err(format!(
-                "Tampering detected! Index mismatch at chunk {}: expected {}, got {}",
-                chunk_index, chunk_index, stored_index
-            )
-            .into());
+            return Err(EncryptionError::TamperingDetected {
+                expected: chunk_index,
+                got: stored_index,
+            });
         }
 
         Ok(decrypted_payload[8..].to_vec())
     }
 
-    pub async fn decrypt_range(&mut self, start: u64, end: u64, tx: Sender<Vec<u8>>) {
+    pub async fn decrypt_range(
+        &mut self,
+        start: u64,
+        end: u64,
+        tx: Sender<Vec<u8>>,
+    ) -> Result<(), EncryptionError> {
         trace!("Entering ChunkDecryptor::decrypt_range, {}-{}", start, end);
 
         let first_chunk_index = start / CHUNK_SIZE as u64;
@@ -86,13 +91,13 @@ impl ChunkDecryptor {
             Ok(f) => f,
             Err(e) => {
                 error!("Failed to open file {:?}: {}", self.file_path, e);
-                return;
+                return Err(EncryptionError::Io(e));
             }
         };
 
         if let Err(e) = file.seek(SeekFrom::Start(disk_offset)).await {
             error!("Seek error: {}", e);
-            return;
+            return Err(EncryptionError::Io(e));
         }
 
         let mut encrypted_buffer = vec![0u8; ENCRYPTED_CHUNK_SIZE];
@@ -106,7 +111,7 @@ impl ChunkDecryptor {
                 Ok(data) => data,
                 Err(e) => {
                     error!("{}", e);
-                    return;
+                    return Err(e);
                 }
             };
 
@@ -133,9 +138,10 @@ impl ChunkDecryptor {
                 }
             }
         }
+        Ok(())
     }
 
-    pub async fn decrypt_all(&mut self) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub async fn decrypt_all(&mut self) -> Result<Vec<u8>, EncryptionError> {
         let mut result = Vec::with_capacity(self.metadata.total_size as usize);
         let mut file = File::open(&self.file_path).await?;
         let mut encrypted_buffer = vec![0u8; ENCRYPTED_CHUNK_SIZE];

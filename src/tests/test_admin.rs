@@ -6,6 +6,7 @@ use rocket::{
     local::asynchronous::Client,
     routes,
 };
+use std::env;
 
 #[async_test]
 async fn test_delete_session_success() {
@@ -20,7 +21,7 @@ async fn test_delete_session_success() {
         ],
     );
     let test_api_key = "super_secret_test_key";
-    std::env::set_var("JUSTENCRYPT_ADMIN_API_KEY", test_api_key);
+    env::set_var("JUSTENCRYPT_ADMIN_API_KEY", test_api_key);
 
     let client = Client::tracked(rocket)
         .await
@@ -59,7 +60,7 @@ async fn test_get_session_with_valid_key() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount("/admin", routes![get_session, admin_options]);
     let test_api_key = "super_secret_test_key";
-    std::env::set_var("JUSTENCRYPT_ADMIN_API_KEY", test_api_key);
+    env::set_var("JUSTENCRYPT_ADMIN_API_KEY", test_api_key);
 
     let client = Client::tracked(rocket)
         .await
@@ -80,7 +81,7 @@ async fn test_get_session_with_invalid_key() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount("/admin", routes![get_session, admin_options]);
     let test_api_key = "super_secret_test_key";
-    std::env::set_var("JUSTENCRYPT_ADMIN_API_KEY", test_api_key);
+    env::set_var("JUSTENCRYPT_ADMIN_API_KEY", test_api_key);
 
     let client = Client::tracked(rocket)
         .await
@@ -99,7 +100,7 @@ async fn test_get_session_missing_key() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount("/admin", routes![get_session, admin_options]);
     let test_api_key = "super_secret_test_key";
-    std::env::set_var("JUSTENCRYPT_ADMIN_API_KEY", test_api_key);
+    env::set_var("JUSTENCRYPT_ADMIN_API_KEY", test_api_key);
 
     let client = Client::tracked(rocket)
         .await

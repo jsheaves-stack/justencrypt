@@ -1,9 +1,10 @@
+use crate::enums::encryption_error::EncryptionError;
 use orion::aead;
 use rocket::tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
-use std::{collections::HashSet, error::Error, io::SeekFrom, path::PathBuf};
+use std::{collections::HashSet, io::SeekFrom, path::PathBuf};
 
 use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE};
 
@@ -13,14 +14,14 @@ pub struct ChunkEncryptor {
 }
 
 impl ChunkEncryptor {
-    pub async fn new(file_path: PathBuf) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(file_path: PathBuf) -> Result<Self, EncryptionError> {
         Self::new_with_metadata(file_path, FileEncryptionMetadata::new()).await
     }
 
     pub async fn new_with_metadata(
         file_path: PathBuf,
         metadata: FileEncryptionMetadata,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, EncryptionError> {
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent).await?;
         }
@@ -49,14 +50,16 @@ impl ChunkEncryptor {
         source: &mut R,
         offset: u64,
         written_chunks: &mut HashSet<u64>,
-    ) -> Result<u64, Box<dyn Error>> {
+    ) -> Result<u64, EncryptionError> {
         trace!(
             "Entering ChunkEncryptor::encrypt_stream_at_offset at offset: {}",
             offset
         );
 
         if !offset.is_multiple_of(CHUNK_SIZE as u64) {
-            return Err("Offset must be a multiple of CHUNK_SIZE".into());
+            return Err(EncryptionError::InvalidOffset(
+                "Offset must be a multiple of CHUNK_SIZE".to_string(),
+            ));
         }
 
         let mut current_chunk_index = offset / (CHUNK_SIZE as u64);
@@ -92,7 +95,7 @@ impl ChunkEncryptor {
                 aead::seal(&self.metadata.key, &indexed_plaintext[..8 + bytes_read]).map_err(
                     |e| {
                         error!("Encryption error at chunk {}: {:?}", current_chunk_index, e);
-                        "Encryption error"
+                        EncryptionError::Crypto(e)
                     },
                 )?;
 
@@ -119,7 +122,7 @@ impl ChunkEncryptor {
     pub async fn encrypt_stream<R: AsyncReadExt + Unpin>(
         &mut self,
         source: &mut R,
-    ) -> Result<u64, Box<dyn Error>> {
+    ) -> Result<u64, EncryptionError> {
         trace!("Entering ChunkEncryptor::encrypt_stream");
 
         let mut chunk_index: u64 = 0;
@@ -149,7 +152,7 @@ impl ChunkEncryptor {
                 aead::seal(&self.metadata.key, &indexed_plaintext[..8 + bytes_read]).map_err(
                     |e| {
                         error!("Encryption error at chunk {}: {:?}", chunk_index, e);
-                        "Encryption error"
+                        EncryptionError::Crypto(e)
                     },
                 )?;
 

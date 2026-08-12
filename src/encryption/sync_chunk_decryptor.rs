@@ -1,5 +1,6 @@
 use orion::aead;
 use std::{
+    cmp,
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     path::PathBuf,
@@ -107,8 +108,8 @@ impl Read for SyncChunkDecryptReader {
             return Ok(0);
         }
 
-        let bytes_to_copy = std::cmp::min(buf.len(), available);
-        let end_bound = std::cmp::min(self.current_pos + bytes_to_copy as u64, self.total_size);
+        let bytes_to_copy = cmp::min(buf.len(), available);
+        let end_bound = cmp::min(self.current_pos + bytes_to_copy as u64, self.total_size);
         let actual_bytes = (end_bound - self.current_pos) as usize;
 
         buf[..actual_bytes]

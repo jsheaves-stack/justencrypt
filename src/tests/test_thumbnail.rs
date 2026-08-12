@@ -1,10 +1,13 @@
 use super::*;
-use crate::routes::{
-    file::{delete_file, put_file},
-    thumbnail::{get_thumbnail, thumbnail_options},
+use crate::{
+    routes::{
+        file::{delete_file, put_file},
+        thumbnail::{get_thumbnail, thumbnail_options},
+    },
+    util::sharded_path::get_sharded_path,
 };
 use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
-use std::io::Cursor;
+use std::{fs, io::Cursor};
 
 #[async_test]
 async fn test_get_thumbnail_success() {
@@ -70,7 +73,7 @@ async fn test_thumbnail_true_cache_resiliency() {
 
     let file_path = "resiliency_image.jpg";
     let mut img_data = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut img_data);
+    let mut cursor = Cursor::new(&mut img_data);
     let tiny_img = image::DynamicImage::new_rgb8(15, 15);
     tiny_img
         .write_to(&mut cursor, image::ImageFormat::Jpeg)
@@ -96,7 +99,7 @@ async fn test_thumbnail_true_cache_resiliency() {
     // Now manually delete the user's .cache directory to simulate cache clearing
     let cache_dir = test_user.path.join(".cache");
     if cache_dir.exists() {
-        std::fs::remove_dir_all(&cache_dir).unwrap();
+        fs::remove_dir_all(&cache_dir).unwrap();
     }
 
     // Request thumbnail again after .cache deletion (must regenerate cleanly without DB errors!)
@@ -122,7 +125,7 @@ async fn test_thumbnail_deletion_cleanup() {
 
     let file_path = "to_delete.jpg";
     let mut img_data = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut img_data);
+    let mut cursor = Cursor::new(&mut img_data);
     let tiny_img = image::DynamicImage::new_rgb8(10, 10);
     tiny_img
         .write_to(&mut cursor, image::ImageFormat::Jpeg)
@@ -155,7 +158,7 @@ async fn test_thumbnail_deletion_cleanup() {
     drop(session_guard);
 
     let cache_dir = test_user.path.join(".cache");
-    let sharded_thumb = crate::util::sharded_path::get_sharded_path(cache_dir, &encoded_name).await;
+    let sharded_thumb = get_sharded_path(cache_dir, &encoded_name).await;
     assert!(sharded_thumb.exists());
 
     // Delete the file

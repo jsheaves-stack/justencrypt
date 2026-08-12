@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use rocket::{
-    data::{Data, ToByteUnit},
+    data::{ByteUnit, Data, ToByteUnit},
     delete, get,
     http::Status,
     options, patch, post, put,
@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     env,
+    str::FromStr,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -150,6 +151,17 @@ pub async fn upload_chunk(
         upload_id,
         offset
     );
+
+    let max_file_size_str = env::var("JUSTENCRYPT_LIMITS_FILE").unwrap_or_else(|_| "64GiB".into());
+    let max_file_size = FromStr::from_str(&max_file_size_str)
+        .unwrap_or(ByteUnit::Gibibyte(64))
+        .as_u64();
+
+    if offset > max_file_size {
+        return Err(RequestError::BadRequest(
+            "Offset exceeds max file size limit".into(),
+        ));
+    }
 
     let upload_state = auth
         .session
@@ -420,7 +432,9 @@ pub async fn get_file(
     let (tx, rx) = mpsc::channel::<Vec<u8>>(MPSC_CHANNEL_CAPACITY);
 
     tokio::spawn(async move {
-        decryptor.decrypt_range(start, end, tx).await;
+        if let Err(e) = decryptor.decrypt_range(start, end, tx).await {
+            error!("Decryption error during stream: {:?}", e);
+        }
     });
 
     Ok(RangeResponder {

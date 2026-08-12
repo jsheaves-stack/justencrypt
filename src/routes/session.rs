@@ -116,9 +116,14 @@ pub async fn create_session(
 
     trace!("Generated new session ID: {}", session_id);
 
+    let secure_cookies = env::var("JUSTENCRYPT_SECURE_COOKIES")
+        .unwrap_or_else(|_| "true".to_string())
+        .parse::<bool>()
+        .unwrap_or(true);
+
     let mut cookie = Cookie::new("sid", user_token.clone());
     cookie.set_same_site(Some(SameSite::Strict));
-    cookie.set_secure(false);
+    cookie.set_secure(secure_cookies);
     cookies.add_private(cookie);
 
     trace!("Session cookie added to jar.");

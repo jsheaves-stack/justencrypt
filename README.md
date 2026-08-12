@@ -94,6 +94,7 @@ The application is configured through environment variables, which are loaded fr
 | `JUSTENCRYPT_TLS_KEY_PATH`                    | Path to the TLS key file for HTTPS. | (none) |
 | `JUSTENCRYPT_TLS_CERT_PATH`                   | Path to the TLS cert file for HTTPS. | (none) |
 | `JUSTENCRYPT_ALLOW_ORIGIN`                    | Access-Control-Allow-Origin domain for CORS. | (none) |
+| `JUSTENCRYPT_SECURE_COOKIES`                  | Whether session cookies require HTTPS. Set to false for local dev. | `true` |
 | `JUSTENCRYPT_ADMIN_API_KEY`                   | API key to enable and access administrative routes. | (none) |
 | `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size for form submissions. | `10MiB` |
 | `JUSTENCRYPT_LIMITS_DATA_FORM`                | Maximum size for data-form submissions. | `10MiB` |

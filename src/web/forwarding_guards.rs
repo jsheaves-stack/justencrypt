@@ -1,5 +1,5 @@
 use rocket::async_trait;
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use rocket::{http::Status, outcome::Outcome, request::FromRequest, Request, State};
 
@@ -35,7 +35,7 @@ impl<'r> FromRequest<'r> for AdminGuard {
     ) -> Outcome<Self, (Status, Self::Error), Status> {
         trace!("Entering forwarding_guard::AdminGuard::from_request");
 
-        let api_key = match std::env::var("JUSTENCRYPT_ADMIN_API_KEY") {
+        let api_key = match env::var("JUSTENCRYPT_ADMIN_API_KEY") {
             Ok(key) => key,
             Err(_) => {
                 return Outcome::Error((Status::InternalServerError, RequestError::InvalidApiKey))

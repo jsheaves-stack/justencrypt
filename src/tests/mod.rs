@@ -11,22 +11,23 @@ mod test_thumbnail;
 
 use crate::{get_app_config, session::user_session::UserSession, AppState};
 use rocket::{
+    custom,
     http::Cookie,
     tokio::sync::{RwLock, Semaphore},
     Build, Orbit, Rocket,
 };
 use secrecy::SecretString;
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
 use uuid::Uuid;
 
 pub struct TestUser {
     pub name: String,
-    pub path: std::path::PathBuf,
+    pub path: PathBuf,
 }
 
 impl Drop for TestUser {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 
@@ -34,22 +35,22 @@ pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
     dotenv::dotenv().ok();
 
     let temp_user = Uuid::new_v4().to_string();
-    let temp_dir = std::env::temp_dir().join(&temp_user);
-    std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    let temp_dir = env::temp_dir().join(&temp_user);
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
     let user = TestUser {
         name: temp_user,
         path: temp_dir,
     };
 
-    std::env::set_var(
+    env::set_var(
         "JUSTENCRYPT_ROCKET_SECRET_KEY",
         "BlN4QMqM8+wmRLPNRn10X/ZwmM58tEcCOgeY8cuMsB8=",
     );
 
-    std::env::set_var(
+    env::set_var(
         "JUSTENCRYPT_USER_DATA_PATH",
-        std::env::temp_dir().to_str().unwrap(),
+        env::temp_dir().to_str().unwrap(),
     );
 
     let state = AppState {
@@ -60,7 +61,7 @@ pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
 
     let app_config = get_app_config();
 
-    let rocket = rocket::custom(app_config).manage(state);
+    let rocket = custom(app_config).manage(state);
 
     (rocket, user)
 }

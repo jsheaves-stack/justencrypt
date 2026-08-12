@@ -9,6 +9,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use session::user_session::EncodedFile;
 use std::{
+    env,
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -19,7 +20,7 @@ pub fn verify_user_db_password(db_path: &Path, password: &SecretString) -> Resul
         db_path
     );
 
-    let busy_timeout_ms = std::env::var("JUSTENCRYPT_DB_BUSY_TIMEOUT_MS")
+    let busy_timeout_ms = env::var("JUSTENCRYPT_DB_BUSY_TIMEOUT_MS")
         .unwrap_or_else(|_| "60000".to_string())
         .parse::<u64>()
         .unwrap_or(60000);
@@ -46,28 +47,28 @@ pub fn create_user_db_connection(
         db_path
     );
 
-    let busy_timeout_ms = std::env::var("JUSTENCRYPT_DB_BUSY_TIMEOUT_MS")
+    let busy_timeout_ms = env::var("JUSTENCRYPT_DB_BUSY_TIMEOUT_MS")
         .unwrap_or_else(|_| "60000".to_string())
         .parse::<u64>()
         .unwrap_or(60000);
 
     let synchronous_mode =
-        std::env::var("JUSTENCRYPT_DB_SYNCHRONOUS_MODE").unwrap_or_else(|_| "NORMAL".to_string());
+        env::var("JUSTENCRYPT_DB_SYNCHRONOUS_MODE").unwrap_or_else(|_| "NORMAL".to_string());
 
-    let cache_size_kb = std::env::var("JUSTENCRYPT_DB_CACHE_SIZE_KB")
+    let cache_size_kb = env::var("JUSTENCRYPT_DB_CACHE_SIZE_KB")
         .unwrap_or_else(|_| "16000".to_string())
         .parse::<i64>()
         .unwrap_or(16000);
 
     let temp_store_mode =
-        std::env::var("JUSTENCRYPT_DB_TEMP_STORE").unwrap_or_else(|_| "MEMORY".to_string());
+        env::var("JUSTENCRYPT_DB_TEMP_STORE").unwrap_or_else(|_| "MEMORY".to_string());
 
-    let journal_size_limit_bytes = std::env::var("JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES")
+    let journal_size_limit_bytes = env::var("JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES")
         .unwrap_or_else(|_| "67108864".to_string())
         .parse::<i64>()
         .unwrap_or(67108864);
 
-    let connection_timeout_seconds = std::env::var("JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS")
+    let connection_timeout_seconds = env::var("JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS")
         .unwrap_or_else(|_| "30".to_string())
         .parse::<u64>()
         .unwrap_or(30);
@@ -128,17 +129,17 @@ pub fn create_user_db_connection(
         Ok(())
     });
 
-    let min_connections = std::env::var("JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER")
+    let min_connections = env::var("JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER")
         .unwrap_or_else(|_| "0".to_string())
         .parse::<u32>()
         .unwrap_or(0);
 
-    let max_connections = std::env::var("JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER")
+    let max_connections = env::var("JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER")
         .unwrap_or_else(|_| "16".to_string())
         .parse::<u32>()
         .unwrap_or(16);
 
-    let idle_timeout_seconds = std::env::var("JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS")
+    let idle_timeout_seconds = env::var("JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS")
         .unwrap_or_else(|_| "600".to_string())
         .parse::<u64>()
         .unwrap_or(600);

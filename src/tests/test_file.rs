@@ -4,7 +4,12 @@ use crate::{
     util::sharded_path::get_sharded_path,
     AppState,
 };
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes, tokio};
+use rocket::{
+    async_test,
+    http::{Header, Status},
+    local::asynchronous::Client,
+    routes, tokio,
+};
 
 #[async_test]
 async fn test_put_file() {
@@ -159,7 +164,7 @@ async fn test_get_file_range_first_chunk() {
     let response = client
         .get(format!("/file/{}", file_path))
         .private_cookie(cookie)
-        .header(rocket::http::Header::new("Range", "bytes=0-99"))
+        .header(Header::new("Range", "bytes=0-99"))
         .dispatch()
         .await;
 
@@ -204,7 +209,7 @@ async fn test_get_file_range_cross_chunks() {
     let response = client
         .get(format!("/file/{}", file_path))
         .private_cookie(cookie)
-        .header(rocket::http::Header::new("Range", range_header))
+        .header(Header::new("Range", range_header))
         .dispatch()
         .await;
 
@@ -239,7 +244,7 @@ async fn test_get_file_range_last_byte() {
     let response = client
         .get(format!("/file/{}", file_path))
         .private_cookie(cookie)
-        .header(rocket::http::Header::new(
+        .header(Header::new(
             "Range",
             format!("bytes={}-{}", last_index, last_index),
         ))
@@ -274,7 +279,7 @@ async fn test_get_file_range_no_end() {
     let response = client
         .get(format!("/file/{}", file_path))
         .private_cookie(cookie)
-        .header(rocket::http::Header::new("Range", "bytes=5-"))
+        .header(Header::new("Range", "bytes=5-"))
         .dispatch()
         .await;
 
@@ -305,7 +310,7 @@ async fn test_get_file_range_invalid() {
     let response = client
         .get(format!("/file/{}", file_path))
         .private_cookie(cookie)
-        .header(rocket::http::Header::new("Range", "bytes=10-5"))
+        .header(Header::new("Range", "bytes=10-5"))
         .dispatch()
         .await;
 
