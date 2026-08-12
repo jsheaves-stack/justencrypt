@@ -1,5 +1,6 @@
-use orion::errors::UnknownCryptoError;
 use std::io;
+
+use orion::errors::UnknownCryptoError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

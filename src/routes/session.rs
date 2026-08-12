@@ -1,7 +1,5 @@
-use crate::{
-    enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppState, UserSession,
-};
+use std::{collections::HashSet, env, path::PathBuf, str::FromStr, sync::Arc};
+
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
     options, post,
@@ -11,8 +9,12 @@ use rocket::{
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use std::{collections::HashSet, env, path::PathBuf, str::FromStr, sync::Arc};
 use zxcvbn::{zxcvbn, Score};
+
+use crate::{
+    enums::{request_error::RequestError, request_success::RequestSuccess},
+    AppState, UserSession,
+};
 
 #[derive(Deserialize)]
 pub struct CreateSession {
@@ -23,6 +25,7 @@ pub struct CreateSession {
 #[options("/")]
 pub fn session_options() -> Result<RequestSuccess, RequestError> {
     trace!("Entering route::session::session_options");
+
     Ok(RequestSuccess::NoContent)
 }
 
@@ -46,9 +49,11 @@ pub async fn create_session(
 
         if !user_db_path.exists() {
             trace!("User database does not exist, performing security score check.");
+
             let score_str = env::var("JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE")
                 .unwrap_or_else(|_| "4".to_string());
             let score_num = score_str.parse::<u8>().unwrap_or(4);
+
             let minimum_password_security_score = match score_num {
                 0 => Score::Zero,
                 1 => Score::One,
@@ -66,6 +71,7 @@ pub async fn create_session(
                     password_security_estimate,
                     minimum_password_security_score
                 );
+
                 return Err(RequestError::PasswordDoesNotMeetRequirements);
             }
             trace!("Password security score check passed.");
@@ -77,6 +83,7 @@ pub async fn create_session(
     .await
     .map_err(|e| {
         error!("Blocking task failed: {}", e);
+
         RequestError::FailedToCreateUserSession
     })??;
 
@@ -97,12 +104,14 @@ pub async fn create_session(
         match UserSession::open(&user_name, &passphrase, existing_pool).await {
             Ok(a) => {
                 trace!("User session opened successfully.");
+
                 a
-            }
+            },
             Err(e) => {
                 warn!("Failed to open user session: {}", e);
+
                 return Err(RequestError::Unauthorized);
-            }
+            },
         },
     );
 
@@ -173,12 +182,14 @@ pub async fn destroy_session(
     let cookie = match cookies.get_private("sid") {
         Some(c) => {
             trace!("Found sid cookie.");
+
             c
-        }
+        },
         None => {
             trace!("sid cookie not found.");
+
             return Err(RequestError::MissingSessionId);
-        }
+        },
     };
 
     let user_token = cookie.value();
@@ -190,12 +201,14 @@ pub async fn destroy_session(
         Some(session_id) => {
             sessions_by_id.remove(&session_id);
             trace!("Removed active session with ID: {}", session_id);
+
             Ok(RequestSuccess::NoContent)
-        }
+        },
         None => {
             trace!("User token not found in active session list.");
+
             Err(RequestError::MissingActiveSession)
-        }
+        },
     };
 
     trace!("Exiting route [DELETE /session] successfully.");

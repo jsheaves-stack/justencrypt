@@ -1,5 +1,6 @@
-use crate::enums::db_error::DbError;
 use thiserror::Error;
+
+use crate::enums::db_error::DbError;
 
 #[derive(Error, Debug)]
 pub enum RequestError {

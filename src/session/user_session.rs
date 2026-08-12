@@ -1,14 +1,3 @@
-use crate::{
-    db::sqlite::{self, FolderContent},
-    encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
-    enums::db_error::DbError,
-    util::sharded_path,
-};
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
-use rocket::tokio::{sync::Mutex, task};
-use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     env,
@@ -16,7 +5,20 @@ use std::{
     sync::Arc,
     time::SystemTime,
 };
+
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
+use rocket::tokio::{sync::Mutex, task};
+use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::{
+    db::sqlite::{self, FolderContent},
+    encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
+    enums::db_error::DbError,
+    util::sharded_path,
+};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct EncodedFile {
@@ -50,6 +52,7 @@ impl UserSession {
         existing_pool: Option<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
     ) -> Result<Self, DbError> {
         trace!("Entering UserSession::open for user: '{}'", user_name);
+
         if user_name.is_empty() || user_name.contains(['/', '\\', '.']) || user_name.len() > 64 {
             return Err(DbError::InvalidInput(
                 "Invalid user name format or length.".to_string(),
@@ -70,6 +73,7 @@ impl UserSession {
 
             if !user_path.exists() {
                 trace!("User path does not exist.");
+
                 return Err(DbError::UserDoesNotExist);
             }
 
@@ -77,10 +81,12 @@ impl UserSession {
 
             let db_pool = if let Some(pool) = existing_pool {
                 trace!("Using existing database pool.");
+
                 sqlite::verify_user_db_password(&user_db_path, &passphrase)?;
                 pool
             } else {
                 trace!("Creating new database pool.");
+
                 sqlite::create_user_db_connection(user_db_path, passphrase)?
             };
 
@@ -138,11 +144,13 @@ impl UserSession {
         let result = self
             .with_db(move |db| {
                 trace!("Inside spawn_blocking for get_encoded_file_name");
+
                 sqlite::get_encoded_file_name(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
 
         trace!("Exiting UserSession::get_encoded_file_name.");
+
         Ok(result)
     }
 
@@ -169,6 +177,7 @@ impl UserSession {
         active_session_ids: HashSet<String>,
     ) -> Result<(), DbError> {
         trace!("Entering cleanup_orphaned_uploads for session");
+
         let active_uploads_db = self
             .with_db(|db| sqlite::get_all_active_uploads(&db))
             .await?;
@@ -193,11 +202,13 @@ impl UserSession {
         }
 
         trace!("Exiting cleanup_orphaned_uploads successfully.");
+
         Ok(())
     }
 
     pub async fn cleanup_own_uploads(&self) -> Result<(), DbError> {
         trace!("Entering cleanup_own_uploads for session");
+
         let active_uploads_db = self
             .with_db(|db| sqlite::get_all_active_uploads(&db))
             .await?;
@@ -222,6 +233,7 @@ impl UserSession {
         }
 
         trace!("Exiting cleanup_own_uploads successfully.");
+
         Ok(())
     }
 
@@ -235,6 +247,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for add_file");
+
             sqlite::add_file(
                 &mut db,
                 file_path.to_str().ok_or(DbError::InvalidPath)?,
@@ -257,6 +270,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for delete_file");
+
             sqlite::delete_file(&mut db, file_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await?;
@@ -274,6 +288,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for add_folder");
+
             sqlite::add_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await?;
@@ -301,6 +316,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for rename_folder");
+
             sqlite::rename_folder(&mut db, &folder_path_str, &new_folder_name)
         })
         .await?;
@@ -328,6 +344,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for move_folder");
+
             sqlite::move_folder(&mut db, &folder_path_str, &destination_folder)
         })
         .await?;
@@ -345,6 +362,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for delete_folder");
+
             sqlite::delete_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await?;
@@ -362,6 +380,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for delete_folder_by_id");
+
             sqlite::delete_folder_by_id(&mut db, folder_id)
         })
         .await?;
@@ -379,6 +398,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for delete_file_by_id");
+
             sqlite::delete_file_by_id(&mut db, file_id)
         })
         .await?;
@@ -397,6 +417,7 @@ impl UserSession {
         let result = self
             .with_db(move |db| {
                 trace!("Inside spawn_blocking for get_folder_id");
+
                 sqlite::get_folder_id(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
@@ -415,6 +436,7 @@ impl UserSession {
         let result = self
             .with_db(move |db| {
                 trace!("Inside spawn_blocking for get_files_in_folder");
+
                 sqlite::get_files_in_folder(&db, folder_id)
             })
             .await?;
@@ -433,6 +455,7 @@ impl UserSession {
         let result = self
             .with_db(move |db| {
                 trace!("Inside spawn_blocking for get_child_folders");
+
                 sqlite::get_child_folders(&db, folder_id)
             })
             .await?;
@@ -451,6 +474,7 @@ impl UserSession {
         let result = self
             .with_db(move |db| {
                 trace!("Inside spawn_blocking for get_folder");
+
                 sqlite::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
@@ -472,6 +496,7 @@ impl UserSession {
         let result = self
             .with_db(move |db| {
                 trace!("Inside spawn_blocking for get_file_encryption_metadata");
+
                 sqlite::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
@@ -493,6 +518,7 @@ impl UserSession {
         let result = self
             .with_db(move |db| {
                 trace!("Inside spawn_blocking for get_file_decryption_data");
+
                 sqlite::get_file_decryption_data(
                     &db,
                     file_path.to_str().ok_or(DbError::InvalidPath)?,
@@ -521,6 +547,7 @@ impl UserSession {
 
         task::spawn_blocking(move || {
             trace!("Inside spawn_blocking for rename_file");
+
             let mut db = db_pool.get()?;
             sqlite::rename_file(&mut db, &file_path_str, &new_file_name)
         })
@@ -547,6 +574,7 @@ impl UserSession {
 
         self.with_db(move |mut db| {
             trace!("Inside spawn_blocking for move_file");
+
             sqlite::move_file(&mut db, &file_path_str, &destination_folder)
         })
         .await?;

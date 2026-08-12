@@ -1,14 +1,15 @@
-use super::*;
-use crate::{
-    routes::file::{delete_file, file_options, get_file, patch_file, put_file},
-    util::sharded_path::get_sharded_path,
-    AppState,
-};
 use rocket::{
     async_test,
     http::{Header, Status},
     local::asynchronous::Client,
     routes, tokio,
+};
+
+use super::*;
+use crate::{
+    routes::file::{delete_file, file_options, get_file, patch_file, put_file},
+    util::sharded_path::get_sharded_path,
+    AppState,
 };
 
 #[async_test]

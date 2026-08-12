@@ -1,9 +1,10 @@
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
+
 use super::*;
 use crate::{
     encryption::CHUNK_SIZE,
     routes::file::{finalize_upload, get_file, init_upload, upload_chunk, InitUploadResponse},
 };
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
 
 #[async_test]
 async fn test_chunked_upload_success() {

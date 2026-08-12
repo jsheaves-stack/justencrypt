@@ -1,11 +1,12 @@
-use super::*;
-use crate::routes::session::{create_session, destroy_session, session_options};
 use rocket::{
     async_test,
     http::{ContentType, Status},
     local::asynchronous::Client,
     routes,
 };
+
+use super::*;
+use crate::routes::session::{create_session, destroy_session, session_options};
 
 #[async_test]
 async fn test_create_session_success() {

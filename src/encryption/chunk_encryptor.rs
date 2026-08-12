@@ -1,12 +1,15 @@
-use crate::enums::encryption_error::EncryptionError;
+use std::{collections::HashSet, io::SeekFrom, path::PathBuf};
+
 use orion::aead;
 use rocket::tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
-use std::{collections::HashSet, io::SeekFrom, path::PathBuf};
 
-use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE};
+use crate::{
+    encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE},
+    enums::encryption_error::EncryptionError,
+};
 
 pub struct ChunkEncryptor {
     file: File,
@@ -95,6 +98,7 @@ impl ChunkEncryptor {
                 aead::seal(&self.metadata.key, &indexed_plaintext[..8 + bytes_read]).map_err(
                     |e| {
                         error!("Encryption error at chunk {}: {:?}", current_chunk_index, e);
+
                         EncryptionError::Crypto(e)
                     },
                 )?;
@@ -135,6 +139,7 @@ impl ChunkEncryptor {
             let mut bytes_read = 0;
             while bytes_read < CHUNK_SIZE {
                 let n = source.read(&mut plaintext_buffer[bytes_read..]).await?;
+
                 if n == 0 {
                     break;
                 }
@@ -152,6 +157,7 @@ impl ChunkEncryptor {
                 aead::seal(&self.metadata.key, &indexed_plaintext[..8 + bytes_read]).map_err(
                     |e| {
                         error!("Encryption error at chunk {}: {:?}", chunk_index, e);
+
                         EncryptionError::Crypto(e)
                     },
                 )?;

@@ -1,10 +1,11 @@
-use orion::aead;
 use std::{
     cmp,
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     path::PathBuf,
 };
+
+use orion::aead;
 
 use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE};
 
@@ -44,6 +45,7 @@ impl SyncChunkDecryptReader {
                 Ok(0) => break,
                 Ok(n) => bytes_read += n,
                 Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+
                 Err(e) => return Err(e),
             }
         }
@@ -51,6 +53,7 @@ impl SyncChunkDecryptReader {
         if bytes_read == 0 {
             self.current_chunk_buffer = Vec::new();
             self.current_chunk_index = chunk_index;
+
             return Ok(());
         }
 
@@ -98,12 +101,14 @@ impl Read for SyncChunkDecryptReader {
 
         if self.current_chunk_index != chunk_index {
             self.load_chunk(chunk_index)?;
+
             if self.current_chunk_buffer.is_empty() {
                 return Ok(0);
             }
         }
 
         let available = self.current_chunk_buffer.len().saturating_sub(chunk_offset);
+
         if available == 0 {
             return Ok(0);
         }
@@ -116,6 +121,7 @@ impl Read for SyncChunkDecryptReader {
             .copy_from_slice(&self.current_chunk_buffer[chunk_offset..chunk_offset + actual_bytes]);
 
         self.current_pos += actual_bytes as u64;
+
         Ok(actual_bytes)
     }
 }
@@ -136,6 +142,7 @@ impl Seek for SyncChunkDecryptReader {
         }
 
         self.current_pos = new_pos as u64;
+
         Ok(self.current_pos)
     }
 }

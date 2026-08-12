@@ -1,3 +1,14 @@
+use std::io::{BufReader, Cursor};
+
+use image::ImageFormat;
+use rocket::{
+    get,
+    http::ContentType,
+    options,
+    tokio::{self, fs},
+    State,
+};
+
 use crate::{
     encryption::{
         chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor,
@@ -8,15 +19,6 @@ use crate::{
     web::forwarding_guards::AuthenticatedSession,
     AppState,
 };
-use image::ImageFormat;
-use rocket::{
-    get,
-    http::ContentType,
-    options,
-    tokio::{self, fs},
-    State,
-};
-use std::io::{BufReader, Cursor};
 
 #[options("/<_file_path..>")]
 pub fn thumbnail_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
@@ -62,6 +64,7 @@ pub async fn get_thumbnail(
     if !cache_path.exists() {
         fs::create_dir_all(&cache_path).await.map_err(|e| {
             error!("Failed to create cache dir: {}", e);
+
             RequestError::FailedToWriteData
         })?;
     }
@@ -74,6 +77,7 @@ pub async fn get_thumbnail(
         .derive_thumbnail_metadata(encoded_file_name.as_bytes())
         .map_err(|e| {
             error!("Failed to derive thumbnail metadata: {}", e);
+
             RequestError::FailedToProcessData
         })?;
     let encoded_thumbnail_file_path =
@@ -86,6 +90,7 @@ pub async fn get_thumbnail(
             let decrypt_reader = SyncChunkDecryptReader::new(encoded_file_path, parent_metadata)
                 .map_err(|e| {
                     error!("Failed to create SyncChunkDecryptReader: {}", e);
+
                     RequestError::FailedToProcessData
                 })?;
 
@@ -94,6 +99,7 @@ pub async fn get_thumbnail(
             let mut buf = Cursor::new(Vec::new());
             let img = image::load(buf_reader, image_format).map_err(|e| {
                 error!("Image load error: {}", e);
+
                 RequestError::FailedToProcessData
             })?;
 
@@ -101,6 +107,7 @@ pub async fn get_thumbnail(
                 .write_to(&mut buf, image_format)
                 .map_err(|e| {
                     error!("Image write error: {}", e);
+
                     RequestError::FailedToProcessData
                 })?;
 
@@ -110,6 +117,7 @@ pub async fn get_thumbnail(
         .await
         .map_err(|e| {
             error!("Blocking task error: {}", e);
+
             RequestError::FailedToProcessData
         })??;
 
@@ -118,6 +126,7 @@ pub async fn get_thumbnail(
                 .await
                 .map_err(|e| {
                     error!("Failed to create ChunkEncryptor: {}", e);
+
                     RequestError::FailedToProcessData
                 })?;
 
@@ -126,6 +135,7 @@ pub async fn get_thumbnail(
             .await
             .map_err(|e| {
                 error!("Encryption error: {}", e);
+
                 RequestError::FailedToProcessData
             })?;
 
@@ -135,11 +145,13 @@ pub async fn get_thumbnail(
             .await
             .map_err(|e| {
                 error!("Failed to create ChunkDecryptor: {}", e);
+
                 RequestError::FailedToProcessData
             })?;
 
         let decrypted_thumbnail_data = decryptor.decrypt_all().await.map_err(|e| {
             error!("Decryption error: {}", e);
+
             RequestError::FailedToProcessData
         })?;
 

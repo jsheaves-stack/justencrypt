@@ -1,6 +1,7 @@
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
+
 use super::*;
 use crate::routes::folder::{create_folder, get_folder, patch_folder, PatchFolderData};
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
 
 #[async_test]
 async fn test_patch_folder_rename() {

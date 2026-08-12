@@ -1,12 +1,15 @@
-use crate::enums::request_error::RequestError;
 use rocket::http::Status;
+
+use crate::enums::request_error::RequestError;
 
 pub fn parse_range(range_str: &str, total_size: u64) -> Result<(u64, u64, Status), RequestError> {
     if !range_str.starts_with("bytes=") {
         return Err(RequestError::BadRequest("Invalid Range header".into()));
     }
+
     let range_val = &range_str[6..];
     let parts: Vec<&str> = range_val.split('-').collect();
+
     if parts.len() != 2 {
         return Err(RequestError::BadRequest("Invalid Range format".into()));
     }

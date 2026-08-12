@@ -1,6 +1,9 @@
-use crate::{
-    db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError, session,
+use std::{
+    env,
+    path::{Component, Path, PathBuf},
+    time::Duration,
 };
+
 use orion::kex::SecretKey;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
@@ -8,10 +11,9 @@ use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use session::user_session::EncodedFile;
-use std::{
-    env,
-    path::{Component, Path, PathBuf},
-    time::Duration,
+
+use crate::{
+    db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError, session,
 };
 
 pub fn verify_user_db_password(db_path: &Path, password: &SecretString) -> Result<(), DbError> {
@@ -31,10 +33,12 @@ pub fn verify_user_db_password(db_path: &Path, password: &SecretString) -> Resul
 
     if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())) {
         error!("Failed to verify database password: {}", e);
+
         return Err(DbError::Rusqlite(e));
     }
 
     trace!("Password verified successfully.");
+
     Ok(())
 }
 
@@ -74,9 +78,11 @@ pub fn create_user_db_connection(
         .unwrap_or(30);
 
     // Open a connection to validate the password and run migrations.
-    // This fails immediately if the password is wrong, avoiding r2d2's exponential backoff and retry loops.
+    // This fails immediately if the password is wrong, avoiding r2d2's exponential
+    // backoff and retry loops.
     {
         trace!("Manually opening DB connection for password validation and migrations.");
+
         let mut conn = rusqlite::Connection::open(&db_path)?;
 
         conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
@@ -84,6 +90,7 @@ pub fn create_user_db_connection(
 
         if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())) {
             error!("Failed to verify database password: {}", e);
+
             return Err(DbError::Rusqlite(e));
         }
 
@@ -91,6 +98,7 @@ pub fn create_user_db_connection(
 
         if let Err(e) = migrations::get_migrations().to_latest(&mut conn) {
             error!("Migration error: {}", e);
+
             return Err(DbError::Rusqlite(rusqlite::Error::QueryReturnedNoRows));
         }
 
@@ -99,6 +107,7 @@ pub fn create_user_db_connection(
 
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
         trace!("Initializing new pool DB connection.");
+
         conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
@@ -118,9 +127,11 @@ pub fn create_user_db_connection(
         }
 
         trace!("Setting PRAGMA foreign_keys = ON.");
+
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
         trace!("Applying performance PRAGMAs: synchronous={}, cache_size=-{}, temp_store={}, journal_size_limit={}", synchronous_mode, cache_size_kb, temp_store_mode, journal_size_limit_bytes);
+
         conn.execute_batch(&format!(
             "PRAGMA synchronous = {}; PRAGMA cache_size = -{}; PRAGMA temp_store = {}; PRAGMA journal_size_limit = {};",
             synchronous_mode, cache_size_kb, temp_store_mode, journal_size_limit_bytes
@@ -165,14 +176,17 @@ fn get_folder_id_and_create_if_missing(
         "Entering sqlite::get_folder_id_and_create_if_missing with folder_path_str: '{}'",
         folder_path_str
     );
+
     if let Some(id) = get_folder_id(db, folder_path_str)? {
         trace!(
             "Folder '{}' already exists with ID: {}. Fast-path exit without transaction.",
             folder_path_str,
             id
         );
+
         return Ok(id);
     }
+
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -200,25 +214,29 @@ fn get_folder_id_and_create_if_missing(
             Ok(f) => f,
             Err(e) => {
                 error!("Failed to get folder id from the provided path: {}", e);
+
                 return Err(DbError::FailedToGetFolderIdFromPath(e.to_string()));
-            }
+            },
         };
 
         current_id = match folder_id {
             Some(id) => {
                 trace!("Folder '{}' found with ID: {}", name, id);
+
                 id
-            }
+            },
             None => {
                 trace!("Folder '{}' not found, creating it.", name);
+
                 tx.execute(
                     "INSERT OR IGNORE INTO folders (parent_folder_id, name, created_at) VALUES (?1, ?2, CURRENT_TIMESTAMP)",
                     params![current_id, name],
                 )?;
                 let new_id = tx.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
                 trace!("New folder '{}' created with ID: {}", name, new_id);
+
                 new_id
-            }
+            },
         };
     }
 
@@ -227,6 +245,7 @@ fn get_folder_id_and_create_if_missing(
         "Transaction committed. Exiting sqlite::get_folder_id_and_create_if_missing with final folder ID: {}",
         current_id
     );
+
     Ok(current_id)
 }
 
@@ -263,8 +282,9 @@ pub fn get_folder_id(
             Ok(f) => f,
             Err(e) => {
                 error!("Failed to get folder id from the provided path: {}", e);
+
                 return Err(DbError::FailedToGetFolderIdFromPath(e.to_string()));
-            }
+            },
         };
 
         match folder_id {
@@ -275,14 +295,15 @@ pub fn get_folder_id(
                     id
                 );
                 current_id = id
-            }
+            },
             None => {
                 trace!(
                     "Folder component '{}' not found. Exiting get_folder_id with None.",
                     name
                 );
+
                 return Ok(None);
-            }
+            },
         }
     }
 
@@ -290,6 +311,7 @@ pub fn get_folder_id(
         "Exiting sqlite::get_folder_id with final folder ID: {}",
         current_id
     );
+
     Ok(Some(current_id))
 }
 
@@ -312,6 +334,7 @@ pub fn get_encoded_file_name(
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
     trace!("Getting parent folder ID for path: '{}'", parent_str);
+
     let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::MissingFileName)?;
     trace!("Parent folder ID found: {}", parent_folder_id);
 
@@ -332,8 +355,9 @@ pub fn get_encoded_file_name(
         Ok(f) => f,
         Err(e) => {
             error!("Failed to get encoded file name from the db: {}", e);
+
             return Err(DbError::FailedToGetFileFromDb(e.to_string()));
-        }
+        },
     };
 
     let result = result.ok_or(DbError::NotFound)?;
@@ -342,6 +366,7 @@ pub fn get_encoded_file_name(
         "Exiting sqlite::get_encoded_file_name with result: '{}'",
         result
     );
+
     Ok(result)
 }
 
@@ -404,12 +429,14 @@ pub fn add_file(
     ).map(|_| ())
     .map_err(|e| {
         error!("Database error in add_file: {}", e);
+
         DbError::FailedToAddFileToDb(e.to_string())
     })?;
     trace!("File insert/update executed.");
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::add_file successfully.");
+
     Ok(())
 }
 
@@ -440,8 +467,9 @@ pub fn delete_file(
                 "Parent folder '{:?}' not found during delete. File cannot exist.",
                 parent_path
             );
+
             return Ok(());
-        }
+        },
     };
     trace!("Parent folder ID is: {}", parent_folder_id);
 
@@ -455,12 +483,14 @@ pub fn delete_file(
     .map(|_| ())
     .map_err(|e| {
         error!("Failed to delete file from the db: {}", e);
+
         DbError::FailedToDeleteFileFromDb(e.to_string())
     })?;
     trace!("File delete executed.");
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::delete_file successfully.");
+
     Ok(())
 }
 
@@ -476,6 +506,7 @@ pub fn get_file(
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
     trace!("Getting parent folder ID for path: '{}'", parent_str);
+
     let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::MissingFileName)?;
     trace!("Parent folder ID found: {}", parent_folder_id);
 
@@ -506,13 +537,15 @@ pub fn get_file(
         Ok(f) => f,
         Err(e) => {
             error!("Database error in get_file: {}", e);
+
             return Err(DbError::FailedToGetFileFromDb(e.to_string()));
-        }
+        },
     };
 
     let result = result.ok_or(DbError::NotFound)?;
 
     trace!("Exiting sqlite::get_file successfully.");
+
     Ok(result)
 }
 
@@ -559,6 +592,7 @@ pub fn get_file_decryption_data(
             DbError::NotFound
         } else {
             error!("Database error in get_file_decryption_data: {}", e);
+
             DbError::FailedToGetFileFromDb(e.to_string())
         }
     })
@@ -604,6 +638,7 @@ pub fn get_folder(
     let mut entries = Vec::new();
 
     trace!("Querying for child folders.");
+
     let mut folder_stmt = db.prepare(
         "SELECT name, total_folder_size, total_file_count, total_folder_count, created_at FROM folders WHERE parent_folder_id = ?1"
     )?;
@@ -632,6 +667,7 @@ pub fn get_folder(
     }
 
     trace!("Querying for files in folder.");
+
     let mut file_stmt = db.prepare(
         "SELECT name, file_extension, total_size, created_at, updated_at FROM files WHERE parent_folder_id = ?1",
     )?;
@@ -643,6 +679,7 @@ pub fn get_folder(
         let created_at: Option<String> = row.get(3)?;
         let updated_at: Option<String> = row.get(4)?;
         trace!("Found file: '{}'", file_name);
+
         entries.push(FolderContent::File(File {
             file_extension: row.get(1)?,
             file_name,
@@ -653,6 +690,7 @@ pub fn get_folder(
     }
 
     trace!("Exiting sqlite::get_folder with {} entries.", entries.len());
+
     Ok(entries)
 }
 
@@ -666,8 +704,10 @@ pub fn delete_folder(
     );
     let folder_id = get_folder_id(db, path_str)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
     trace!("Found folder ID to delete: {}", folder_id);
+
     let result = delete_folder_by_id(db, folder_id);
     trace!("Exiting sqlite::delete_folder.");
+
     result
 }
 
@@ -676,8 +716,10 @@ pub fn add_folder(
     path_str: &str,
 ) -> Result<(), DbError> {
     trace!("Entering sqlite::add_folder with path_str: '{}'", path_str);
+
     get_folder_id_and_create_if_missing(db, path_str)?;
     trace!("Exiting sqlite::add_folder successfully.");
+
     Ok(())
 }
 
@@ -707,11 +749,13 @@ pub fn rename_folder(
     .map(|_| ())
     .map_err(|e| {
         error!("Failed to rename folder in the db: {}", e);
+
         DbError::FailedToUpdateFileInDb(e.to_string())
     })?;
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::rename_folder successfully.");
+
     Ok(())
 }
 
@@ -755,11 +799,13 @@ pub fn move_folder(
     .map(|_| ())
     .map_err(|e| {
         error!("Failed to move folder in the db: {}", e);
+
         DbError::FailedToUpdateFileInDb(e.to_string())
     })?;
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::move_folder successfully.");
+
     Ok(())
 }
 
@@ -802,12 +848,14 @@ pub fn rename_file(
     .map(|_| ())
     .map_err(|e| {
         error!("Failed to rename file in the db: {}", e);
+
         DbError::FailedToUpdateFileInDb(e.to_string())
     })?;
     trace!("File rename executed.");
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::rename_file successfully.");
+
     Ok(())
 }
 
@@ -849,12 +897,14 @@ pub fn move_file(
     .map(|_| ())
     .map_err(|e| {
         error!("Failed to move file in the db: {}", e);
+
         DbError::FailedToAddFileToDb(e.to_string())
     })?;
     trace!("File move executed.");
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::move_file successfully.");
+
     Ok(())
 }
 
@@ -888,6 +938,7 @@ pub fn get_files_in_folder(
         "Exiting sqlite::get_files_in_folder with {} files.",
         files.len()
     );
+
     Ok(files)
 }
 
@@ -907,6 +958,7 @@ pub fn get_child_folders(
     while let Some(row) = rows.next()? {
         let id: i32 = row.get(0)?;
         trace!("Found child folder with id: {}", id);
+
         folders.push(id);
     }
 
@@ -914,6 +966,7 @@ pub fn get_child_folders(
         "Exiting sqlite::get_child_folders with {} folders.",
         folders.len()
     );
+
     Ok(folders)
 }
 
@@ -932,12 +985,14 @@ pub fn delete_file_by_id(
         .map(|_| ())
         .map_err(|e| {
             error!("Failed to delete file from the db: {}", e);
+
             DbError::FailedToDeleteFileFromDb(e.to_string())
         })?;
     trace!("File delete by ID executed.");
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::delete_file_by_id successfully.");
+
     Ok(())
 }
 
@@ -956,12 +1011,14 @@ pub fn delete_folder_by_id(
         .map(|_| ())
         .map_err(|e| {
             error!("Failed to delete folder from the db: {}", e);
+
             DbError::FailedToDeleteFileFromDb(e.to_string())
         })?;
     trace!("Folder delete by ID executed.");
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::delete_folder_by_id successfully.");
+
     Ok(())
 }
 
@@ -1005,6 +1062,7 @@ pub fn get_all_active_uploads(
     db: &rusqlite::Connection,
 ) -> Result<Vec<(String, String, String)>, DbError> {
     trace!("Entering sqlite::get_all_active_uploads");
+
     let mut stmt = db
         .prepare("SELECT upload_id, session_id, encoded_file_name FROM active_uploads")
         .map_err(|e| DbError::FailedToQueryDb(e.to_string()))?;
@@ -1019,5 +1077,6 @@ pub fn get_all_active_uploads(
     }
 
     trace!("Exiting sqlite::get_all_active_uploads successfully.");
+
     Ok(uploads)
 }

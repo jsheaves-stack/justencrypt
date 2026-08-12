@@ -9,7 +9,8 @@ mod test_folder_patch;
 mod test_session;
 mod test_thumbnail;
 
-use crate::{get_app_config, session::user_session::UserSession, AppState};
+use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
+
 use rocket::{
     custom,
     http::Cookie,
@@ -17,8 +18,9 @@ use rocket::{
     Build, Orbit, Rocket,
 };
 use secrecy::SecretString;
-use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
 use uuid::Uuid;
+
+use crate::{get_app_config, session::user_session::UserSession, AppState};
 
 pub struct TestUser {
     pub name: String,

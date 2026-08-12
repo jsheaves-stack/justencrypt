@@ -1,3 +1,25 @@
+use std::{
+    collections::HashSet,
+    env,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+
+use rocket::{
+    data::{ByteUnit, Data, ToByteUnit},
+    delete, get,
+    http::Status,
+    options, patch, post, put,
+    serde::json::Json,
+    tokio::{
+        self, fs,
+        sync::{mpsc, Mutex},
+    },
+};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
 use crate::{
     encryption::{
         chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor, CHUNK_SIZE,
@@ -15,26 +37,6 @@ use crate::{
         responders::RangeResponder,
     },
 };
-use rocket::{
-    data::{ByteUnit, Data, ToByteUnit},
-    delete, get,
-    http::Status,
-    options, patch, post, put,
-    serde::json::Json,
-    tokio::{
-        self, fs,
-        sync::{mpsc, Mutex},
-    },
-};
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashSet,
-    env,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
-use uuid::Uuid;
 
 #[derive(Serialize, Deserialize)]
 pub struct InitUploadResponse {
@@ -123,6 +125,7 @@ pub async fn init_upload(
         .await
         .map_err(|e| {
             error!("Failed to create ChunkEncryptor: {}", e);
+
             RequestError::FailedToProcessData
         })?;
 
@@ -186,6 +189,7 @@ pub async fn upload_chunk(
         .await
         .map_err(|e| {
             error!("Encryption error: {}", e);
+
             RequestError::FailedToProcessData
         })?;
 
@@ -258,7 +262,9 @@ pub async fn finalize_upload(
 
     if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {
         error!("Failed to rename part file to final file: {}", e);
+
         let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
+
         return Err(RequestError::FailedToProcessData);
     }
 
@@ -271,6 +277,7 @@ pub async fn finalize_upload(
         .await
     {
         let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+
         return Err(e.into());
     }
 
@@ -279,6 +286,7 @@ pub async fn finalize_upload(
     if let Some(old_name) = old_encoded_name {
         let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
         let old_thumb_path = get_sharded_path(user_path.join(".cache"), &old_name).await;
+
         let _ = remove_sharded_path(&user_path, &old_file_path).await;
         let _ = remove_sharded_path(&user_path, &old_thumb_path).await;
     }
@@ -318,6 +326,7 @@ pub async fn put_file(
     let encoded_file_path_part = encoded_file_path.with_extension("part");
 
     let upload_id = Uuid::new_v4().to_string();
+
     if let Err(e) = auth
         .session
         .add_active_upload_db(
@@ -333,40 +342,49 @@ pub async fn put_file(
     let encryptor = ChunkEncryptor::new(encoded_file_path_part.clone())
         .await
         .map_err(|e| e.to_string());
+
     let mut encryptor = match encryptor {
         Ok(enc) => enc,
         Err(e) => {
             error!("Failed to create ChunkEncryptor: {}", e);
+
             let _ = auth
                 .session
                 .remove_active_upload_db(upload_id.clone())
                 .await;
+
             return Err(RequestError::FailedToProcessData);
-        }
+        },
     };
 
     let mut stream = data.open(5.gibibytes());
+
     let encrypt_result = encryptor
         .encrypt_stream(&mut stream)
         .await
         .map_err(|e| e.to_string());
+
     if let Err(e) = encrypt_result {
         error!("Encryption error: {}", e);
+
         let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
         let _ = auth
             .session
             .remove_active_upload_db(upload_id.clone())
             .await;
+
         return Err(RequestError::FailedToProcessData);
     }
 
     if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {
         error!("Failed to rename part file to final file: {}", e);
+
         let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
         let _ = auth
             .session
             .remove_active_upload_db(upload_id.clone())
             .await;
+
         return Err(RequestError::FailedToProcessData);
     }
 
@@ -374,12 +392,14 @@ pub async fn put_file(
 
     {
         let session = auth.session.clone();
+
         if let Err(e) = session
             .add_file(file_path_buf, encoded_file_name, metadata)
             .await
         {
             let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
             let _ = session.remove_active_upload_db(upload_id.clone()).await;
+
             return Err(e.into());
         }
     }
@@ -392,6 +412,7 @@ pub async fn put_file(
     if let Some(old_name) = old_encoded_name {
         let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
         let old_thumb_path = get_sharded_path(user_path.join(".cache"), &old_name).await;
+
         let _ = remove_sharded_path(&user_path, &old_file_path).await;
         let _ = remove_sharded_path(&user_path, &old_thumb_path).await;
     }
@@ -426,6 +447,7 @@ pub async fn get_file(
         .await
         .map_err(|e| {
             error!("Failed to create ChunkDecryptor: {}", e);
+
             RequestError::FailedToProcessData
         })?;
 
@@ -480,6 +502,7 @@ pub async fn delete_file(
         .await
         .map_err(|e| {
             error!("Failed to delete physical file: {}", e);
+
             RequestError::FailedToRemoveFile
         })?;
 

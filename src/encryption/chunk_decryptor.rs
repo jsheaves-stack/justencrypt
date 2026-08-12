@@ -1,13 +1,16 @@
-use crate::enums::encryption_error::EncryptionError;
+use std::path::PathBuf;
+
 use orion::aead;
 use rocket::tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
     sync::mpsc::Sender,
 };
-use std::path::PathBuf;
 
-use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE};
+use crate::{
+    encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE},
+    enums::encryption_error::EncryptionError,
+};
 
 pub struct ChunkDecryptor {
     file_path: PathBuf,
@@ -41,6 +44,7 @@ impl ChunkDecryptor {
             match file.read(&mut encrypted_buffer[bytes_read..]).await {
                 Ok(0) => break,
                 Ok(n) => bytes_read += n,
+
                 Err(e) => return Err(EncryptionError::Io(e)),
             }
         }
@@ -52,6 +56,7 @@ impl ChunkDecryptor {
         let decrypted_payload = aead::open(&self.metadata.key, &encrypted_buffer[..bytes_read])
             .map_err(|e| {
                 error!("Decryption mismatch at chunk {}: {:?}", chunk_index, e);
+
                 EncryptionError::Crypto(e)
             })?;
 
@@ -91,12 +96,14 @@ impl ChunkDecryptor {
             Ok(f) => f,
             Err(e) => {
                 error!("Failed to open file {:?}: {}", self.file_path, e);
+
                 return Err(EncryptionError::Io(e));
-            }
+            },
         };
 
         if let Err(e) = file.seek(SeekFrom::Start(disk_offset)).await {
             error!("Seek error: {}", e);
+
             return Err(EncryptionError::Io(e));
         }
 
@@ -111,8 +118,9 @@ impl ChunkDecryptor {
                 Ok(data) => data,
                 Err(e) => {
                     error!("{}", e);
+
                     return Err(e);
-                }
+                },
             };
 
             let chunk_start_plaintext = chunk_index * CHUNK_SIZE as u64;
@@ -133,6 +141,7 @@ impl ChunkDecryptor {
             if slice_start <= slice_end && slice_start < decrypted_chunk.len() {
                 let final_slice =
                     &decrypted_chunk[slice_start..=slice_end.min(decrypted_chunk.len() - 1)];
+
                 if tx.send(final_slice.to_vec()).await.is_err() {
                     break;
                 }
@@ -150,6 +159,7 @@ impl ChunkDecryptor {
             let decrypted_chunk = self
                 .decrypt_chunk(&mut file, chunk_index, &mut encrypted_buffer)
                 .await?;
+
             if decrypted_chunk.is_empty() {
                 break;
             }

@@ -1,3 +1,5 @@
+use std::{collections::HashMap, env, io::Write, str::FromStr, sync::Arc};
+
 use log::LevelFilter;
 use rocket::{
     async_trait,
@@ -22,7 +24,6 @@ use routes::{
     thumbnail::{get_thumbnail, thumbnail_options},
 };
 use session::user_session::UserSession;
-use std::{collections::HashMap, env, io::Write, str::FromStr, sync::Arc};
 use web::fairings::Cors;
 
 pub mod db;
@@ -56,6 +57,7 @@ impl Fairing for CleanupOnShutdown {
 
     async fn on_shutdown(&self, rocket: &rocket::Rocket<rocket::Orbit>) {
         info!("Shutdown signal received. Cleaning up active uploads for all sessions.");
+
         if let Some(state) = rocket.state::<AppState>() {
             let sessions = state.sessions_by_id.read().await;
             for session in sessions.values() {
@@ -74,11 +76,13 @@ fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> Strin
     if cfg!(debug_assertions) {
         match env::var(var_name) {
             Ok(v) => v,
+
             Err(_) => default.to_owned(),
         }
     } else {
         match env::var(var_name) {
             Ok(v) => v,
+
             Err(e) => panic!("{} Error: {}", error_msg, e),
         }
     }
@@ -189,6 +193,7 @@ pub fn get_app_config() -> Figment {
     let tls_cert_path = env::var("JUSTENCRYPT_TLS_CERT_PATH").unwrap_or_default();
 
     // Only add TLS config if both paths are non-empty
+
     if !tls_cert_path.is_empty() && !tls_key_path.is_empty() {
         trace!(
             "TLS paths provided, merging TLS configuration. Cert: {}, Key: {}",
@@ -236,6 +241,7 @@ async fn rocket() -> _ {
         .init();
 
     trace!("Loaded .env file and initialized logger.");
+
     trace!("Entering main::rocket launch function.");
 
     let app_config = get_app_config();
@@ -262,6 +268,7 @@ async fn rocket() -> _ {
     let hsts = Hsts::Enable(Duration::days(365));
 
     trace!("HSTS enabled.");
+
     trace!("Building Rocket instance...");
 
     let mut rocket = rocket::custom(app_config)
@@ -301,6 +308,7 @@ async fn rocket() -> _ {
 
     if env::var("JUSTENCRYPT_ADMIN_API_KEY").is_ok() {
         trace!("JUSTENCRYPT_ADMIN_API_KEY is set, mounting admin routes.");
+
         rocket = rocket.mount(
             "/admin",
             routes![

@@ -1,9 +1,10 @@
 use core::fmt;
+use std::path::PathBuf;
+
 use rocket::{
     http::uri::{fmt::Path, Error, Segments},
     request::FromSegments,
 };
-use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct UnrestrictedPath(Vec<String>);

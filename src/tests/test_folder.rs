@@ -1,3 +1,5 @@
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
+
 use super::*;
 use crate::{
     db::sqlite::FolderContent,
@@ -7,7 +9,6 @@ use crate::{
     },
     AppState,
 };
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
 
 #[async_test]
 async fn test_create_folder() {
@@ -151,6 +152,7 @@ async fn test_get_folder_file_metadata() {
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];
+
     if let FolderContent::File(file) = entry {
         assert_eq!(file.file_name, file_name);
         assert_eq!(file.file_size, Some(file_content.len() as u64));
@@ -223,6 +225,7 @@ async fn test_get_folder_with_subfolder_size() {
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];
+
     if let FolderContent::Folder(folder) = entry {
         assert_eq!(folder.file_name, sub_folder);
         assert_eq!(folder.file_size, Some(file_content.len() as u64));

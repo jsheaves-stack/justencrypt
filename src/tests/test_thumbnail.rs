@@ -1,3 +1,7 @@
+use std::{fs, io::Cursor};
+
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
+
 use super::*;
 use crate::{
     routes::{
@@ -6,8 +10,6 @@ use crate::{
     },
     util::sharded_path::get_sharded_path,
 };
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
-use std::{fs, io::Cursor};
 
 #[async_test]
 async fn test_get_thumbnail_success() {
@@ -98,11 +100,13 @@ async fn test_thumbnail_true_cache_resiliency() {
 
     // Now manually delete the user's .cache directory to simulate cache clearing
     let cache_dir = test_user.path.join(".cache");
+
     if cache_dir.exists() {
         fs::remove_dir_all(&cache_dir).unwrap();
     }
 
-    // Request thumbnail again after .cache deletion (must regenerate cleanly without DB errors!)
+    // Request thumbnail again after .cache deletion (must regenerate cleanly
+    // without DB errors!)
     let response_regen = client
         .get(format!("/thumbnail/{}", file_path))
         .private_cookie(cookie)

@@ -1,8 +1,9 @@
-use rocket::tokio::fs;
 use std::{
     error::Error,
     path::{Path, PathBuf},
 };
+
+use rocket::tokio::fs;
 
 pub async fn remove_sharded_path(base_path: &Path, file_path: &Path) -> Result<(), Box<dyn Error>> {
     fs::remove_file(file_path).await?;

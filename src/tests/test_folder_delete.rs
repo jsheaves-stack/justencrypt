@@ -1,3 +1,5 @@
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
+
 use super::*;
 use crate::{
     routes::{
@@ -6,7 +8,6 @@ use crate::{
     },
     AppState,
 };
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
 
 #[async_test]
 async fn test_delete_folder_success() {

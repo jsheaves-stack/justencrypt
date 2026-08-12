@@ -1,3 +1,10 @@
+use rocket::{
+    async_test,
+    http::{ContentType, Status},
+    local::asynchronous::Client,
+    routes, tokio,
+};
+
 use super::*;
 use crate::{
     routes::{
@@ -6,12 +13,6 @@ use crate::{
     },
     util::sharded_path::get_sharded_path,
     AppState,
-};
-use rocket::{
-    async_test,
-    http::{ContentType, Status},
-    local::asynchronous::Client,
-    routes, tokio,
 };
 
 #[async_test]

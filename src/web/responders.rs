@@ -1,11 +1,13 @@
-use crate::enums::{request_error::RequestError, request_success::RequestSuccess};
+use std::io::Cursor;
+
 use rocket::{
     http::{Header, Status},
     response::{self, stream::ByteStream, Responder, Response, Result},
     tokio::sync::mpsc,
     Request,
 };
-use std::io::Cursor;
+
+use crate::enums::{request_error::RequestError, request_success::RequestSuccess};
 
 pub struct RangeResponder {
     pub rx: mpsc::Receiver<Vec<u8>>,
@@ -62,7 +64,7 @@ impl<'r> Responder<'r, 'static> for RequestError {
             RequestError::UnsupportedFileType => Status::UnsupportedMediaType,
             RequestError::PasswordDoesNotMeetRequirements | RequestError::BadRequest(_) => {
                 Status::BadRequest
-            }
+            },
             RequestError::NotFound => Status::NotFound,
             RequestError::RangeNotSatisfiable => Status::RangeNotSatisfiable,
             RequestError::TooManyActiveUploads => Status::TooManyRequests,

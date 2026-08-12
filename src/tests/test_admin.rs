@@ -1,12 +1,14 @@
-use super::*;
-use crate::routes::admin::{admin_options, delete_session, delete_session_options, get_session};
+use std::env;
+
 use rocket::{
     async_test,
     http::{Header, Status},
     local::asynchronous::Client,
     routes,
 };
-use std::env;
+
+use super::*;
+use crate::routes::admin::{admin_options, delete_session, delete_session_options, get_session};
 
 #[async_test]
 async fn test_delete_session_success() {
