@@ -226,12 +226,25 @@ async fn rocket() -> _ {
 
     env_logger::Builder::new()
         .format(|buf, record| {
+            let mut file = record.file().unwrap_or("unknown");
+            if let Some(idx) = file.find("registry/src/") {
+                let rest = &file[idx + 13..];
+                if let Some(slash_idx) = rest.find('/') {
+                    file = &rest[slash_idx + 1..];
+                }
+            } else if let Some(idx) = file.find("/rustc/") {
+                let rest = &file[idx + 7..];
+                if let Some(slash_idx) = rest.find('/') {
+                    file = &rest[slash_idx + 1..];
+                }
+            }
+
             writeln!(
                 buf,
                 "[{time} {level} {file}:{line}] {msg}",
                 time = buf.timestamp(),
                 level = record.level(),
-                file = record.file().unwrap_or("unknown"),
+                file = file,
                 line = record.line().unwrap_or(0),
                 msg = record.args()
             )

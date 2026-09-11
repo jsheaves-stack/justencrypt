@@ -144,7 +144,7 @@ pub async fn init_upload(
 
 #[put("/upload/chunk/<upload_id>?<offset>", data = "<data>")]
 pub async fn upload_chunk(
-    upload_id: String,
+    upload_id: &str,
     offset: u64,
     auth: AuthenticatedSession,
     data: Data<'_>,
@@ -171,7 +171,7 @@ pub async fn upload_chunk(
         .active_uploads
         .lock()
         .await
-        .get(&upload_id)
+        .get(&upload_id.to_string())
         .cloned()
         .ok_or(RequestError::NotFound)?;
 
@@ -198,7 +198,7 @@ pub async fn upload_chunk(
 
 #[post("/upload/finalize/<upload_id>?<total_size>")]
 pub async fn finalize_upload(
-    upload_id: String,
+    upload_id: &str,
     total_size: u64,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
@@ -213,7 +213,7 @@ pub async fn finalize_upload(
         .active_uploads
         .lock()
         .await
-        .remove(&upload_id)
+        .remove(upload_id)
         .ok_or(RequestError::NotFound)?;
 
     let written_chunks = upload_state.written_chunks.lock().await;
@@ -234,7 +234,7 @@ pub async fn finalize_upload(
             .active_uploads
             .lock()
             .await
-            .insert(upload_id, upload_state);
+            .insert(upload_id.to_string(), upload_state);
 
         return Err(RequestError::BadRequest(format!(
             "Missing chunks: {:?}",
@@ -281,7 +281,7 @@ pub async fn finalize_upload(
         return Err(e.into());
     }
 
-    let _ = session.remove_active_upload_db(upload_id.clone()).await;
+    let _ = session.remove_active_upload_db(upload_id.to_string()).await;
 
     if let Some(old_name) = old_encoded_name {
         let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
