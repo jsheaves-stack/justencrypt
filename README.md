@@ -90,6 +90,7 @@ The application is configured through environment variables, which are loaded fr
 | `JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES`     | Max size in bytes for the WAL file. | `67108864` |
 | `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds to wait for an available DB connection. | `30` |
 | `JUSTENCRYPT_MAX_ACTIVE_UPLOADS`              | Maximum number of concurrent active uploads allowed. | (none) |
+| `JUSTENCRYPT_UPLOAD_TTL_SECONDS`              | Seconds an upload can sit idle before it is considered abandoned and removed (checked when a new upload starts). | `86400` |
 | `JUSTENCRYPT_ROCKET_SECRET_KEY`               | **Required.** A 256-bit base64 key for securing cookies. Generate one with `openssl rand -base64 32`. | (none) |
 | `JUSTENCRYPT_TLS_KEY_PATH`                    | Path to the TLS key file for HTTPS. | (none) |
 | `JUSTENCRYPT_TLS_CERT_PATH`                   | Path to the TLS cert file for HTTPS. | (none) |

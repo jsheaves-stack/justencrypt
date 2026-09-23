@@ -7,6 +7,7 @@ mod test_folder;
 mod test_folder_delete;
 mod test_folder_patch;
 mod test_session;
+mod test_session_store;
 mod test_thumbnail;
 
 use std::{env, fs, path::PathBuf, str::FromStr, sync::Arc};

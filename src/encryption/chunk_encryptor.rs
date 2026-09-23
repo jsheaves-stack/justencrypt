@@ -115,6 +115,8 @@ impl ChunkEncryptor {
             }
         }
 
+        self.file.flush().await?;
+
         trace!(
             "Exiting ChunkEncryptor::encrypt_stream_at_offset, total_bytes_read: {}",
             total_bytes_read
@@ -171,6 +173,8 @@ impl ChunkEncryptor {
                 break;
             }
         }
+
+        self.file.flush().await?;
 
         self.metadata.total_size = total_plaintext_size;
         trace!(

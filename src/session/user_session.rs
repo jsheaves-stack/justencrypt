@@ -1,9 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
+    io::ErrorKind,
     path::PathBuf,
-    sync::Arc,
-    time::SystemTime,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use r2d2::Pool;
@@ -26,13 +30,46 @@ pub struct EncodedFile {
     pub encoded_name: String,
 }
 
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct UploadState {
     pub file_path: PathBuf,
     pub encoded_file_name: String,
     pub written_chunks: Arc<Mutex<HashSet<u64>>>,
     pub encryptor: Arc<Mutex<ChunkEncryptor>>,
-    pub last_updated: Arc<Mutex<SystemTime>>,
+    /// Unix seconds of the last activity. Atomic so it can be read and
+    /// refreshed without taking a lock.
+    pub last_updated: Arc<AtomicU64>,
+}
+
+impl UploadState {
+    pub fn new(file_path: PathBuf, encoded_file_name: String, encryptor: ChunkEncryptor) -> Self {
+        Self {
+            file_path,
+            encoded_file_name,
+            written_chunks: Arc::new(Mutex::new(HashSet::new())),
+            encryptor: Arc::new(Mutex::new(encryptor)),
+            last_updated: Arc::new(AtomicU64::new(unix_now_secs())),
+        }
+    }
+
+    pub fn touch(&self) {
+        self.last_updated.store(unix_now_secs(), Ordering::Relaxed);
+    }
+
+    pub fn last_updated(&self) -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(self.last_updated.load(Ordering::Relaxed))
+    }
+
+    fn is_stale(&self, now_secs: u64, ttl: Duration) -> bool {
+        now_secs.saturating_sub(self.last_updated.load(Ordering::Relaxed)) > ttl.as_secs()
+    }
 }
 
 pub struct UserSession {
@@ -172,6 +209,68 @@ impl UserSession {
             .await
     }
 
+    /// Deletes an upload's partial file and its tracking row. A partial file
+    /// that is already gone is not an error.
+    pub async fn abort_upload(&self, upload_id: &str, encoded_file_name: &str) {
+        trace!(
+            "Entering UserSession::abort_upload for upload: {}",
+            upload_id
+        );
+
+        let part_path =
+            sharded_path::get_sharded_path(self.user_path.clone(), &encoded_file_name.to_owned())
+                .await
+                .with_extension("part");
+
+        if let Err(e) = sharded_path::remove_sharded_path(&self.user_path, &part_path).await {
+            let already_gone = e
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == ErrorKind::NotFound);
+
+            if !already_gone {
+                warn!(
+                    "Failed to remove partial file for upload {}: {}",
+                    upload_id, e
+                );
+            }
+        }
+
+        if let Err(e) = self.remove_active_upload_db(upload_id.to_owned()).await {
+            warn!(
+                "Failed to remove upload {} from the database: {}",
+                upload_id, e
+            );
+        }
+    }
+
+    /// Aborts every upload that has been idle for longer than `ttl`. Stale
+    /// entries are taken out of the map under one short lock; the file and DB
+    /// cleanup happens afterwards with no lock held.
+    pub async fn sweep_stale_uploads(&self, ttl: Duration) {
+        let now = unix_now_secs();
+        let mut stale = Vec::new();
+
+        {
+            let mut uploads = self.active_uploads.lock().await;
+
+            uploads.retain(|upload_id, state| {
+                if state.is_stale(now, ttl) {
+                    stale.push((upload_id.clone(), state.encoded_file_name.clone()));
+
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+
+        for (upload_id, encoded_file_name) in stale {
+            info!("Removing stale upload {}", upload_id);
+
+            self.abort_upload(&upload_id, &encoded_file_name).await;
+        }
+    }
+
     pub async fn cleanup_orphaned_uploads(
         &self,
         active_session_ids: HashSet<String>,
@@ -187,18 +286,7 @@ impl UserSession {
                 continue;
             }
 
-            let part_path =
-                sharded_path::get_sharded_path(self.user_path.clone(), &encoded_file_name)
-                    .await
-                    .with_extension("part");
-
-            if part_path.exists() {
-                let _ = sharded_path::remove_sharded_path(&self.user_path, &part_path).await;
-            }
-
-            let _ = self
-                .with_db(move |db| sqlite::remove_active_upload(&db, &upload_id))
-                .await;
+            self.abort_upload(&upload_id, &encoded_file_name).await;
         }
 
         trace!("Exiting cleanup_orphaned_uploads successfully.");
@@ -218,18 +306,7 @@ impl UserSession {
                 continue;
             }
 
-            let part_path =
-                sharded_path::get_sharded_path(self.user_path.clone(), &encoded_file_name)
-                    .await
-                    .with_extension("part");
-
-            if part_path.exists() {
-                let _ = sharded_path::remove_sharded_path(&self.user_path, &part_path).await;
-            }
-
-            let _ = self
-                .with_db(move |db| sqlite::remove_active_upload(&db, &upload_id))
-                .await;
+            self.abort_upload(&upload_id, &encoded_file_name).await;
         }
 
         trace!("Exiting cleanup_own_uploads successfully.");

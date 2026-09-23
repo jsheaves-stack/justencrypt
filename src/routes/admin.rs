@@ -42,7 +42,7 @@ pub async fn get_session(
                 upload_id: id.clone(),
                 file_path: state.file_path.display().to_string(),
                 encoded_file_name: state.encoded_file_name.clone(),
-                last_updated: *state.last_updated.lock().await,
+                last_updated: state.last_updated(),
             });
         }
 

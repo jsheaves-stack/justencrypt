@@ -1,10 +1,4 @@
-use std::{
-    collections::HashSet,
-    env,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::{env, str::FromStr, time::Duration};
 
 use rocket::{
     data::{ByteUnit, Data, ToByteUnit},
@@ -12,10 +6,7 @@ use rocket::{
     http::Status,
     options, patch, post, put,
     serde::json::Json,
-    tokio::{
-        self, fs,
-        sync::{mpsc, Mutex},
-    },
+    tokio::{self, fs, sync::mpsc},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -47,6 +38,19 @@ pub struct InitUploadResponse {
 pub struct FinalizeErrorResponse {
     pub missing_chunks: Vec<u64>,
 }
+
+const DEFAULT_UPLOAD_TTL_SECONDS: u64 = 24 * 60 * 60;
+
+fn upload_ttl() -> Duration {
+    let seconds = env::var("JUSTENCRYPT_UPLOAD_TTL_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(DEFAULT_UPLOAD_TTL_SECONDS);
+
+    Duration::from_secs(seconds)
+}
+
 #[post("/upload/initiate/<file_path..>")]
 pub async fn init_upload(
     file_path: UnrestrictedPath,
@@ -55,59 +59,25 @@ pub async fn init_upload(
     trace!("Entering route [POST /file/upload/initiate/{}]", file_path);
 
     let session = auth.session.clone();
-    let user_path = session.get_user_path();
 
-    let now = SystemTime::now();
-    let stale_threshold = Duration::from_secs(24 * 60 * 60); // 24 hours
-    let mut stale_ids = Vec::new();
-
-    let mut active_uploads = session.active_uploads.lock().await;
+    session.sweep_stale_uploads(upload_ttl()).await;
 
     let max_uploads = env::var("JUSTENCRYPT_MAX_ACTIVE_UPLOADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok());
 
+    // Reject early so a client at the limit doesn't cost any I/O. The limit is
+    // checked again under the same lock as the insert below, because the file
+    // and DB work in between happens without holding it.
     if let Some(limit) = max_uploads {
-        if active_uploads.len() >= limit {
+        if session.active_uploads.lock().await.len() >= limit {
             return Err(RequestError::TooManyActiveUploads);
-        }
-    }
-
-    for (id, state) in active_uploads.iter() {
-        if let Ok(last_updated) = state
-            .last_updated
-            .lock()
-            .await
-            .duration_since(SystemTime::UNIX_EPOCH)
-        {
-            if let Ok(current_time) = now.duration_since(SystemTime::UNIX_EPOCH) {
-                if current_time.saturating_sub(last_updated) > stale_threshold {
-                    stale_ids.push(id.clone());
-                }
-            }
-        }
-    }
-
-    for id in stale_ids {
-        if let Some(state) = session.active_uploads.lock().await.remove(&id) {
-            let encoded_file_path =
-                get_sharded_path(user_path.clone(), &state.encoded_file_name).await;
-
-            fs::remove_file(encoded_file_path.clone())
-                .await
-                .unwrap_or_else(|e| {
-                    error!(
-                        "Failed to remove stale upload file {}: {}",
-                        encoded_file_path.display(),
-                        e
-                    )
-                });
         }
     }
 
     let upload_id = Uuid::new_v4().to_string();
     let encoded_file_name = Uuid::new_v4().to_string();
-    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
+    let encoded_file_path = get_sharded_path(session.get_user_path(), &encoded_file_name).await;
     let encoded_file_path_part = encoded_file_path.with_extension("part");
 
     if let Err(e) = session
@@ -121,21 +91,32 @@ pub async fn init_upload(
         error!("Failed to add active upload to db: {}", e);
     }
 
-    let encryptor = ChunkEncryptor::new(encoded_file_path_part)
-        .await
-        .map_err(|e| {
+    let encryptor = match ChunkEncryptor::new(encoded_file_path_part).await {
+        Ok(encryptor) => encryptor,
+        Err(e) => {
             error!("Failed to create ChunkEncryptor: {}", e);
 
-            RequestError::FailedToProcessData
-        })?;
+            session.abort_upload(&upload_id, &encoded_file_name).await;
 
-    let upload_state = UploadState {
-        file_path: file_path.to_path_buf(),
-        encoded_file_name,
-        written_chunks: Arc::new(Mutex::new(HashSet::new())),
-        encryptor: Arc::new(Mutex::new(encryptor)),
-        last_updated: Arc::new(Mutex::new(SystemTime::now())),
+            return Err(RequestError::FailedToProcessData);
+        },
     };
+
+    let upload_state = UploadState::new(
+        file_path.to_path_buf(),
+        encoded_file_name.clone(),
+        encryptor,
+    );
+
+    let mut active_uploads = session.active_uploads.lock().await;
+
+    if max_uploads.is_some_and(|limit| active_uploads.len() >= limit) {
+        drop(active_uploads);
+
+        session.abort_upload(&upload_id, &encoded_file_name).await;
+
+        return Err(RequestError::TooManyActiveUploads);
+    }
 
     active_uploads.insert(upload_id.clone(), upload_state);
 
@@ -175,10 +156,7 @@ pub async fn upload_chunk(
         .cloned()
         .ok_or(RequestError::NotFound)?;
 
-    {
-        let mut last_updated = upload_state.last_updated.lock().await;
-        *last_updated = SystemTime::now();
-    }
+    upload_state.touch();
 
     let mut encryptor = upload_state.encryptor.lock().await;
     let mut written_chunks = upload_state.written_chunks.lock().await;
