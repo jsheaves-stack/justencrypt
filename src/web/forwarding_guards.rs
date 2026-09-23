@@ -92,27 +92,14 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
 
         let user_token = cookie.value();
 
-        let token_to_id = state.token_to_id.read().await;
-
-        let session_id = match token_to_id.get(user_token) {
-            Some(id) => id.clone(),
-            None => {
-                trace!("No session ID found for token.");
-
-                return Outcome::Error((Status::Unauthorized, RequestError::MissingActiveSession));
-            },
-        };
-
-        let sessions_by_id = state.sessions_by_id.read().await;
-
-        let session = match sessions_by_id.get(&session_id) {
+        let session = match state.sessions.get(user_token).await {
             Some(s) => {
-                trace!("Found active session for session ID.");
+                trace!("Found active session for token.");
 
-                s.clone()
+                s
             },
             None => {
-                trace!("No active session found for session ID.");
+                trace!("No active session found for token.");
 
                 return Outcome::Error((Status::Unauthorized, RequestError::MissingActiveSession));
             },

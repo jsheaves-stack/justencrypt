@@ -13,7 +13,8 @@ use zxcvbn::{zxcvbn, Score};
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppState, UserSession,
+    session::user_session::UserSession,
+    AppState,
 };
 
 #[derive(Deserialize)]
@@ -92,13 +93,7 @@ pub async fn create_session(
 
     trace!("Attempting to open user session for user: {}", user_name);
 
-    let existing_pool = {
-        let sessions = state.sessions_by_id.read().await;
-        sessions
-            .values()
-            .find(|s| s.username == user_name)
-            .map(|s| s.db_pool.clone())
-    };
+    let existing_pool = state.sessions.pool_for_user(&user_name).await;
 
     let session = Arc::new(
         match UserSession::open(&user_name, &passphrase, existing_pool).await {
@@ -137,34 +132,23 @@ pub async fn create_session(
 
     trace!("Session cookie added to jar.");
 
-    state
-        .sessions_by_id
-        .write()
-        .await
-        .insert(session_id.clone(), session);
-    state
-        .token_to_id
-        .write()
-        .await
-        .insert(user_token, session_id.clone());
+    state.sessions.insert(user_token, session.clone()).await;
 
     trace!("Session added to active session map.");
 
-    let active_session_ids = {
-        let sessions = state.sessions_by_id.read().await;
-        sessions.keys().cloned().collect::<HashSet<_>>()
-    };
+    let active_session_ids = state
+        .sessions
+        .snapshot()
+        .await
+        .iter()
+        .map(|s| s.session_id.clone())
+        .collect::<HashSet<_>>();
 
-    if let Some(session_ref) = state.sessions_by_id.read().await.get(&session_id) {
-        if let Err(e) = session_ref
-            .cleanup_orphaned_uploads(active_session_ids)
-            .await
-        {
-            error!(
-                "Failed to clean up orphaned uploads on session creation: {}",
-                e
-            );
-        }
+    if let Err(e) = session.cleanup_orphaned_uploads(active_session_ids).await {
+        error!(
+            "Failed to clean up orphaned uploads on session creation: {}",
+            e
+        );
     }
 
     trace!("Exiting route [POST /session] successfully.");
@@ -194,13 +178,9 @@ pub async fn destroy_session(
 
     let user_token = cookie.value();
 
-    let mut sessions_by_id = state.sessions_by_id.write().await;
-    let mut token_to_id = state.token_to_id.write().await;
-
-    let result = match token_to_id.remove(user_token) {
-        Some(session_id) => {
-            sessions_by_id.remove(&session_id);
-            trace!("Removed active session with ID: {}", session_id);
+    let result = match state.sessions.remove_by_token(user_token).await {
+        Some(session) => {
+            trace!("Removed active session with ID: {}", session.session_id);
 
             Ok(RequestSuccess::NoContent)
         },

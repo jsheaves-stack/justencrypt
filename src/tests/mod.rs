@@ -9,18 +9,17 @@ mod test_folder_patch;
 mod test_session;
 mod test_thumbnail;
 
-use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
+use std::{env, fs, path::PathBuf, str::FromStr, sync::Arc};
 
-use rocket::{
-    custom,
-    http::Cookie,
-    tokio::sync::{RwLock, Semaphore},
-    Build, Orbit, Rocket,
-};
+use rocket::{custom, http::Cookie, tokio::sync::Semaphore, Build, Orbit, Rocket};
 use secrecy::SecretString;
 use uuid::Uuid;
 
-use crate::{get_app_config, session::user_session::UserSession, AppState};
+use crate::{
+    get_app_config,
+    session::{store::SessionStore, user_session::UserSession},
+    AppState,
+};
 
 pub struct TestUser {
     pub name: String,
@@ -56,8 +55,7 @@ pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
     );
 
     let state = AppState {
-        sessions_by_id: RwLock::new(HashMap::new()),
-        token_to_id: RwLock::new(HashMap::new()),
+        sessions: SessionStore::default(),
         thumbnail_semaphore: Arc::new(Semaphore::new(1)),
     };
 
@@ -85,15 +83,9 @@ pub async fn create_test_session(
     let state = rocket.state::<AppState>().unwrap();
 
     state
-        .sessions_by_id
-        .write()
-        .await
-        .insert(session_id.clone(), user_session);
-    state
-        .token_to_id
-        .write()
-        .await
-        .insert(user_token.clone(), session_id.clone());
+        .sessions
+        .insert(user_token.clone(), user_session)
+        .await;
 
     let cookie = Cookie::build(("sid", user_token)).build();
 

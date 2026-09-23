@@ -54,15 +54,14 @@ async fn test_delete_folder_success() {
     assert_eq!(response.status(), Status::NoContent);
 
     // Verify folder is gone
-    let session_guard = client
+    let session = client
         .rocket()
         .state::<AppState>()
         .unwrap()
-        .sessions_by_id
-        .read()
-        .await;
-    let session_lock = session_guard.get(&session_id).unwrap().clone();
-    let session = session_lock.clone();
+        .sessions
+        .get_by_id(&session_id)
+        .await
+        .unwrap();
 
     // The DB query should fail because the folder doesn't exist
     let lookup_result = session.get_folder_id(parent_folder.into()).await;

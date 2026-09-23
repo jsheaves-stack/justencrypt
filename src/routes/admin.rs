@@ -1,7 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rocket::{delete, get, options, serde::json::Json, State};
-use secrecy::ExposeSecret;
 use serde::Serialize;
 
 use crate::{
@@ -31,11 +30,10 @@ pub async fn get_session(
     _admin_guard: AdminGuard,
     state: &State<AppState>,
 ) -> Json<Vec<ActiveSessionInfo>> {
-    let sessions_by_id = state.sessions_by_id.read().await;
+    let sessions = state.sessions.snapshot().await;
     let mut session_list = Vec::new();
 
-    for (session_id, session_lock) in sessions_by_id.iter() {
-        let session = session_lock.clone();
+    for session in sessions {
         let mut active_uploads = Vec::<ActiveFileUpload>::new();
 
         let session_uploads = session.active_uploads.lock().await;
@@ -49,7 +47,7 @@ pub async fn get_session(
         }
 
         session_list.push(ActiveSessionInfo {
-            session_id: session_id.clone(),
+            session_id: session.session_id.clone(),
             username: session.username.clone(),
             created_at: session
                 .created_at
@@ -69,16 +67,9 @@ pub async fn delete_session(
     session_id: String,
     state: &State<AppState>,
 ) -> Result<RequestSuccess, RequestError> {
-    let mut sessions_by_id = state.sessions_by_id.write().await;
-    let mut token_to_id = state.token_to_id.write().await;
-
-    if let Some(session_lock) = sessions_by_id.remove(&session_id) {
-        let session = session_lock.clone();
-        let user_token = session.user_token.expose_secret();
-        token_to_id.remove(user_token);
-        Ok(RequestSuccess::NoContent)
-    } else {
-        Err(RequestError::MissingActiveSession)
+    match state.sessions.remove_by_id(&session_id).await {
+        Some(_) => Ok(RequestSuccess::NoContent),
+        None => Err(RequestError::MissingActiveSession),
     }
 }
 

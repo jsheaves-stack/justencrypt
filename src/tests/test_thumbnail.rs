@@ -153,13 +153,11 @@ async fn test_thumbnail_deletion_cleanup() {
 
     // Verify cache file exists in .cache
     let state = client.rocket().state::<AppState>().unwrap();
-    let session_guard = state.sessions_by_id.read().await;
-    let session = session_guard.get(&session_id).unwrap().clone();
+    let session = state.sessions.get_by_id(&session_id).await.unwrap();
     let encoded_name = session
         .get_encoded_file_name(file_path.into())
         .await
         .unwrap();
-    drop(session_guard);
 
     let cache_dir = test_user.path.join(".cache");
     let sharded_thumb = get_sharded_path(cache_dir, &encoded_name).await;

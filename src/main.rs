@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, io::Write, str::FromStr, sync::Arc};
+use std::{env, io::Write, str::FromStr, sync::Arc};
 
 use log::LevelFilter;
 use rocket::{
@@ -10,7 +10,7 @@ use rocket::{
     launch,
     shield::{Hsts, Shield},
     time::Duration,
-    tokio::sync::{RwLock, Semaphore},
+    tokio::sync::Semaphore,
 };
 use routes::{
     admin::{admin_options, delete_session, delete_session_options, get_session},
@@ -23,7 +23,7 @@ use routes::{
     session::{create_session, destroy_session, session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
 };
-use session::user_session::UserSession;
+use session::store::SessionStore;
 use web::fairings::Cors;
 
 pub mod db;
@@ -39,8 +39,7 @@ extern crate rocket;
 extern crate serde;
 
 pub struct AppState {
-    pub sessions_by_id: RwLock<HashMap<String, Arc<UserSession>>>,
-    pub token_to_id: RwLock<HashMap<String, String>>,
+    pub sessions: SessionStore,
     pub thumbnail_semaphore: Arc<Semaphore>,
 }
 
@@ -59,8 +58,7 @@ impl Fairing for CleanupOnShutdown {
         info!("Shutdown signal received. Cleaning up active uploads for all sessions.");
 
         if let Some(state) = rocket.state::<AppState>() {
-            let sessions = state.sessions_by_id.read().await;
-            for session in sessions.values() {
+            for session in state.sessions.snapshot().await {
                 if let Err(e) = session.cleanup_own_uploads().await {
                     error!(
                         "Error during shutdown cleanup for user {}: {}",
@@ -271,8 +269,7 @@ async fn rocket() -> _ {
     );
 
     let state = AppState {
-        sessions_by_id: RwLock::default(),
-        token_to_id: RwLock::default(),
+        sessions: SessionStore::default(),
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
     };
 

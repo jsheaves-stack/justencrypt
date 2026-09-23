@@ -39,9 +39,7 @@ async fn test_put_file() {
     assert_eq!(response.status(), Status::Created);
 
     let state = client.rocket().state::<AppState>().unwrap();
-    let session_guard = state.sessions_by_id.read().await;
-    let session_lock = session_guard.get(&session_id).unwrap().clone();
-    let session = session_lock.clone();
+    let session = state.sessions.get_by_id(&session_id).await.unwrap();
 
     let encoded_file_name = session
         .get_encoded_file_name(file_path.into())
