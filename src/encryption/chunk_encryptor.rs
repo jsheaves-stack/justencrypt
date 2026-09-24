@@ -49,8 +49,17 @@ impl ChunkEncryptor {
     /// left past the end by an earlier, longer write of the last chunk.
     pub async fn seal(&mut self, total_size: u64) -> Result<(), EncryptionError> {
         self.file.set_len(encrypted_len(total_size)).await?;
-        self.file.flush().await?;
+        self.sync().await?;
         self.metadata.total_size = total_size;
+
+        Ok(())
+    }
+
+    /// Writes everything out and waits until it is on disk, so the file
+    /// survives a crash or power loss from here on.
+    pub async fn sync(&mut self) -> Result<(), EncryptionError> {
+        self.file.flush().await?;
+        self.file.sync_all().await?;
 
         Ok(())
     }

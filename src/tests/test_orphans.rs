@@ -93,6 +93,12 @@ async fn test_remove_orphaned_files_removes_only_unreferenced_files() {
     let removed = [
         stored_file(&sharded(user.clone(), &Uuid::new_v4().to_string()).await),
         stored_file(&sharded(cache.clone(), &Uuid::new_v4().to_string()).await),
+        // A thumbnail temp file left behind by a crash.
+        stored_file(
+            &sharded(cache.clone(), &referenced)
+                .await
+                .with_file_name(format!("{}.part", Uuid::new_v4())),
+        ),
         stored_file(
             &sharded(user.clone(), &Uuid::new_v4().to_string())
                 .await
@@ -149,7 +155,7 @@ async fn log_in_and_wait(client: &Client, username: &str) {
 async fn test_every_login_scans_for_orphans_only_when_enabled() {
     for enabled in [false, true] {
         let (rocket, test_user) =
-            setup_rocket_with_options(SessionPolicy::default(), enabled).await;
+            setup_rocket_with_options(SessionPolicy::default(), enabled, 1).await;
         let rocket = rocket.mount("/session", routes![create_session]);
         let client = Client::tracked(rocket)
             .await

@@ -69,12 +69,13 @@ pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
 pub async fn setup_rocket_with_session_policy(
     session_policy: SessionPolicy,
 ) -> (Rocket<Build>, TestUser) {
-    setup_rocket_with_options(session_policy, false).await
+    setup_rocket_with_options(session_policy, false, 1).await
 }
 
 pub async fn setup_rocket_with_options(
     session_policy: SessionPolicy,
     orphan_scan_enabled: bool,
+    thumbnail_permits: usize,
 ) -> (Rocket<Build>, TestUser) {
     dotenv::dotenv().ok();
 
@@ -100,7 +101,7 @@ pub async fn setup_rocket_with_options(
     let state = AppState {
         sessions: Arc::new(SessionStore::new(session_policy)),
         orphan_scanner: OrphanScanner::new(orphan_scan_enabled),
-        thumbnail_semaphore: Arc::new(Semaphore::new(1)),
+        thumbnail_semaphore: Arc::new(Semaphore::new(thumbnail_permits)),
     };
 
     let app_config = get_app_config();

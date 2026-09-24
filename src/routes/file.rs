@@ -21,7 +21,9 @@ use crate::{
     util::{
         chunked_upload::check_uploaded_chunks,
         range::parse_range,
-        sharded_path::{get_sharded_path, remove_blob_and_thumbnail, remove_sharded_path},
+        sharded_path::{
+            get_sharded_path, remove_blob_and_thumbnail, remove_sharded_path, sync_parent_dir,
+        },
         unrestricted_path::UnrestrictedPath,
         upload_limits::{max_chunk_request_size, max_file_size, open_with_limit, upload_ttl},
     },
@@ -242,6 +244,15 @@ pub async fn finalize_upload(
         return Err(RequestError::FailedToProcessData);
     }
 
+    if let Err(e) = sync_parent_dir(&encoded_file_path).await {
+        error!("Failed to sync the renamed file's directory: {}", e);
+
+        let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+        let _ = session.remove_active_upload_db(upload_id.to_string()).await;
+
+        return Err(RequestError::FailedToProcessData);
+    }
+
     let replaced = match session
         .add_file(
             upload_state.file_path,
@@ -327,7 +338,14 @@ pub async fn put_file(
     let max_file_size = max_file_size(limits);
     let mut stream = open_with_limit(data, max_file_size);
 
-    if let Err(e) = encryptor.encrypt_stream(&mut stream, max_file_size).await {
+    // The data must be on disk before the file is renamed into place and
+    // recorded, so a crash can't leave a record of a file that isn't there.
+    let written = match encryptor.encrypt_stream(&mut stream, max_file_size).await {
+        Ok(_) => encryptor.sync().await,
+        Err(e) => Err(e),
+    };
+
+    if let Err(e) = written {
         let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
         let _ = auth
             .session
@@ -341,6 +359,18 @@ pub async fn put_file(
         error!("Failed to rename part file to final file: {}", e);
 
         let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
+        let _ = auth
+            .session
+            .remove_active_upload_db(upload_id.clone())
+            .await;
+
+        return Err(RequestError::FailedToProcessData);
+    }
+
+    if let Err(e) = sync_parent_dir(&encoded_file_path).await {
+        error!("Failed to sync the renamed file's directory: {}", e);
+
+        let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
         let _ = auth
             .session
             .remove_active_upload_db(upload_id.clone())

@@ -70,6 +70,10 @@ enum StoredKind {
     Blob,
     Partial,
     Thumbnail,
+    /// A thumbnail cache file still being written. One that is still around
+    /// when the scan runs was left behind by a crash; one that is genuinely
+    /// in progress only costs that request its cache write.
+    PartialThumbnail,
 }
 
 /// Deletes the user's unreferenced files and returns how many were removed.
@@ -103,6 +107,7 @@ pub async fn remove_orphaned_files(session: &UserSession) -> Result<usize, DbErr
             StoredKind::Blob => files.contains(&name) || uploads.contains(&name),
             StoredKind::Partial => uploads.contains(&name),
             StoredKind::Thumbnail => files.contains(&name),
+            StoredKind::PartialThumbnail => false,
         };
 
         if referenced {
@@ -162,18 +167,12 @@ fn find_stored_files(user_path: &Path) -> Vec<(PathBuf, String, StoredKind)> {
                 continue;
             }
 
-            let kind = if path.starts_with(&cache_path) {
-                StoredKind::Thumbnail
-            } else if is_partial {
-                StoredKind::Partial
-            } else {
-                StoredKind::Blob
+            let kind = match (path.starts_with(&cache_path), is_partial) {
+                (true, true) => StoredKind::PartialThumbnail,
+                (true, false) => StoredKind::Thumbnail,
+                (false, true) => StoredKind::Partial,
+                (false, false) => StoredKind::Blob,
             };
-
-            // A `.part` inside the thumbnail cache isn't something we create.
-            if kind == StoredKind::Thumbnail && is_partial {
-                continue;
-            }
 
             found.push((path.clone(), name.to_string(), kind));
         }

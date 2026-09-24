@@ -65,3 +65,15 @@ pub fn is_not_found(e: &(dyn Error + 'static)) -> bool {
     e.downcast_ref::<std::io::Error>()
         .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
 }
+
+/// Waits until the directory containing `path` is on disk, which makes a
+/// rename or file creation inside it survive a crash or power loss.
+pub async fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    let Some(dir) = path.parent().map(Path::to_path_buf) else {
+        return Ok(());
+    };
+
+    rocket::tokio::task::spawn_blocking(move || std::fs::File::open(dir)?.sync_all())
+        .await
+        .map_err(std::io::Error::other)?
+}
