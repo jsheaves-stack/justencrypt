@@ -35,3 +35,33 @@ pub async fn get_sharded_path(mut user_path: PathBuf, file_name: &String) -> Pat
 
     user_path
 }
+
+/// Deletes a blob that no database row references any more, together with its
+/// cached thumbnail. Failures are only logged: the row is already gone, so as
+/// far as the user is concerned the file is too.
+pub async fn remove_blob_and_thumbnail(user_path: &Path, encoded_name: &str) {
+    let encoded_name = encoded_name.to_string();
+    let blob_path = get_sharded_path(user_path.to_path_buf(), &encoded_name).await;
+    let thumb_path = get_sharded_path(user_path.join(".cache"), &encoded_name).await;
+
+    if let Err(e) = remove_sharded_path(user_path, &blob_path).await {
+        if is_not_found(e.as_ref()) {
+            warn!("Blob {} was already missing from disk", encoded_name);
+        } else {
+            error!("Failed to delete blob {}: {}", encoded_name, e);
+        }
+    }
+
+    // Most files have no thumbnail, so a missing one is expected.
+    if let Err(e) = remove_sharded_path(user_path, &thumb_path).await {
+        if !is_not_found(e.as_ref()) {
+            warn!("Failed to delete thumbnail for {}: {}", encoded_name, e);
+        }
+    }
+}
+
+/// Whether an error from `remove_sharded_path` means the file was already gone.
+pub fn is_not_found(e: &(dyn Error + 'static)) -> bool {
+    e.downcast_ref::<std::io::Error>()
+        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+}

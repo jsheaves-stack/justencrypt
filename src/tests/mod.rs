@@ -1,5 +1,6 @@
 mod test_admin;
 mod test_chunked_upload;
+mod test_db_files;
 mod test_db_folder_move;
 mod test_encryption;
 mod test_file;
@@ -13,15 +14,35 @@ mod test_thumbnail;
 
 use std::{env, fs, path::PathBuf, str::FromStr, sync::Arc};
 
+use r2d2::{Pool, PooledConnection};
+use r2d2_sqlite::SqliteConnectionManager;
 use rocket::{custom, http::Cookie, tokio::sync::Semaphore, Build, Orbit, Rocket};
 use secrecy::SecretString;
 use uuid::Uuid;
 
 use crate::{
+    db::migrations::get_migrations,
     get_app_config,
     session::{store::SessionStore, user_session::UserSession},
     AppState,
 };
+
+pub type Db = PooledConnection<SqliteConnectionManager>;
+
+// An in-memory database with every migration applied. The pool holds a single
+// connection so the same in-memory database stays alive for the whole test.
+pub fn migrated_db() -> Db {
+    let mut db = Pool::builder()
+        .max_size(1)
+        .build(SqliteConnectionManager::memory())
+        .unwrap()
+        .get()
+        .unwrap();
+
+    get_migrations().to_latest(&mut db).unwrap();
+
+    db
+}
 
 pub struct TestUser {
     pub name: String,

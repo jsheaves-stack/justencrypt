@@ -506,3 +506,123 @@ async fn test_get_file_range_past_the_end_reports_the_file_size() {
         Some("bytes */4")
     );
 }
+
+// Encrypted blobs only: `stored_files` without the thumbnail cache.
+fn stored_blobs(user_dir: &std::path::Path) -> Vec<String> {
+    let cache_dir = user_dir.join(".cache");
+
+    stored_files(user_dir)
+        .into_iter()
+        .filter(|path| !path.starts_with(&cache_dir))
+        .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+        .collect()
+}
+
+async fn overwrite(client: &Client, cookie: &Cookie<'static>, path: &str, fill: u8) -> Status {
+    client
+        .put(format!("/file/{}", path))
+        .private_cookie(cookie.clone())
+        .body(vec![fill; 256 * 1024])
+        .dispatch()
+        .await
+        .status()
+}
+
+// M2 regression: concurrent overwrites of one path used to each delete the
+// same old blob, leaving all but one of the new blobs unreferenced forever.
+#[async_test]
+async fn test_concurrent_overwrites_leave_exactly_one_blob() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket.mount("/file", routes![put_file, get_file]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let session = client
+        .rocket()
+        .state::<AppState>()
+        .unwrap()
+        .sessions
+        .get_by_id(&session_id)
+        .await
+        .unwrap();
+
+    upload(&client, &cookie, "shared.bin", vec![b'0'; 10]).await;
+
+    for round in 0..10 {
+        let (a, b, c, d) = tokio::join!(
+            overwrite(&client, &cookie, "shared.bin", b'A'),
+            overwrite(&client, &cookie, "shared.bin", b'B'),
+            overwrite(&client, &cookie, "shared.bin", b'C'),
+            overwrite(&client, &cookie, "shared.bin", b'D'),
+        );
+
+        assert_eq!([a, b, c, d], [Status::Created; 4], "round {}", round);
+
+        let referenced = session
+            .get_encoded_file_name("shared.bin".into())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            stored_blobs(&test_user.path),
+            vec![referenced],
+            "round {}: blobs on disk should be exactly the one the database references",
+            round
+        );
+    }
+}
+
+#[async_test]
+async fn test_delete_missing_file_is_not_found() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket.mount("/file", routes![put_file, delete_file]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    upload(&client, &cookie, "docs/real.txt", b"x".to_vec()).await;
+
+    for path in ["docs/missing.txt", "no/such/folder/missing.txt"] {
+        let response = client
+            .delete(format!("/file/{}", path))
+            .private_cookie(cookie.clone())
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::NotFound, "path {}", path);
+    }
+}
+
+// The database is the source of truth: once the row is gone the file is gone,
+// even if its blob had already disappeared from disk.
+#[async_test]
+async fn test_delete_file_succeeds_when_the_blob_is_already_missing() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket.mount("/file", routes![put_file, get_file, delete_file]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    upload(&client, &cookie, "vanished.txt", b"x".to_vec()).await;
+
+    for blob in stored_files(&test_user.path) {
+        fs::remove_file(blob).unwrap();
+    }
+
+    let response = client
+        .delete("/file/vanished.txt")
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::NoContent);
+
+    let response = client
+        .get("/file/vanished.txt")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::NotFound);
+}

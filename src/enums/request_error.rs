@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::enums::db_error::DbError;
+use crate::enums::{db_error::DbError, encryption_error::EncryptionError};
 
 #[derive(Error, Debug)]
 pub enum RequestError {
@@ -77,6 +77,20 @@ impl From<DbError> for RequestError {
             DbError::MissingFileName => RequestError::BadRequest("Missing file name".into()),
             DbError::InvalidPath => RequestError::BadRequest("Invalid path".into()),
             _ => RequestError::InternalServerError,
+        }
+    }
+}
+
+impl From<EncryptionError> for RequestError {
+    fn from(error: EncryptionError) -> Self {
+        match error {
+            EncryptionError::TooLarge => RequestError::PayloadTooLarge,
+            EncryptionError::InvalidOffset(msg) => RequestError::BadRequest(msg),
+            e => {
+                error!("Encryption error: {}", e);
+
+                RequestError::FailedToProcessData
+            },
         }
     }
 }

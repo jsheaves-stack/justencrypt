@@ -21,32 +21,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use r2d2::{Pool, PooledConnection};
+use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection};
 use tempfile::tempdir;
 
+use super::{migrated_db, Db};
 use crate::{
     db::{migrations::get_migrations, sqlite},
     enums::db_error::DbError,
 };
-
-type Db = PooledConnection<SqliteConnectionManager>;
-
-// An in-memory database with every migration applied. The pool holds a single
-// connection so the same in-memory database stays alive for the whole test.
-fn migrated_db() -> Db {
-    let mut db = Pool::builder()
-        .max_size(1)
-        .build(SqliteConnectionManager::memory())
-        .unwrap()
-        .get()
-        .unwrap();
-
-    get_migrations().to_latest(&mut db).unwrap();
-
-    db
-}
 
 // Interrupts whatever statement is running on the connection once `limit` has
 // passed, unless it has been dropped first.

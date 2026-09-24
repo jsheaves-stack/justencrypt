@@ -384,12 +384,18 @@ pub fn get_encoded_file_name(
     Ok(result)
 }
 
+/// Stores the file at `full_file_path`, creating any missing parent folders,
+/// and returns the encoded name of the blob it replaced, if any.
+///
+/// The replaced blob is read in the same transaction as the write, so when
+/// several writers overwrite the same path each one is told about exactly the
+/// blob it displaced, and every old blob is reported to exactly one caller.
 pub fn add_file(
     db: &mut PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
     encoded_file_name: &str,
     metadata: FileEncryptionMetadata,
-) -> Result<(), DbError> {
+) -> Result<Option<String>, DbError> {
     trace!(
         "Entering sqlite::add_file with full_file_path: '{}', encoded_file_name: '{}'",
         full_file_path,
@@ -416,11 +422,19 @@ pub fn add_file(
     let total_size = i64::try_from(metadata.total_size)
         .map_err(|_| DbError::InvalidInput("File is too large".to_string()))?;
 
-    let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
-    trace!("Parent folder ID is: {}", parent_folder_id);
-
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     trace!("Transaction started for adding file.");
+
+    let parent_folder_id = get_or_create_folder(&tx, &parent_path.to_string_lossy())?;
+    trace!("Parent folder ID is: {}", parent_folder_id);
+
+    let replaced_encoded_name: Option<String> = tx
+        .query_row(
+            "SELECT encoded_name FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+            params![parent_folder_id, file_name],
+            |row| row.get(0),
+        )
+        .optional()?;
 
     tx.execute(
         r#"INSERT INTO files
@@ -454,13 +468,17 @@ pub fn add_file(
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::add_file successfully.");
 
-    Ok(())
+    Ok(replaced_encoded_name)
 }
 
+/// Deletes the file at `file_path_str` and returns the encoded name of its
+/// blob, or `None` if there was no such file. The name comes from the deleted
+/// row itself, so it is always the blob that row referenced, even if the file
+/// was overwritten a moment earlier.
 pub fn delete_file(
     db: &mut PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
-) -> Result<(), DbError> {
+) -> Result<Option<String>, DbError> {
     trace!(
         "Entering sqlite::delete_file with file_path_str: '{}'",
         file_path_str
@@ -477,7 +495,10 @@ pub fn delete_file(
         file_name
     );
 
-    let parent_folder_id = match get_folder_id(db, &parent_path.to_string_lossy())? {
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    trace!("Transaction started for deleting file.");
+
+    let parent_folder_id = match get_folder_id(&tx, &parent_path.to_string_lossy())? {
         Some(id) => id,
         None => {
             trace!(
@@ -485,30 +506,29 @@ pub fn delete_file(
                 parent_path
             );
 
-            return Ok(());
+            return Ok(None);
         },
     };
     trace!("Parent folder ID is: {}", parent_folder_id);
 
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    trace!("Transaction started for deleting file.");
+    let deleted_encoded_name: Option<String> = tx
+        .query_row(
+            "DELETE FROM files WHERE parent_folder_id = ?1 AND name = ?2 RETURNING encoded_name",
+            params![parent_folder_id, file_name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| {
+            error!("Failed to delete file from the db: {}", e);
 
-    tx.execute(
-        "DELETE FROM files WHERE parent_folder_id = ?1 AND name = ?2",
-        params![parent_folder_id, file_name],
-    )
-    .map(|_| ())
-    .map_err(|e| {
-        error!("Failed to delete file from the db: {}", e);
-
-        DbError::FailedToDeleteFileFromDb(e.to_string())
-    })?;
+            DbError::FailedToDeleteFileFromDb(e.to_string())
+        })?;
     trace!("File delete executed.");
 
     tx.commit()?;
     trace!("Transaction committed. Exiting sqlite::delete_file successfully.");
 
-    Ok(())
+    Ok(deleted_encoded_name)
 }
 
 pub fn get_file(

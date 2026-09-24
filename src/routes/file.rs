@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, env, time::Duration};
+use std::env;
 
 use rocket::{
-    data::{ByteUnit, Data, Limits},
+    data::{Data, Limits},
     delete, get,
     http::Status,
     options, patch, post, put,
@@ -16,15 +16,14 @@ use crate::{
         chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor, CHUNK_SIZE,
         MPSC_CHANNEL_CAPACITY,
     },
-    enums::{
-        encryption_error::EncryptionError, request_error::RequestError,
-        request_success::RequestSuccess,
-    },
+    enums::{request_error::RequestError, request_success::RequestSuccess},
     session::user_session::UploadState,
     util::{
+        chunked_upload::check_uploaded_chunks,
         range::parse_range,
-        sharded_path::{get_sharded_path, remove_sharded_path},
+        sharded_path::{get_sharded_path, remove_blob_and_thumbnail, remove_sharded_path},
         unrestricted_path::UnrestrictedPath,
+        upload_limits::{max_chunk_request_size, max_file_size, open_with_limit, upload_ttl},
     },
     web::{
         forwarding_guards::{AuthenticatedSession, RangeHeader},
@@ -40,115 +39,6 @@ pub struct InitUploadResponse {
 #[derive(Serialize, Deserialize)]
 pub struct FinalizeErrorResponse {
     pub missing_chunks: Vec<u64>,
-}
-
-const DEFAULT_MAX_FILE_SIZE: u64 = 64 * 1024 * 1024 * 1024;
-const DEFAULT_MAX_CHUNK_REQUEST_SIZE: u64 = 32 * 1024 * 1024;
-const MAX_REPORTED_MISSING_CHUNKS: usize = 100;
-
-/// Largest file, in plaintext bytes, that may be stored. Configured through
-/// Rocket's `file` limit (`JUSTENCRYPT_LIMITS_FILE`).
-fn max_file_size(limits: &Limits) -> u64 {
-    limits
-        .get("file")
-        .map(|limit| limit.as_u64())
-        .unwrap_or(DEFAULT_MAX_FILE_SIZE)
-}
-
-/// Most bytes a single chunk-upload request may carry. Configured through
-/// Rocket's `file-chunk` limit (`JUSTENCRYPT_LIMITS_FILE_CHUNK`).
-fn max_chunk_request_size(limits: &Limits) -> u64 {
-    limits
-        .get("file-chunk")
-        .map(|limit| limit.as_u64())
-        .unwrap_or(DEFAULT_MAX_CHUNK_REQUEST_SIZE)
-}
-
-/// Opens a request body so that reading more than `max_bytes` is detectable:
-/// Rocket ends the stream silently at its limit, so the limit is one byte
-/// higher and the encryptor reports the overflow.
-fn open_with_limit(data: Data<'_>, max_bytes: u64) -> rocket::data::DataStream<'_> {
-    data.open(ByteUnit::Byte(max_bytes.saturating_add(1)))
-}
-
-fn encryption_failure(e: EncryptionError) -> RequestError {
-    match e {
-        EncryptionError::TooLarge => RequestError::PayloadTooLarge,
-        EncryptionError::InvalidOffset(msg) => RequestError::BadRequest(msg),
-        e => {
-            error!("Encryption error: {}", e);
-
-            RequestError::FailedToProcessData
-        },
-    }
-}
-
-/// Checks that the chunks uploaded so far make up exactly `total_size`
-/// plaintext bytes: every chunk from the first to the last is present, every
-/// chunk but the last is full, and nothing lies past the end.
-fn check_uploaded_chunks(chunks: &BTreeMap<u64, u32>, total_size: u64) -> Result<(), RequestError> {
-    let chunk_size = CHUNK_SIZE as u64;
-    let expected_chunks = total_size.div_ceil(chunk_size);
-    let present = chunks.range(..expected_chunks).count() as u64;
-
-    if present < expected_chunks {
-        let missing_count = expected_chunks - present;
-        let missing: Vec<u64> = (0..expected_chunks)
-            .filter(|i| !chunks.contains_key(i))
-            .take(MAX_REPORTED_MISSING_CHUNKS)
-            .collect();
-        let mut message = format!("Missing chunks: {:?}", missing);
-
-        if missing_count > missing.len() as u64 {
-            message.push_str(&format!(
-                " (and {} more)",
-                missing_count - missing.len() as u64
-            ));
-        }
-
-        return Err(RequestError::BadRequest(message));
-    }
-
-    let size_mismatch =
-        || RequestError::BadRequest("total_size does not match uploaded data".to_string());
-
-    if chunks.len() as u64 != expected_chunks {
-        return Err(size_mismatch());
-    }
-
-    for (&index, &len) in chunks {
-        let is_last = index + 1 == expected_chunks;
-        let expected_len = if is_last {
-            total_size - index * chunk_size
-        } else {
-            chunk_size
-        };
-
-        if len as u64 != expected_len {
-            if is_last {
-                return Err(size_mismatch());
-            }
-
-            return Err(RequestError::BadRequest(format!(
-                "Chunk {} is incomplete: expected {} bytes, got {}",
-                index, expected_len, len
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-const DEFAULT_UPLOAD_TTL_SECONDS: u64 = 24 * 60 * 60;
-
-fn upload_ttl() -> Duration {
-    let seconds = env::var("JUSTENCRYPT_UPLOAD_TTL_SECONDS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
-        .unwrap_or(DEFAULT_UPLOAD_TTL_SECONDS);
-
-    Duration::from_secs(seconds)
 }
 
 #[post("/upload/initiate/<file_path..>")]
@@ -269,8 +159,7 @@ pub async fn upload_chunk(
     let mut stream = open_with_limit(data, max_bytes);
     encryptor
         .encrypt_stream_at_offset(&mut stream, offset, max_bytes, &mut written_chunks)
-        .await
-        .map_err(encryption_failure)?;
+        .await?;
 
     Ok(RequestSuccess::NoContent)
 }
@@ -339,11 +228,6 @@ pub async fn finalize_upload(
     drop(encryptor);
 
     let user_path = session.get_user_path();
-    let old_encoded_name = session
-        .get_encoded_file_name(upload_state.file_path.clone())
-        .await
-        .ok();
-
     let encoded_file_path =
         get_sharded_path(user_path.clone(), &upload_state.encoded_file_name).await;
     let encoded_file_path_part = encoded_file_path.with_extension("part");
@@ -356,7 +240,7 @@ pub async fn finalize_upload(
         return Err(RequestError::FailedToProcessData);
     }
 
-    if let Err(e) = session
+    let replaced = match session
         .add_file(
             upload_state.file_path,
             upload_state.encoded_file_name,
@@ -364,19 +248,18 @@ pub async fn finalize_upload(
         )
         .await
     {
-        let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+        Ok(replaced) => replaced,
+        Err(e) => {
+            let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
 
-        return Err(e.into());
-    }
+            return Err(e.into());
+        },
+    };
 
     let _ = session.remove_active_upload_db(upload_id.to_string()).await;
 
-    if let Some(old_name) = old_encoded_name {
-        let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
-        let old_thumb_path = get_sharded_path(user_path.join(".cache"), &old_name).await;
-
-        let _ = remove_sharded_path(&user_path, &old_file_path).await;
-        let _ = remove_sharded_path(&user_path, &old_thumb_path).await;
+    if let Some(old_name) = replaced {
+        remove_blob_and_thumbnail(&user_path, &old_name).await;
     }
 
     Ok(RequestSuccess::Created)
@@ -400,14 +283,6 @@ pub async fn put_file(
     let user_path = {
         let session = auth.session.clone();
         session.get_user_path()
-    };
-
-    let old_encoded_name = {
-        let session = auth.session.clone();
-        session
-            .get_encoded_file_name(file_path_buf.clone())
-            .await
-            .ok()
     };
 
     let encoded_file_name = Uuid::new_v4().to_string();
@@ -456,7 +331,7 @@ pub async fn put_file(
             .remove_active_upload_db(upload_id.clone())
             .await;
 
-        return Err(encryption_failure(e));
+        return Err(e.into());
     }
 
     if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {
@@ -473,31 +348,30 @@ pub async fn put_file(
 
     let metadata = encryptor.get_metadata();
 
+    let replaced = match auth
+        .session
+        .add_file(file_path_buf, encoded_file_name, metadata)
+        .await
     {
-        let session = auth.session.clone();
-
-        if let Err(e) = session
-            .add_file(file_path_buf, encoded_file_name, metadata)
-            .await
-        {
+        Ok(replaced) => replaced,
+        Err(e) => {
             let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
-            let _ = session.remove_active_upload_db(upload_id.clone()).await;
+            let _ = auth
+                .session
+                .remove_active_upload_db(upload_id.clone())
+                .await;
 
             return Err(e.into());
-        }
-    }
+        },
+    };
 
     let _ = auth
         .session
         .remove_active_upload_db(upload_id.clone())
         .await;
 
-    if let Some(old_name) = old_encoded_name {
-        let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
-        let old_thumb_path = get_sharded_path(user_path.join(".cache"), &old_name).await;
-
-        let _ = remove_sharded_path(&user_path, &old_file_path).await;
-        let _ = remove_sharded_path(&user_path, &old_thumb_path).await;
+    if let Some(old_name) = replaced {
+        remove_blob_and_thumbnail(&user_path, &old_name).await;
     }
 
     Ok(RequestSuccess::Created)
@@ -571,38 +445,20 @@ pub async fn delete_file(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [DELETE /file/{}]", file_path);
 
-    let file_path_buf = file_path.to_path_buf();
-    let (user_path, encoded_file_name) = {
-        let session = auth.session.clone();
-        let user_path = session.get_user_path();
-        let encoded_file_name = session.get_encoded_file_name(file_path_buf.clone()).await?;
-        (user_path, encoded_file_name)
-    };
+    let session = auth.session.clone();
+    let user_path = session.get_user_path();
 
-    let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
-    let cache_path = user_path.join(".cache");
-    let encoded_thumb_path = get_sharded_path(cache_path.clone(), &encoded_file_name).await;
+    // The blob to remove comes from the deleted row itself, not from an
+    // earlier lookup, so a concurrent overwrite can't make us delete the wrong
+    // one.
+    match session.delete_file(file_path.to_path_buf()).await? {
+        Some(encoded_file_name) => {
+            remove_blob_and_thumbnail(&user_path, &encoded_file_name).await;
 
-    {
-        let session = auth.session.clone();
-        session.delete_file(file_path_buf).await?;
+            Ok(RequestSuccess::NoContent)
+        },
+        None => Err(RequestError::NotFound),
     }
-
-    if encoded_thumb_path.exists() {
-        if let Err(e) = remove_sharded_path(&user_path, &encoded_thumb_path).await {
-            warn!("Failed to delete thumbnail file: {}", e);
-        }
-    }
-
-    remove_sharded_path(&user_path, &encoded_file_path)
-        .await
-        .map_err(|e| {
-            error!("Failed to delete physical file: {}", e);
-
-            RequestError::FailedToRemoveFile
-        })?;
-
-    Ok(RequestSuccess::NoContent)
 }
 
 #[patch("/<file_path..>", data = "<patch_data>")]

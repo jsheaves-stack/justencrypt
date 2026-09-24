@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     env,
-    io::ErrorKind,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -224,11 +223,7 @@ impl UserSession {
                 .with_extension("part");
 
         if let Err(e) = sharded_path::remove_sharded_path(&self.user_path, &part_path).await {
-            let already_gone = e
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|io| io.kind() == ErrorKind::NotFound);
-
-            if !already_gone {
+            if !sharded_path::is_not_found(e.as_ref()) {
                 warn!(
                     "Failed to remove partial file for upload {}: {}",
                     upload_id, e
@@ -315,47 +310,53 @@ impl UserSession {
         Ok(())
     }
 
+    /// Stores a file and returns the encoded name of the blob it replaced, if
+    /// any. The caller owns deleting that blob.
     pub async fn add_file(
         &self,
         file_path: PathBuf,
         encoded_file_name: String,
         metadata: FileEncryptionMetadata,
-    ) -> Result<(), DbError> {
+    ) -> Result<Option<String>, DbError> {
         trace!("Entering UserSession::add_file for path: {:?}", file_path);
 
-        self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for add_file");
+        let replaced = self
+            .with_db(move |mut db| {
+                trace!("Inside spawn_blocking for add_file");
 
-            sqlite::add_file(
-                &mut db,
-                file_path.to_str().ok_or(DbError::InvalidPath)?,
-                &encoded_file_name,
-                metadata,
-            )
-        })
-        .await?;
+                sqlite::add_file(
+                    &mut db,
+                    file_path.to_str().ok_or(DbError::InvalidPath)?,
+                    &encoded_file_name,
+                    metadata,
+                )
+            })
+            .await?;
 
         trace!("Exiting UserSession::add_file successfully.");
 
-        Ok(())
+        Ok(replaced)
     }
 
-    pub async fn delete_file(&self, file_path: PathBuf) -> Result<(), DbError> {
+    /// Deletes a file and returns the encoded name of its blob, or `None` if
+    /// there was no such file. The caller owns deleting that blob.
+    pub async fn delete_file(&self, file_path: PathBuf) -> Result<Option<String>, DbError> {
         trace!(
             "Entering UserSession::delete_file for path: {:?}",
             file_path
         );
 
-        self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for delete_file");
+        let deleted = self
+            .with_db(move |mut db| {
+                trace!("Inside spawn_blocking for delete_file");
 
-            sqlite::delete_file(&mut db, file_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await?;
+                sqlite::delete_file(&mut db, file_path.to_str().ok_or(DbError::InvalidPath)?)
+            })
+            .await?;
 
         trace!("Exiting UserSession::delete_file successfully.");
 
-        Ok(())
+        Ok(deleted)
     }
 
     pub async fn add_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
