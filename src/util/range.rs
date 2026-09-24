@@ -26,7 +26,7 @@ pub fn parse_range(range_str: &str, total_size: u64) -> Result<(u64, u64, Status
     };
 
     if start > end || start >= total_size {
-        return Err(RequestError::RangeNotSatisfiable);
+        return Err(RequestError::RangeNotSatisfiable { total_size });
     }
     Ok((start, end.min(total_size - 1), Status::PartialContent))
 }

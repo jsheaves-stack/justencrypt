@@ -56,7 +56,7 @@ pub enum RequestError {
     BadRequest(String),
 
     #[error("Range not satisfiable")]
-    RangeNotSatisfiable,
+    RangeNotSatisfiable { total_size: u64 },
 
     #[error("Internal server error")]
     InternalServerError,

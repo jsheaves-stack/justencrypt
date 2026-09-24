@@ -525,6 +525,19 @@ pub async fn get_file(
         (0, total_size.saturating_sub(1), Status::Ok)
     };
 
+    // Nothing to decrypt. Dropping the sender ends the body immediately.
+    if total_size == 0 {
+        let (_, rx) = mpsc::channel::<Vec<u8>>(1);
+
+        return Ok(RangeResponder {
+            rx,
+            status,
+            start,
+            end,
+            total_size,
+        });
+    }
+
     let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
     let mut decryptor = ChunkDecryptor::new(encoded_file_path, metadata)
         .await

@@ -1,6 +1,6 @@
 use rocket::{
     async_test,
-    http::{Header, Status},
+    http::{Cookie, Header, Status},
     local::asynchronous::Client,
     routes, tokio,
 };
@@ -409,4 +409,100 @@ async fn test_put_file_at_the_file_limit_is_stored_in_full() {
 
     assert_eq!(response.status(), Status::Ok);
     assert_eq!(response.into_bytes().await.unwrap(), vec![b'A'; 1000]);
+}
+
+// The returned `TestUser` must be kept alive: dropping it deletes the user's
+// data directory.
+async fn download_client() -> (Client, Cookie<'static>, TestUser) {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket.mount("/file", routes![put_file, get_file]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    (client, cookie, test_user)
+}
+
+async fn upload(client: &Client, cookie: &Cookie<'static>, path: &str, body: Vec<u8>) {
+    let response = client
+        .put(format!("/file/{}", path))
+        .private_cookie(cookie.clone())
+        .body(body)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Created);
+}
+
+#[async_test]
+async fn test_get_empty_file() {
+    let (client, cookie, _test_user) = download_client().await;
+    upload(&client, &cookie, "empty.txt", Vec::new()).await;
+
+    let response = client
+        .get("/file/empty.txt")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.headers().get_one("Content-Length"), Some("0"));
+    assert_eq!(response.headers().get_one("Content-Range"), None);
+    assert!(response.into_bytes().await.unwrap().is_empty());
+}
+
+#[async_test]
+async fn test_get_empty_file_with_a_range_is_not_satisfiable() {
+    let (client, cookie, _test_user) = download_client().await;
+    upload(&client, &cookie, "empty.txt", Vec::new()).await;
+
+    let response = client
+        .get("/file/empty.txt")
+        .private_cookie(cookie)
+        .header(Header::new("Range", "bytes=0-"))
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::RangeNotSatisfiable);
+    assert_eq!(
+        response.headers().get_one("Content-Range"),
+        Some("bytes */0")
+    );
+}
+
+#[async_test]
+async fn test_get_full_file_has_exact_length_and_no_content_range() {
+    let (client, cookie, _test_user) = download_client().await;
+    upload(&client, &cookie, "full.bin", vec![b'A'; 70_000]).await;
+
+    let response = client
+        .get("/file/full.bin")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.headers().get_one("Content-Length"), Some("70000"));
+    assert_eq!(response.headers().get_one("Content-Range"), None);
+    assert_eq!(response.into_bytes().await.unwrap().len(), 70_000);
+}
+
+#[async_test]
+async fn test_get_file_range_past_the_end_reports_the_file_size() {
+    let (client, cookie, _test_user) = download_client().await;
+    upload(&client, &cookie, "short.txt", b"test".to_vec()).await;
+
+    let response = client
+        .get("/file/short.txt")
+        .private_cookie(cookie)
+        .header(Header::new("Range", "bytes=10-20"))
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::RangeNotSatisfiable);
+    assert_eq!(
+        response.headers().get_one("Content-Range"),
+        Some("bytes */4")
+    );
 }

@@ -26,17 +26,25 @@ impl<'r> Responder<'r, 'r> for RangeResponder {
             }
         };
 
+        // An empty file has no byte range at all: `start` and `end` are both 0
+        // but there is nothing to send.
+        let content_length = if self.total_size == 0 {
+            0
+        } else {
+            self.end - self.start + 1
+        };
+
         let mut response = Response::build_from(stream.respond_to(req)?);
         response.status(self.status);
         response.header(Header::new("Accept-Ranges", "bytes"));
-        response.header(Header::new(
-            "Content-Range",
-            format!("bytes {}-{}/{}", self.start, self.end, self.total_size),
-        ));
-        response.header(Header::new(
-            "Content-Length",
-            (self.end - self.start + 1).to_string(),
-        ));
+        response.header(Header::new("Content-Length", content_length.to_string()));
+
+        if self.status == Status::PartialContent {
+            response.header(Header::new(
+                "Content-Range",
+                format!("bytes {}-{}/{}", self.start, self.end, self.total_size),
+            ));
+        }
 
         response.ok()
     }
@@ -66,16 +74,25 @@ impl<'r> Responder<'r, 'static> for RequestError {
                 Status::BadRequest
             },
             RequestError::NotFound => Status::NotFound,
-            RequestError::RangeNotSatisfiable => Status::RangeNotSatisfiable,
+            RequestError::RangeNotSatisfiable { .. } => Status::RangeNotSatisfiable,
             RequestError::TooManyActiveUploads => Status::TooManyRequests,
             RequestError::PayloadTooLarge => Status::PayloadTooLarge,
         };
 
         let message = self.to_string();
-        Response::build()
+        let mut response = Response::build();
+        response
             .status(status)
-            .sized_body(message.len(), Cursor::new(message))
-            .ok()
+            .sized_body(message.len(), Cursor::new(message));
+
+        if let RequestError::RangeNotSatisfiable { total_size } = self {
+            response.header(Header::new(
+                "Content-Range",
+                format!("bytes */{}", total_size),
+            ));
+        }
+
+        response.ok()
     }
 }
 

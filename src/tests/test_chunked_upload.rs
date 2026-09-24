@@ -598,6 +598,16 @@ async fn test_empty_chunked_upload_can_be_finalized() {
     let (status, body) = finalize(&client, &cookie, &upload_id, 0).await;
 
     assert_eq!(status, Status::Created, "{}", body);
+
+    let response = client
+        .get("/file/empty.bin")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.headers().get_one("Content-Length"), Some("0"));
+    assert!(response.into_bytes().await.unwrap().is_empty());
 }
 
 #[async_test]

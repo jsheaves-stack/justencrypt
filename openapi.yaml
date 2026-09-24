@@ -262,16 +262,12 @@ paths:
           description: Standard HTTP Range header (e.g., bytes=0-1024).
       responses:
         '200':
-          description: Decrypted file stream (Full content).
+          description: 'Decrypted file stream (Full content). An empty file is returned with `Content-Length: 0` and no body.'
           headers:
             Accept-Ranges:
               schema:
                 type: string
               description: Indicates support for byte range requests.
-            Content-Range:
-              schema:
-                type: string
-              description: The range of bytes being returned.
             Content-Length:
               schema:
                 type: string
@@ -303,7 +299,12 @@ paths:
         '404':
           description: File not found.
         '416':
-          description: Range not satisfiable.
+          description: Range not satisfiable. Every range of an empty file is unsatisfiable.
+          headers:
+            Content-Range:
+              schema:
+                type: string
+              description: The file's size, as `bytes */<total_size>`.
         '500':
           description: Internal server error (Failed to process or decrypt data).
     patch:
