@@ -2,10 +2,10 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::{Duration, SystemTime},
+    time::{Duration, UNIX_EPOCH},
 };
 
 use r2d2::Pool;
@@ -14,28 +14,52 @@ use rocket::{
     async_test,
     tokio::{self, runtime::Builder, sync::Mutex, time::timeout},
 };
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
-use crate::session::{store::SessionStore, user_session::UserSession};
+use crate::{
+    session::{
+        policy::SessionPolicy,
+        reaper::{reap_once, SessionReaper},
+        store::SessionStore,
+        user_session::{new_session_token, UserSession},
+    },
+    util::time::unix_now_secs,
+};
 
 // A session that never touches the disk: the pool is built without
 // establishing a connection.
 fn detached_session(username: &str) -> Arc<UserSession> {
+    aged_session(username, 0, 0)
+}
+
+// A detached session created `age_secs` ago whose last request was
+// `idle_secs` ago.
+fn aged_session(username: &str, age_secs: u64, idle_secs: u64) -> Arc<UserSession> {
     let pool = Pool::builder()
         .max_size(1)
         .build_unchecked(SqliteConnectionManager::memory());
     let session_id = Uuid::new_v4().to_string();
+    let now = unix_now_secs();
 
     Arc::new(UserSession {
         user_path: PathBuf::new(),
         db_pool: pool,
         username: username.to_string(),
-        created_at: SystemTime::now(),
+        created_at: UNIX_EPOCH + Duration::from_secs(now - age_secs),
         session_id: session_id.clone(),
         user_token: SecretString::from(format!("token-{session_id}")),
         active_uploads: Mutex::new(HashMap::new()),
+        last_seen: AtomicU64::new(now - idle_secs),
     })
+}
+
+fn policy(idle_secs: u64, lifetime_secs: u64, max_per_user: usize) -> SessionPolicy {
+    SessionPolicy {
+        idle_timeout: Duration::from_secs(idle_secs),
+        max_lifetime: Duration::from_secs(lifetime_secs),
+        max_per_user,
+    }
 }
 
 #[async_test]
@@ -199,4 +223,103 @@ fn test_concurrent_reads_and_removals_do_not_deadlock() {
             .expect("churn task deadlocked")
             .unwrap();
     });
+}
+
+#[async_test]
+async fn test_insert_over_the_per_user_limit_evicts_the_oldest_sessions() {
+    let store = SessionStore::new(policy(3600, 86400, 2));
+    let oldest = aged_session("alice", 300, 0);
+    let middle = aged_session("alice", 200, 0);
+    let newest = aged_session("alice", 100, 0);
+    let bob = aged_session("bob", 400, 0);
+
+    assert!(store.insert("bob".into(), bob.clone()).await.is_empty());
+    assert!(store.insert("a1".into(), oldest.clone()).await.is_empty());
+    assert!(store.insert("a2".into(), middle.clone()).await.is_empty());
+
+    let evicted = store.insert("a3".into(), newest.clone()).await;
+
+    assert_eq!(evicted.len(), 1);
+    assert!(Arc::ptr_eq(&evicted[0], &oldest));
+    assert!(store.get("a1").await.is_none());
+    assert!(store.get_by_id(&oldest.session_id).await.is_none());
+    assert!(store.get("a2").await.is_some());
+    assert!(store.get("a3").await.is_some());
+    // Other users' sessions don't count toward alice's limit.
+    assert!(store.get("bob").await.is_some());
+}
+
+#[async_test]
+async fn test_remove_expired_removes_idle_and_too_old_sessions_only() {
+    let store = SessionStore::new(policy(60, 3600, 10));
+    let fresh = aged_session("alice", 10, 10);
+    let idle = aged_session("alice", 120, 61);
+    let too_old = aged_session("alice", 3601, 0);
+    let at_the_limit = aged_session("alice", 3600, 60);
+
+    for (token, session) in [
+        ("fresh", &fresh),
+        ("idle", &idle),
+        ("too-old", &too_old),
+        ("at-the-limit", &at_the_limit),
+    ] {
+        store.insert(token.into(), session.clone()).await;
+    }
+
+    let expired = store.remove_expired(unix_now_secs()).await;
+    let mut expired_ids: Vec<_> = expired.iter().map(|s| s.session_id.clone()).collect();
+    let mut expected = vec![idle.session_id.clone(), too_old.session_id.clone()];
+    expired_ids.sort();
+    expected.sort();
+
+    assert_eq!(expired_ids, expected);
+    assert!(store.get("idle").await.is_none());
+    assert!(store.get_by_id(&too_old.session_id).await.is_none());
+    assert!(store.get("fresh").await.is_some());
+    assert!(store.get("at-the-limit").await.is_some());
+}
+
+#[async_test]
+async fn test_touch_refreshes_last_seen() {
+    let session = aged_session("alice", 100, 100);
+    let expiry = policy(60, 3600, 10);
+
+    assert!(session.is_expired(unix_now_secs(), &expiry));
+
+    session.touch();
+
+    assert!(!session.is_expired(unix_now_secs(), &expiry));
+}
+
+#[async_test]
+async fn test_reap_once_removes_expired_sessions() {
+    let store = SessionStore::new(policy(60, 3600, 10));
+    let live = aged_session("alice", 10, 10);
+    let expired = aged_session("alice", 100, 100);
+    store.insert("live".into(), live).await;
+    store.insert("expired".into(), expired).await;
+
+    reap_once(&store).await;
+
+    assert!(store.get("live").await.is_some());
+    assert!(store.get("expired").await.is_none());
+}
+
+#[test]
+fn test_reaper_interval_of_zero_disables_it() {
+    assert!(SessionReaper::every(0).is_none());
+    assert!(SessionReaper::every(60).is_some());
+}
+
+#[test]
+fn test_session_tokens_are_256_bit_base64url() {
+    let a = new_session_token();
+    let b = new_session_token();
+
+    assert_eq!(a.expose_secret().len(), 43);
+    assert!(a
+        .expose_secret()
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    assert_ne!(a.expose_secret(), b.expose_secret());
 }

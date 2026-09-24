@@ -23,7 +23,7 @@ use routes::{
     session::{create_session, destroy_session, session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
 };
-use session::store::SessionStore;
+use session::{policy::SessionPolicy, reaper::SessionReaper, store::SessionStore};
 use web::fairings::Cors;
 
 pub mod db;
@@ -39,7 +39,7 @@ extern crate rocket;
 extern crate serde;
 
 pub struct AppState {
-    pub sessions: SessionStore,
+    pub sessions: Arc<SessionStore>,
     pub thumbnail_semaphore: Arc<Semaphore>,
 }
 
@@ -276,8 +276,17 @@ async fn rocket() -> _ {
         workers
     );
 
+    let session_policy = SessionPolicy::from_env();
+
+    info!(
+        "Session policy: idle timeout {}s, max lifetime {}s, max {} session(s) per user.",
+        session_policy.idle_timeout.as_secs(),
+        session_policy.max_lifetime.as_secs(),
+        session_policy.max_per_user
+    );
+
     let state = AppState {
-        sessions: SessionStore::default(),
+        sessions: Arc::new(SessionStore::new(session_policy)),
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
     };
 
@@ -338,6 +347,17 @@ async fn rocket() -> _ {
         );
     } else {
         warn!("JUSTENCRYPT_ADMIN_API_KEY is not set, admin routes will NOT be available.");
+    }
+
+    match SessionReaper::from_env() {
+        Some(reaper) => {
+            rocket = rocket.attach(reaper);
+        },
+        None => {
+            info!(
+                "Session reaper disabled (JUSTENCRYPT_SESSION_REAPER_INTERVAL_SECONDS is unset or 0)."
+            );
+        },
     }
 
     rocket

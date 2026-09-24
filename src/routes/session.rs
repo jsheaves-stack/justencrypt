@@ -4,6 +4,7 @@ use rocket::{
     http::{Cookie, CookieJar, SameSite},
     options, post,
     serde::json::Json,
+    time,
     tokio::task,
     State,
 };
@@ -13,7 +14,8 @@ use zxcvbn::{zxcvbn, Score};
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    session::user_session::UserSession,
+    session::{reaper::discard_sessions, user_session::UserSession},
+    util::time::unix_now_secs,
     AppState,
 };
 
@@ -93,6 +95,10 @@ pub async fn create_session(
 
     trace!("Attempting to open user session for user: {}", user_name);
 
+    // Clear out expired sessions first, so they don't count against this user's
+    // session limit and don't linger when the background reaper is disabled.
+    discard_sessions(state.sessions.remove_expired(unix_now_secs()).await).await;
+
     let existing_pool = state.sessions.pool_for_user(&user_name).await;
 
     let session = Arc::new(
@@ -125,16 +131,32 @@ pub async fn create_session(
         .parse::<bool>()
         .unwrap_or(true);
 
+    let max_lifetime_secs = state.sessions.policy().max_lifetime.as_secs();
+
     let mut cookie = Cookie::new("sid", user_token.clone());
     cookie.set_same_site(Some(SameSite::Strict));
     cookie.set_secure(secure_cookies);
+    cookie.set_path("/");
+    cookie.set_max_age(time::Duration::seconds(
+        i64::try_from(max_lifetime_secs).unwrap_or(i64::MAX),
+    ));
     cookies.add_private(cookie);
 
     trace!("Session cookie added to jar.");
 
-    state.sessions.insert(user_token, session.clone()).await;
+    let evicted = state.sessions.insert(user_token, session.clone()).await;
 
     trace!("Session added to active session map.");
+
+    if !evicted.is_empty() {
+        info!(
+            "User {} is over the session limit; ending {} older session(s).",
+            user_name,
+            evicted.len()
+        );
+
+        discard_sessions(evicted).await;
+    }
 
     let active_session_ids = state
         .sessions
@@ -176,11 +198,17 @@ pub async fn destroy_session(
         },
     };
 
-    let user_token = cookie.value();
+    let user_token = cookie.value().to_string();
 
-    let result = match state.sessions.remove_by_token(user_token).await {
+    // The browser should forget the cookie whether or not the server still
+    // knew the session.
+    cookies.remove_private("sid");
+
+    let result = match state.sessions.remove_by_token(&user_token).await {
         Some(session) => {
             trace!("Removed active session with ID: {}", session.session_id);
+
+            discard_sessions(vec![session]).await;
 
             Ok(RequestSuccess::NoContent)
         },

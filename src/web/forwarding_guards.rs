@@ -1,8 +1,15 @@
 use std::{env, sync::Arc};
 
-use rocket::{async_trait, http::Status, outcome::Outcome, request::FromRequest, Request, State};
+use rocket::{
+    async_trait, http::Status, outcome::Outcome, request::FromRequest, tokio, Request, State,
+};
 
-use crate::{enums::request_error::RequestError, session::user_session::UserSession, AppState};
+use crate::{
+    enums::request_error::RequestError,
+    session::{reaper::discard_sessions, user_session::UserSession},
+    util::time::unix_now_secs,
+    AppState,
+};
 
 pub struct AuthenticatedSession {
     pub session: Arc<UserSession>,
@@ -104,6 +111,20 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
                 return Outcome::Error((Status::Unauthorized, RequestError::MissingActiveSession));
             },
         };
+
+        // Enforced here on every request, so an expired session is rejected on
+        // time whether or not the background reaper is running.
+        if session.is_expired(unix_now_secs(), state.sessions.policy()) {
+            trace!("Session has expired.");
+
+            if let Some(expired) = state.sessions.remove_by_id(&session.session_id).await {
+                tokio::spawn(discard_sessions(vec![expired]));
+            }
+
+            return Outcome::Error((Status::Unauthorized, RequestError::MissingActiveSession));
+        }
+
+        session.touch();
 
         trace!("Exiting forwarding_guard::AuthenticatedSession::from_request successfully.");
 

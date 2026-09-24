@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::{
     db::migrations::get_migrations,
     get_app_config,
-    session::{store::SessionStore, user_session::UserSession},
+    session::{policy::SessionPolicy, store::SessionStore, user_session::UserSession},
     AppState,
 };
 
@@ -56,6 +56,12 @@ impl Drop for TestUser {
 }
 
 pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
+    setup_rocket_with_session_policy(SessionPolicy::default()).await
+}
+
+pub async fn setup_rocket_with_session_policy(
+    session_policy: SessionPolicy,
+) -> (Rocket<Build>, TestUser) {
     dotenv::dotenv().ok();
 
     let temp_user = Uuid::new_v4().to_string();
@@ -78,7 +84,7 @@ pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
     );
 
     let state = AppState {
-        sessions: SessionStore::default(),
+        sessions: Arc::new(SessionStore::new(session_policy)),
         thumbnail_semaphore: Arc::new(Semaphore::new(1)),
     };
 

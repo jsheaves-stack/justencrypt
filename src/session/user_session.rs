@@ -9,6 +9,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio::{sync::Mutex, task};
@@ -20,20 +21,14 @@ use crate::{
     db::sqlite::{self, FolderContent},
     encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
     enums::db_error::DbError,
-    util::sharded_path,
+    session::policy::SessionPolicy,
+    util::{sharded_path, time::unix_now_secs},
 };
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct EncodedFile {
     pub id: i32,
     pub encoded_name: String,
-}
-
-fn unix_now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[derive(Clone)]
@@ -80,9 +75,47 @@ pub struct UserSession {
     pub session_id: String,
     pub user_token: SecretString,
     pub active_uploads: Mutex<HashMap<String, UploadState>>,
+    /// Unix seconds of the last authenticated request. Atomic so every request
+    /// can refresh it without taking a lock.
+    pub last_seen: AtomicU64,
+}
+
+/// A new session token: 256 bits from the OS random number generator, as
+/// unpadded base64url (43 characters).
+pub fn new_session_token() -> SecretString {
+    let mut bytes = [0u8; 32];
+
+    orion::util::secure_rand_bytes(&mut bytes).expect("the OS random number generator failed");
+
+    SecretString::from(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 impl UserSession {
+    /// Records activity on the session. The value has one-second precision, so
+    /// it is only written when the second has changed: a busy session writes
+    /// at most once a second, and every other request only reads it.
+    pub fn touch(&self) {
+        let now = unix_now_secs();
+
+        if self.last_seen.load(Ordering::Relaxed) != now {
+            self.last_seen.store(now, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether the session has been idle, or has existed, longer than the
+    /// policy allows at `now_secs`.
+    pub fn is_expired(&self, now_secs: u64, policy: &SessionPolicy) -> bool {
+        let created_secs = self
+            .created_at
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let idle = now_secs.saturating_sub(self.last_seen.load(Ordering::Relaxed));
+        let age = now_secs.saturating_sub(created_secs);
+
+        idle > policy.idle_timeout.as_secs() || age > policy.max_lifetime.as_secs()
+    }
+
     pub async fn open(
         user_name: &str,
         passphrase: &SecretString,
@@ -135,8 +168,9 @@ impl UserSession {
                 username: user_name_clone,
                 created_at: SystemTime::now(),
                 session_id: Uuid::new_v4().hyphenated().to_string(),
-                user_token: SecretString::from(Uuid::new_v4().hyphenated().to_string()),
+                user_token: new_session_token(),
                 active_uploads: Mutex::new(HashMap::new()),
+                last_seen: AtomicU64::new(unix_now_secs()),
             })
         })
         .await

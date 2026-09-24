@@ -12,6 +12,7 @@ components:
       type: apiKey
       in: cookie
       name: sid
+      description: 'Session cookie set by `POST /session`. A session expires after `JUSTENCRYPT_SESSION_IDLE_TIMEOUT_SECONDS` without a request (default 3600) or `JUSTENCRYPT_SESSION_MAX_LIFETIME_SECONDS` after login (default 604800), whichever comes first; requests with an expired session get `401`.'
     apiKeyAuth:
       type: apiKey
       in: header
@@ -198,14 +199,14 @@ paths:
               $ref: '#/components/schemas/CreateSession'
       responses:
         '201':
-          description: Session created successfully, cookie provided in headers.
+          description: 'Session created successfully, cookie provided in headers. The `sid` cookie has a `Max-Age` equal to the session''s maximum lifetime (`JUSTENCRYPT_SESSION_MAX_LIFETIME_SECONDS`). If the user already has the maximum number of sessions (`JUSTENCRYPT_MAX_SESSIONS_PER_USER`), their oldest session is ended.'
         '400':
           description: Bad request (e.g. password does not meet requirements).
         '401':
           description: Unauthorized (invalid credentials or user does not exist).
     delete:
       summary: Destroy the active session
-      description: Invalidates the active session identified by the sid cookie.
+      description: Invalidates the active session identified by the sid cookie, removes that session's unfinished uploads, and expires the sid cookie (sent even when the session was already gone).
       responses:
         '204':
           description: Session successfully destroyed.
