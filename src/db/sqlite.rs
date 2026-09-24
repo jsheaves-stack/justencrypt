@@ -7,7 +7,7 @@ use std::{
 use orion::kex::SecretKey;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use session::user_session::EncodedFile;
@@ -168,29 +168,17 @@ pub fn create_user_db_connection(
     Ok(pool)
 }
 
-fn get_folder_id_and_create_if_missing(
-    db: &mut PooledConnection<SqliteConnectionManager>,
-    folder_path_str: &str,
-) -> Result<i32, DbError> {
+/// Resolves `folder_path_str` to a folder id, creating any folders that are
+/// missing along the way. It does no transaction handling of its own, so call
+/// it inside one: if anything fails part-way through, nothing is left behind.
+fn get_or_create_folder(conn: &Connection, folder_path_str: &str) -> Result<i32, DbError> {
     trace!(
-        "Entering sqlite::get_folder_id_and_create_if_missing with folder_path_str: '{}'",
+        "Entering sqlite::get_or_create_folder with folder_path_str: '{}'",
         folder_path_str
     );
 
-    if let Some(id) = get_folder_id(db, folder_path_str)? {
-        trace!(
-            "Folder '{}' already exists with ID: {}. Fast-path exit without transaction.",
-            folder_path_str,
-            id
-        );
-
-        return Ok(id);
-    }
-
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    trace!("Transaction started.");
 
     for component in path.components() {
         let name = match component {
@@ -203,7 +191,7 @@ fn get_folder_id_and_create_if_missing(
             current_id
         );
 
-        let folder_id = match tx
+        let folder_id = match conn
             .query_row(
                 "SELECT id FROM folders WHERE parent_folder_id = ?1 AND name = ?2",
                 params![current_id, name],
@@ -228,11 +216,11 @@ fn get_folder_id_and_create_if_missing(
             None => {
                 trace!("Folder '{}' not found, creating it.", name);
 
-                tx.execute(
+                conn.execute(
                     "INSERT OR IGNORE INTO folders (parent_folder_id, name, created_at) VALUES (?1, ?2, CURRENT_TIMESTAMP)",
                     params![current_id, name],
                 )?;
-                let new_id = tx.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+                let new_id = conn.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
                 trace!("New folder '{}' created with ID: {}", name, new_id);
 
                 new_id
@@ -240,19 +228,48 @@ fn get_folder_id_and_create_if_missing(
         };
     }
 
-    tx.commit()?;
     trace!(
-        "Transaction committed. Exiting sqlite::get_folder_id_and_create_if_missing with final folder ID: {}",
+        "Exiting sqlite::get_or_create_folder with final folder ID: {}",
         current_id
     );
 
     Ok(current_id)
 }
 
-pub fn get_folder_id(
-    db: &PooledConnection<SqliteConnectionManager>,
+fn get_folder_id_and_create_if_missing(
+    db: &mut PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
-) -> Result<Option<i32>, DbError> {
+) -> Result<i32, DbError> {
+    trace!(
+        "Entering sqlite::get_folder_id_and_create_if_missing with folder_path_str: '{}'",
+        folder_path_str
+    );
+
+    if let Some(id) = get_folder_id(db, folder_path_str)? {
+        trace!(
+            "Folder '{}' already exists with ID: {}. Fast-path exit without transaction.",
+            folder_path_str,
+            id
+        );
+
+        return Ok(id);
+    }
+
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    trace!("Transaction started.");
+
+    let folder_id = get_or_create_folder(&tx, folder_path_str)?;
+
+    tx.commit()?;
+    trace!(
+        "Transaction committed. Exiting sqlite::get_folder_id_and_create_if_missing with final folder ID: {}",
+        folder_id
+    );
+
+    Ok(folder_id)
+}
+
+pub fn get_folder_id(db: &Connection, folder_path_str: &str) -> Result<Option<i32>, DbError> {
     trace!(
         "Entering sqlite::get_folder_id with folder_path_str: '{}'",
         folder_path_str
@@ -315,10 +332,7 @@ pub fn get_folder_id(
     Ok(Some(current_id))
 }
 
-pub fn get_folder_id_strict(
-    db: &PooledConnection<SqliteConnectionManager>,
-    folder_path_str: &str,
-) -> Result<i32, DbError> {
+pub fn get_folder_id_strict(db: &Connection, folder_path_str: &str) -> Result<i32, DbError> {
     get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)
 }
 
@@ -770,16 +784,12 @@ pub fn move_folder(
         destination_folder_str
     );
 
-    let norm_src = folder_path_str.trim_matches('/');
-    let norm_dst = destination_folder_str.trim_matches('/');
+    // Everything happens in one transaction: paths are resolved to ids, the
+    // destination is created, and the cycle check is made against those ids,
+    // so a rejected move rolls back any destination folders it created.
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
-    if norm_dst == norm_src || norm_dst.starts_with(&format!("{}/", norm_src)) {
-        return Err(DbError::InvalidInput(
-            "Cannot move a folder into itself or its subfolders".to_string(),
-        ));
-    }
-
-    let folder_id = get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
+    let folder_id = get_folder_id(&tx, folder_path_str)?.ok_or(DbError::NotFound)?;
 
     if folder_id == 1 {
         return Err(DbError::InvalidInput(
@@ -787,10 +797,33 @@ pub fn move_folder(
         ));
     }
 
-    let destination_parent_folder_id =
-        get_folder_id_and_create_if_missing(db, destination_folder_str)?;
+    let destination_parent_folder_id = get_or_create_folder(&tx, destination_folder_str)?;
 
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // The folder-total triggers walk a folder's ancestors
+    // with `UNION ALL`, which never terminates (and grows without bound in
+    // memory) if the ancestors form a cycle. Keep the check by id and inside
+    // this transaction.
+    //
+    // `UNION` (not `UNION ALL`) de-duplicates rows, so this walk itself
+    // terminates even if the ancestor chain already contains a cycle.
+    let creates_cycle: bool = tx.query_row(
+        r#"WITH RECURSIVE ancestors(id) AS (
+               SELECT ?1
+               UNION
+               SELECT f.parent_folder_id FROM folders f
+               INNER JOIN ancestors a ON f.id = a.id
+               WHERE f.parent_folder_id IS NOT NULL
+           )
+           SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = ?2)"#,
+        params![destination_parent_folder_id, folder_id],
+        |row| row.get(0),
+    )?;
+
+    if creates_cycle {
+        return Err(DbError::InvalidInput(
+            "Cannot move a folder into itself or its subfolders".to_string(),
+        ));
+    }
 
     tx.execute(
         "UPDATE folders SET parent_folder_id = ?1 WHERE id = ?2",
