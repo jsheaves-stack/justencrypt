@@ -268,3 +268,125 @@ async fn test_patch_folder_move_creates_a_missing_destination() {
         .await;
     assert_eq!(old.status(), Status::NotFound);
 }
+
+async fn folder_client() -> (Client, Cookie<'static>, TestUser) {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket.mount("/folder", routes![create_folder, patch_folder, get_folder]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    (client, cookie, test_user)
+}
+
+async fn make_folder(client: &Client, cookie: &Cookie<'static>, path: &str) {
+    let response = client
+        .put(format!("/folder/{}", path))
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Created);
+}
+
+async fn patch_raw(client: &Client, cookie: &Cookie<'static>, path: &str, body: &str) -> Status {
+    client
+        .patch(format!("/folder/{}", path))
+        .private_cookie(cookie.clone())
+        .header(rocket::http::ContentType::JSON)
+        .body(body)
+        .dispatch()
+        .await
+        .status()
+}
+
+async fn folder_exists(client: &Client, cookie: &Cookie<'static>, path: &str) -> bool {
+    client
+        .get(format!("/folder/{}", path))
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await
+        .status()
+        == Status::Ok
+}
+
+#[async_test]
+async fn test_patch_missing_folder_is_not_found_and_creates_nothing() {
+    let (client, cookie, _test_user) = folder_client().await;
+
+    assert_eq!(
+        patch_raw(&client, &cookie, "ghost", r#"{"folder_name": "z"}"#).await,
+        Status::NotFound
+    );
+    assert_eq!(
+        patch_raw(
+            &client,
+            &cookie,
+            "ghost",
+            r#"{"parent_folder_path": "auto/dir"}"#
+        )
+        .await,
+        Status::NotFound
+    );
+    assert!(!folder_exists(&client, &cookie, "auto").await);
+}
+
+#[async_test]
+async fn test_patch_folder_onto_an_existing_name_is_a_conflict() {
+    let (client, cookie, _test_user) = folder_client().await;
+    make_folder(&client, &cookie, "a").await;
+    make_folder(&client, &cookie, "b").await;
+    make_folder(&client, &cookie, "dest/a").await;
+
+    assert_eq!(
+        patch_raw(&client, &cookie, "a", r#"{"folder_name": "b"}"#).await,
+        Status::Conflict
+    );
+    assert_eq!(
+        patch_raw(&client, &cookie, "a", r#"{"parent_folder_path": "dest"}"#).await,
+        Status::Conflict
+    );
+    // Rename and move together: nothing changes when the move collides.
+    assert_eq!(
+        patch_raw(
+            &client,
+            &cookie,
+            "b",
+            r#"{"folder_name": "a", "parent_folder_path": "dest"}"#
+        )
+        .await,
+        Status::Conflict
+    );
+
+    for path in ["a", "b", "dest/a"] {
+        assert!(
+            folder_exists(&client, &cookie, path).await,
+            "{} should remain",
+            path
+        );
+    }
+}
+
+#[async_test]
+async fn test_patch_folder_rejects_invalid_names() {
+    let (client, cookie, _test_user) = folder_client().await;
+    make_folder(&client, &cookie, "a").await;
+
+    for name in ["", ".", "..", "x/y", "x\\y", "nul\u{0}", &"n".repeat(256)] {
+        let body = serde_json::json!({ "folder_name": name }).to_string();
+
+        assert_eq!(
+            patch_raw(&client, &cookie, "a", &body).await,
+            Status::BadRequest,
+            "name {:?}",
+            name
+        );
+    }
+
+    assert_eq!(
+        patch_raw(&client, &cookie, "a", "{}").await,
+        Status::BadRequest
+    );
+    assert!(folder_exists(&client, &cookie, "a").await);
+}

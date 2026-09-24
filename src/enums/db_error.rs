@@ -14,6 +14,9 @@ pub enum DbError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Connection pool error: {0}")]
     PoolError(#[from] r2d2::Error),
 

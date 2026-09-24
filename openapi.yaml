@@ -42,13 +42,15 @@ components:
           description: The secure passphrase/password (must meet minimum score).
     PatchFileRequest:
       type: object
+      additionalProperties: false
+      description: At least one field is required. Unknown fields are rejected with `422`.
       properties:
         parent_folder_path:
           type: string
-          description: The new logical parent folder path to move the file to.
+          description: 'The new logical parent folder path to move the file to. Missing folders are created. Each folder name must be 1-255 bytes, not `.` or `..`, and no `/`, `\\`, or control characters.'
         file_name:
           type: string
-          description: The new logical name for the file.
+          description: 'The new logical name for the file: 1-255 bytes, not `.` or `..`, and no `/`, `\\`, or control characters.'
     Folder:
       type: object
       required:
@@ -310,7 +312,7 @@ paths:
           description: Internal server error (Failed to process or decrypt data).
     patch:
       summary: Move or rename a file
-      description: Allows renaming a file or moving it to a different logical folder.
+      description: Renames a file, moves it to a different logical folder, or both. The change is all-or-nothing, and destination folders are only created if it succeeds.
       parameters:
         - in: path
           name: file_path
@@ -326,13 +328,17 @@ paths:
               $ref: '#/components/schemas/PatchFileRequest'
       responses:
         '204':
-          description: File moved or renamed successfully.
+          description: File moved or renamed successfully (also when nothing actually changes).
         '400':
-          description: Bad request (e.g., invalid path).
+          description: An invalid name, or neither field given (`Nothing to change`).
         '401':
           description: Unauthorized.
         '404':
-          description: File or destination folder not found.
+          description: The file doesn't exist. Nothing is changed or created.
+        '409':
+          description: A file with the target name already exists in the target folder. Nothing is changed.
+        '422':
+          description: The request body has an unknown field.
         '500':
           description: Internal server error (Failed to move or rename file).
     delete:
@@ -623,7 +629,7 @@ paths:
           description: Internal server error (Failed to remove files/folders).
     patch:
       summary: Rename or move a folder
-      description: Renames a folder or moves it to a different parent folder path.
+      description: Renames a folder, moves it to a different parent folder path, or both. The change is all-or-nothing, and destination folders are only created if it succeeds. The root folder can't be renamed or moved, and a folder can't be moved into itself or its subfolders.
       parameters:
         - in: path
           name: folder_path
@@ -638,22 +644,28 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
+              description: At least one field is required. Unknown fields are rejected with `422`.
               properties:
                 folder_name:
                   type: string
-                  description: New name for the folder.
+                  description: 'New name for the folder: 1-255 bytes, not `.` or `..`, and no `/`, `\\`, or control characters.'
                 parent_folder_path:
                   type: string
-                  description: New destination folder path.
+                  description: 'New destination folder path. Missing folders are created. Each folder name must be 1-255 bytes, not `.` or `..`, and no `/`, `\\`, or control characters.'
       responses:
         '204':
-          description: Folder successfully renamed/moved.
+          description: Folder successfully renamed/moved (also when nothing actually changes).
         '400':
-          description: Bad request.
+          description: An invalid name, neither field given, the root folder, or a move into the folder's own subtree.
         '401':
           description: Unauthorized.
         '404':
-          description: Folder not found.
+          description: The folder doesn't exist. Nothing is changed or created.
+        '409':
+          description: A folder with the target name already exists in the target folder. Nothing is changed.
+        '422':
+          description: The request body has an unknown field.
         '500':
           description: Internal server error.
     options:

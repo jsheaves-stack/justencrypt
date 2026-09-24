@@ -1,6 +1,6 @@
 use rocket::{
     async_test,
-    http::{ContentType, Status},
+    http::{ContentType, Cookie, Status},
     local::asynchronous::Client,
     routes, tokio,
 };
@@ -189,4 +189,233 @@ async fn test_get_file_not_found() {
         .await;
 
     assert_eq!(response.status(), Status::NotFound);
+}
+
+async fn patch_client() -> (Client, Cookie<'static>, TestUser) {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket
+        .mount("/file", routes![put_file, get_file, patch_file])
+        .mount("/folder", routes![get_folder]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    (client, cookie, test_user)
+}
+
+async fn put(client: &Client, cookie: &Cookie<'static>, path: &str, body: &str) {
+    let response = client
+        .put(format!("/file/{}", path))
+        .private_cookie(cookie.clone())
+        .body(body)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Created);
+}
+
+async fn patch(client: &Client, cookie: &Cookie<'static>, path: &str, body: &str) -> Status {
+    client
+        .patch(format!("/file/{}", path))
+        .private_cookie(cookie.clone())
+        .header(ContentType::JSON)
+        .body(body)
+        .dispatch()
+        .await
+        .status()
+}
+
+async fn get(client: &Client, cookie: &Cookie<'static>, path: &str) -> (Status, String) {
+    let response = client
+        .get(path.to_string())
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await;
+    let status = response.status();
+
+    (status, response.into_string().await.unwrap_or_default())
+}
+
+#[async_test]
+async fn test_patch_missing_file_is_not_found_and_creates_nothing() {
+    let (client, cookie, _test_user) = patch_client().await;
+
+    assert_eq!(
+        patch(&client, &cookie, "ghost.txt", r#"{"file_name": "z.txt"}"#).await,
+        Status::NotFound
+    );
+    assert_eq!(
+        patch(
+            &client,
+            &cookie,
+            "ghost.txt",
+            r#"{"parent_folder_path": "auto/created/dir"}"#
+        )
+        .await,
+        Status::NotFound
+    );
+    assert_eq!(
+        get(&client, &cookie, "/folder/auto").await.0,
+        Status::NotFound
+    );
+}
+
+#[async_test]
+async fn test_patch_file_onto_an_existing_name_is_a_conflict() {
+    let (client, cookie, _test_user) = patch_client().await;
+    put(&client, &cookie, "x.txt", "x").await;
+    put(&client, &cookie, "y.txt", "y").await;
+    put(&client, &cookie, "dir/x.txt", "dir-x").await;
+
+    assert_eq!(
+        patch(&client, &cookie, "x.txt", r#"{"file_name": "y.txt"}"#).await,
+        Status::Conflict
+    );
+    assert_eq!(
+        patch(
+            &client,
+            &cookie,
+            "x.txt",
+            r#"{"parent_folder_path": "dir"}"#
+        )
+        .await,
+        Status::Conflict
+    );
+
+    assert_eq!(
+        get(&client, &cookie, "/file/x.txt").await,
+        (Status::Ok, "x".into())
+    );
+    assert_eq!(
+        get(&client, &cookie, "/file/y.txt").await,
+        (Status::Ok, "y".into())
+    );
+    assert_eq!(
+        get(&client, &cookie, "/file/dir/x.txt").await,
+        (Status::Ok, "dir-x".into())
+    );
+}
+
+#[async_test]
+async fn test_patch_file_rejects_invalid_names() {
+    let (client, cookie, _test_user) = patch_client().await;
+    put(&client, &cookie, "x.txt", "x").await;
+    let too_long = "n".repeat(256);
+
+    for name in [
+        "",
+        ".",
+        "..",
+        "evil/name.txt",
+        "evil\\name.txt",
+        "nul\u{0}name",
+        "line\nbreak",
+        too_long.as_str(),
+    ] {
+        let body = serde_json::json!({ "file_name": name }).to_string();
+
+        assert_eq!(
+            patch(&client, &cookie, "x.txt", &body).await,
+            Status::BadRequest,
+            "name {:?}",
+            name
+        );
+    }
+
+    let body = serde_json::json!({ "parent_folder_path": "ok/bad\u{0}dir" }).to_string();
+    assert_eq!(
+        patch(&client, &cookie, "x.txt", &body).await,
+        Status::BadRequest
+    );
+    assert_eq!(
+        get(&client, &cookie, "/folder/ok").await.0,
+        Status::NotFound
+    );
+
+    assert_eq!(
+        get(&client, &cookie, "/file/x.txt").await,
+        (Status::Ok, "x".into())
+    );
+}
+
+// Rename and move happen together or not at all.
+#[async_test]
+async fn test_patch_file_rename_and_move_is_all_or_nothing() {
+    let (client, cookie, _test_user) = patch_client().await;
+    put(&client, &cookie, "x.txt", "x").await;
+    put(&client, &cookie, "dir/z.txt", "z").await;
+
+    let status = patch(
+        &client,
+        &cookie,
+        "x.txt",
+        r#"{"file_name": "z.txt", "parent_folder_path": "dir"}"#,
+    )
+    .await;
+
+    assert_eq!(status, Status::Conflict);
+    assert_eq!(
+        get(&client, &cookie, "/file/x.txt").await,
+        (Status::Ok, "x".into())
+    );
+    assert_eq!(
+        get(&client, &cookie, "/file/z.txt").await.0,
+        Status::NotFound
+    );
+
+    let status = patch(
+        &client,
+        &cookie,
+        "x.txt",
+        r#"{"file_name": "moved.txt", "parent_folder_path": "new/dir"}"#,
+    )
+    .await;
+
+    assert_eq!(status, Status::NoContent);
+    assert_eq!(
+        get(&client, &cookie, "/file/new/dir/moved.txt").await,
+        (Status::Ok, "x".into())
+    );
+    assert_eq!(
+        get(&client, &cookie, "/file/x.txt").await.0,
+        Status::NotFound
+    );
+}
+
+#[async_test]
+async fn test_patch_file_with_nothing_to_change_is_rejected() {
+    let (client, cookie, _test_user) = patch_client().await;
+    put(&client, &cookie, "x.txt", "x").await;
+
+    assert_eq!(
+        patch(&client, &cookie, "x.txt", "{}").await,
+        Status::BadRequest
+    );
+
+    let unknown_field = patch(&client, &cookie, "x.txt", r#"{"filename": "typo.txt"}"#).await;
+    assert!(
+        unknown_field.code >= 400 && unknown_field.code < 500,
+        "unknown field got {}",
+        unknown_field
+    );
+    assert_eq!(
+        get(&client, &cookie, "/file/x.txt").await,
+        (Status::Ok, "x".into())
+    );
+}
+
+#[async_test]
+async fn test_patch_file_to_its_own_name_is_a_no_op() {
+    let (client, cookie, _test_user) = patch_client().await;
+    put(&client, &cookie, "x.txt", "x").await;
+
+    assert_eq!(
+        patch(&client, &cookie, "x.txt", r#"{"file_name": "x.txt"}"#).await,
+        Status::NoContent
+    );
+    assert_eq!(
+        get(&client, &cookie, "/file/x.txt").await,
+        (Status::Ok, "x".into())
+    );
 }

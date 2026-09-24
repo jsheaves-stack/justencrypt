@@ -1,9 +1,9 @@
-// Unit tests for `sqlite::move_folder`.
+// Unit tests for moving folders with `sqlite::update_folder`.
 //
 // Moving a folder underneath one of its own descendants creates a cycle in the
 // folder tree, and the folder-total triggers then recurse forever, growing in
 // memory until the process dies. There is deliberately no schema-level guard
-// against this: `move_folder`'s own check is the only thing preventing it, so
+// against this: `update_folder`'s own check is the only thing preventing it, so
 // these tests are the safety net.
 //
 // Every test that could trigger the runaway arms a `Watchdog`, which
@@ -31,6 +31,11 @@ use crate::{
     db::{migrations::get_migrations, sqlite},
     enums::db_error::DbError,
 };
+
+// A move with no rename.
+fn move_folder(db: &mut Db, source: &str, destination: &str) -> Result<(), DbError> {
+    sqlite::update_folder(db, source, None, Some(destination))
+}
 
 // Interrupts whatever statement is running on the connection once `limit` has
 // passed, unless it has been dropped first.
@@ -149,14 +154,14 @@ fn test_move_folder_rejects_a_move_into_its_own_subtree_for_every_path_spelling(
         "a/b/c/d",
         "a//b/new",
     ] {
-        let result = sqlite::move_folder(&mut db, "a/b", destination);
+        let result = move_folder(&mut db, "a/b", destination);
 
         assert_rejected_as_cycle(result, &format!("destination '{destination}'"));
     }
 
     // The same, with the source spelled differently.
     for source in ["/a/b/", "./a/b", "a//b", "a/./b"] {
-        let result = sqlite::move_folder(&mut db, source, "a/b/c");
+        let result = move_folder(&mut db, source, "a/b/c");
 
         assert_rejected_as_cycle(result, &format!("source '{source}'"));
     }
@@ -175,7 +180,7 @@ fn test_move_folder_rejected_move_rolls_back_the_destination_it_created() {
     sqlite::add_folder(&mut db, "a/b").unwrap();
     let root_before = totals(&db, 1);
 
-    let result = sqlite::move_folder(&mut db, "a/b", "a//b/new/deeper");
+    let result = move_folder(&mut db, "a/b", "a//b/new/deeper");
 
     assert_rejected_as_cycle(result, "destination that has to be created first");
     assert_eq!(sqlite::get_folder_id(&db, "a/b/new").unwrap(), None);
@@ -189,12 +194,12 @@ fn test_move_folder_rejects_the_root_and_unknown_sources() {
     sqlite::add_folder(&mut db, "a").unwrap();
 
     for root in ["", "/"] {
-        let result = sqlite::move_folder(&mut db, root, "a");
+        let result = move_folder(&mut db, root, "a");
 
         assert_rejected_as_cycle(result, &format!("moving the root as '{root}'"));
     }
 
-    let result = sqlite::move_folder(&mut db, "nope", "a");
+    let result = move_folder(&mut db, "nope", "a");
 
     assert!(matches!(result, Err(DbError::NotFound)), "got {result:?}");
 }
@@ -208,13 +213,13 @@ fn test_move_folder_allows_moves_that_are_not_cycles() {
     let c = folder_id(&db, "a/b/c");
 
     // Up into an ancestor, sideways into a sibling, and out to the root.
-    sqlite::move_folder(&mut db, "a/b/c", "a").unwrap();
+    move_folder(&mut db, "a/b/c", "a").unwrap();
     assert_eq!(sqlite::get_folder_id(&db, "a/c").unwrap(), Some(c));
 
-    sqlite::move_folder(&mut db, "a/c", "x").unwrap();
+    move_folder(&mut db, "a/c", "x").unwrap();
     assert_eq!(sqlite::get_folder_id(&db, "x/c").unwrap(), Some(c));
 
-    sqlite::move_folder(&mut db, "x/c", "").unwrap();
+    move_folder(&mut db, "x/c", "").unwrap();
     assert_eq!(sqlite::get_folder_id(&db, "c").unwrap(), Some(c));
 }
 
@@ -225,7 +230,7 @@ fn test_move_folder_creates_a_missing_destination() {
     sqlite::add_folder(&mut db, "a/b").unwrap();
     let b = folder_id(&db, "a/b");
 
-    sqlite::move_folder(&mut db, "a/b", "x/y").unwrap();
+    move_folder(&mut db, "a/b", "x/y").unwrap();
 
     assert_eq!(sqlite::get_folder_id(&db, "x/y/b").unwrap(), Some(b));
     assert_eq!(sqlite::get_folder_id(&db, "a/b").unwrap(), None);
@@ -246,7 +251,7 @@ fn test_move_folder_moves_a_subtree_and_keeps_the_totals_correct() {
     );
     add_file_row(&db, c, "f", 10);
 
-    sqlite::move_folder(&mut db, "a/b", "x").unwrap();
+    move_folder(&mut db, "a/b", "x").unwrap();
 
     assert_eq!(sqlite::get_folder_id(&db, "x/b/c").unwrap(), Some(c));
     assert_eq!(sqlite::get_folder_id(&db, "a/b").unwrap(), None);
@@ -292,7 +297,7 @@ fn test_move_folder_checks_for_cycles_under_the_write_lock() {
             let mut db = pool.get().unwrap();
             let _watchdog = Watchdog::arm(&db, Duration::from_secs(5));
 
-            sqlite::move_folder(&mut db, "y", "z/w")
+            move_folder(&mut db, "y", "z/w")
         })
     };
 

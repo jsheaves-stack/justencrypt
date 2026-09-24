@@ -69,6 +69,9 @@ pub enum RequestError {
 
     #[error("Account already exists")]
     AccountAlreadyExists,
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
 }
 
 impl From<DbError> for RequestError {
@@ -77,6 +80,7 @@ impl From<DbError> for RequestError {
             DbError::NotFound => RequestError::NotFound,
             DbError::UserDoesNotExist => RequestError::Unauthorized,
             DbError::InvalidInput(msg) => RequestError::BadRequest(msg),
+            DbError::Conflict(msg) => RequestError::Conflict(msg),
             DbError::MissingFileName => RequestError::BadRequest("Missing file name".into()),
             DbError::InvalidPath => RequestError::BadRequest("Invalid path".into()),
             _ => RequestError::InternalServerError,

@@ -11,7 +11,10 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use crate::{db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError};
+use crate::{
+    db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError,
+    util::names::is_valid_entry_name,
+};
 
 pub fn verify_user_db_password(db_path: &Path, password: &SecretString) -> Result<(), DbError> {
     trace!(
@@ -811,206 +814,197 @@ pub fn add_folder(
     Ok(())
 }
 
-pub fn rename_folder(
-    db: &mut PooledConnection<SqliteConnectionManager>,
-    folder_path_str: &str,
-    new_folder_name_str: &str,
-) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::rename_folder with folder_path_str: '{}', new_folder_name_str: '{}'",
-        folder_path_str,
-        new_folder_name_str
-    );
+/// Maps a UNIQUE constraint violation to `Conflict`, and any other error to
+/// `FailedToUpdateFileInDb`.
+fn update_error(e: rusqlite::Error, what: &str) -> DbError {
+    match &e {
+        rusqlite::Error::SqliteFailure(failure, _)
+            if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            DbError::Conflict(format!("A {what} with that name already exists there"))
+        },
+        _ => {
+            error!("Failed to update {} in the db: {}", what, e);
 
-    let folder_id = get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
-
-    if new_folder_name_str.is_empty() || new_folder_name_str.contains('/') {
-        return Err(DbError::InvalidInput("Invalid folder name".to_string()));
+            DbError::FailedToUpdateFileInDb(e.to_string())
+        },
     }
+}
 
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+fn check_new_name(new_name: Option<&str>) -> Result<(), DbError> {
+    match new_name {
+        Some(name) if !is_valid_entry_name(name) => Err(DbError::InvalidInput(
+            "Names must be 1-255 bytes, not '.' or '..', and must not contain '/', '\\' or control characters".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
 
-    tx.execute(
-        "UPDATE folders SET name = ?1 WHERE id = ?2",
-        params![new_folder_name_str, folder_id],
-    )
-    .map(|_| ())
-    .map_err(|e| {
-        error!("Failed to rename folder in the db: {}", e);
+// Every folder name a destination path would create must be a valid name.
+// `.`, `..` and empty segments are skipped by path resolution, as elsewhere.
+fn check_destination(destination: Option<&str>) -> Result<(), DbError> {
+    let Some(destination) = destination else {
+        return Ok(());
+    };
 
-        DbError::FailedToUpdateFileInDb(e.to_string())
-    })?;
-
-    tx.commit()?;
-    trace!("Transaction committed. Exiting sqlite::rename_folder successfully.");
+    for component in Path::new(destination.trim_matches('/')).components() {
+        if let Component::Normal(name) = component {
+            check_new_name(Some(&name.to_string_lossy()))?;
+        }
+    }
 
     Ok(())
 }
 
-pub fn move_folder(
+/// Renames and/or moves the folder at `folder_path_str`, in one transaction:
+/// either both changes happen or neither does, and a destination created for a
+/// rejected request is rolled back. Fails with `NotFound` if the folder doesn't
+/// exist, `Conflict` if the target name is taken, and `InvalidInput` for an
+/// invalid name, the root folder, or a move into the folder's own subtree.
+pub fn update_folder(
     db: &mut PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
-    destination_folder_str: &str,
+    new_name: Option<&str>,
+    destination_folder_str: Option<&str>,
 ) -> Result<(), DbError> {
     trace!(
-        "Entering sqlite::move_folder with folder_path_str: '{}', destination_folder_str: '{}'",
+        "Entering sqlite::update_folder with folder_path_str: '{}', new_name: {:?}, destination: {:?}",
         folder_path_str,
+        new_name,
         destination_folder_str
     );
 
-    // Everything happens in one transaction: paths are resolved to ids, the
-    // destination is created, and the cycle check is made against those ids,
-    // so a rejected move rolls back any destination folders it created.
+    check_new_name(new_name)?;
+    check_destination(destination_folder_str)?;
+
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     let folder_id = get_folder_id(&tx, folder_path_str)?.ok_or(DbError::NotFound)?;
 
     if folder_id == 1 {
         return Err(DbError::InvalidInput(
-            "Cannot move the root folder".to_string(),
+            "Cannot rename or move the root folder".to_string(),
         ));
     }
 
-    let destination_parent_folder_id = get_or_create_folder(&tx, destination_folder_str)?;
-
-    // The folder-total triggers walk a folder's ancestors
-    // with `UNION ALL`, which never terminates (and grows without bound in
-    // memory) if the ancestors form a cycle. Keep the check by id and inside
-    // this transaction.
-    //
-    // `UNION` (not `UNION ALL`) de-duplicates rows, so this walk itself
-    // terminates even if the ancestor chain already contains a cycle.
-    let creates_cycle: bool = tx.query_row(
-        r#"WITH RECURSIVE ancestors(id) AS (
-               SELECT ?1
-               UNION
-               SELECT f.parent_folder_id FROM folders f
-               INNER JOIN ancestors a ON f.id = a.id
-               WHERE f.parent_folder_id IS NOT NULL
-           )
-           SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = ?2)"#,
-        params![destination_parent_folder_id, folder_id],
-        |row| row.get(0),
+    let (current_name, current_parent_id): (String, i32) = tx.query_row(
+        "SELECT name, parent_folder_id FROM folders WHERE id = ?1",
+        params![folder_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
 
-    if creates_cycle {
-        return Err(DbError::InvalidInput(
-            "Cannot move a folder into itself or its subfolders".to_string(),
-        ));
-    }
+    let target_parent_id = match destination_folder_str {
+        Some(destination) => {
+            let destination_id = get_or_create_folder(&tx, destination)?;
+
+            // The folder-total triggers walk a folder's ancestors
+            // with `UNION ALL`, which never terminates (and grows without bound in
+            // memory) if the ancestors form a cycle. Keep the check by id and inside
+            // this transaction.
+            //
+            // `UNION` (not `UNION ALL`) de-duplicates rows, so this walk itself
+            // terminates even if the ancestor chain already contains a cycle.
+            let creates_cycle: bool = tx.query_row(
+                r#"WITH RECURSIVE ancestors(id) AS (
+                       SELECT ?1
+                       UNION
+                       SELECT f.parent_folder_id FROM folders f
+                       INNER JOIN ancestors a ON f.id = a.id
+                       WHERE f.parent_folder_id IS NOT NULL
+                   )
+                   SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = ?2)"#,
+                params![destination_id, folder_id],
+                |row| row.get(0),
+            )?;
+
+            if creates_cycle {
+                return Err(DbError::InvalidInput(
+                    "Cannot move a folder into itself or its subfolders".to_string(),
+                ));
+            }
+
+            destination_id
+        },
+        None => current_parent_id,
+    };
 
     tx.execute(
-        "UPDATE folders SET parent_folder_id = ?1 WHERE id = ?2",
-        params![destination_parent_folder_id, folder_id],
-    )
-    .map(|_| ())
-    .map_err(|e| {
-        error!("Failed to move folder in the db: {}", e);
-
-        DbError::FailedToUpdateFileInDb(e.to_string())
-    })?;
-
-    tx.commit()?;
-    trace!("Transaction committed. Exiting sqlite::move_folder successfully.");
-
-    Ok(())
-}
-
-pub fn rename_file(
-    db: &mut PooledConnection<SqliteConnectionManager>,
-    file_path_str: &str,
-    new_file_name_str: &str,
-) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::rename_file with file_path_str: '{}', new_file_name_str: '{}'",
-        file_path_str,
-        new_file_name_str
-    );
-    let path = Path::new(file_path_str.trim_matches('/'));
-    let original_file_name = path
-        .file_name()
-        .ok_or(DbError::MissingFileName)?
-        .to_string_lossy();
-
-    let current_parent_path = path.parent().unwrap_or(Path::new(""));
-    let current_parent_folder_id = get_folder_id(db, &current_parent_path.to_string_lossy())?
-        .ok_or(DbError::MissingFileName)?;
-    trace!(
-        "Found file '{}' in parent folder ID {}",
-        original_file_name,
-        current_parent_folder_id
-    );
-
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    trace!("Transaction started for renaming file.");
-
-    tx.execute(
-        "UPDATE files SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE parent_folder_id = ?2 AND name = ?3",
+        "UPDATE folders SET name = ?1, parent_folder_id = ?2 WHERE id = ?3",
         params![
-            new_file_name_str,
-            current_parent_folder_id,
-            original_file_name
+            new_name.unwrap_or(&current_name),
+            target_parent_id,
+            folder_id
         ],
     )
-    .map(|_| ())
-    .map_err(|e| {
-        error!("Failed to rename file in the db: {}", e);
-
-        DbError::FailedToUpdateFileInDb(e.to_string())
-    })?;
-    trace!("File rename executed.");
+    .map_err(|e| update_error(e, "folder"))?;
 
     tx.commit()?;
-    trace!("Transaction committed. Exiting sqlite::rename_file successfully.");
+    trace!("Transaction committed. Exiting sqlite::update_folder successfully.");
 
     Ok(())
 }
 
-pub fn move_file(
+/// Renames and/or moves the file at `file_path_str`, in one transaction:
+/// either both changes happen or neither does, and a destination created for a
+/// rejected request is rolled back. Fails with `NotFound` if the file doesn't
+/// exist, `Conflict` if the target name is taken, and `InvalidInput` for an
+/// invalid name.
+pub fn update_file(
     db: &mut PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
-    destination_folder_str: &str,
+    new_name: Option<&str>,
+    destination_folder_str: Option<&str>,
 ) -> Result<(), DbError> {
     trace!(
-        "Entering sqlite::move_file with file_path_str: '{}', destination_folder_str: '{}'",
+        "Entering sqlite::update_file with file_path_str: '{}', new_name: {:?}, destination: {:?}",
         file_path_str,
+        new_name,
         destination_folder_str
     );
+
+    check_new_name(new_name)?;
+    check_destination(destination_folder_str)?;
+
     let path = Path::new(file_path_str.trim_matches('/'));
     let file_name = path
         .file_name()
         .ok_or(DbError::MissingFileName)?
-        .to_string_lossy();
-
-    let current_parent_path = path.parent().unwrap_or(Path::new(""));
-    let current_parent_folder_id = get_folder_id(db, &current_parent_path.to_string_lossy())?
-        .ok_or(DbError::MissingFileName)?;
-    trace!(
-        "Found file '{}' in source folder ID {}",
-        file_name,
-        current_parent_folder_id
-    );
-
-    let destination_folder_id = get_folder_id_and_create_if_missing(db, destination_folder_str)?;
-    trace!("Destination folder ID is {}", destination_folder_id);
+        .to_string_lossy()
+        .to_string();
+    let parent_path = path.parent().unwrap_or(Path::new(""));
 
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    trace!("Transaction started for moving file.");
+
+    // The file must exist before anything, including destination folders, is
+    // created.
+    let parent_id = get_folder_id(&tx, &parent_path.to_string_lossy())?.ok_or(DbError::NotFound)?;
+    let file_id: i32 = tx
+        .query_row(
+            "SELECT id FROM files WHERE parent_folder_id = ?1 AND name = ?2",
+            params![parent_id, file_name],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(DbError::NotFound)?;
+
+    let target_parent_id = match destination_folder_str {
+        Some(destination) => get_or_create_folder(&tx, destination)?,
+        None => parent_id,
+    };
+    let target_name = new_name.unwrap_or(&file_name);
+    let target_extension = Path::new(target_name)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_string())
+        .unwrap_or_default();
 
     tx.execute(
-        "UPDATE files SET parent_folder_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE parent_folder_id = ?2 AND name = ?3",
-        params![destination_folder_id, current_parent_folder_id, file_name],
+        "UPDATE files SET name = ?1, parent_folder_id = ?2, file_extension = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
+        params![target_name, target_parent_id, target_extension, file_id],
     )
-    .map(|_| ())
-    .map_err(|e| {
-        error!("Failed to move file in the db: {}", e);
-
-        DbError::FailedToAddFileToDb(e.to_string())
-    })?;
-    trace!("File move executed.");
+    .map_err(|e| update_error(e, "file"))?;
 
     tx.commit()?;
-    trace!("Transaction committed. Exiting sqlite::move_file successfully.");
+    trace!("Transaction committed. Exiting sqlite::update_file successfully.");
 
     Ok(())
 }

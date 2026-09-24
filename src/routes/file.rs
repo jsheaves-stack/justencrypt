@@ -472,28 +472,24 @@ pub async fn patch_file(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [PATCH /file/{}]", file_path);
 
-    let mut current_path_buf = file_path.to_path_buf();
+    let PatchFileData {
+        file_name,
+        parent_folder_path,
+    } = patch_data.into_inner();
 
-    if let Some(new_name) = &patch_data.file_name {
-        let session = auth.session.clone();
-        session
-            .rename_file(current_path_buf.clone(), new_name.clone())
-            .await?;
-
-        current_path_buf.set_file_name(new_name);
+    if file_name.is_none() && parent_folder_path.is_none() {
+        return Err(RequestError::BadRequest("Nothing to change".into()));
     }
 
-    if let Some(destination_folder) = &patch_data.parent_folder_path {
-        let session = auth.session.clone();
-        session
-            .move_file(current_path_buf, destination_folder.clone())
-            .await?;
-    }
+    auth.session
+        .update_file(file_path.to_path_buf(), file_name, parent_folder_path)
+        .await?;
 
     Ok(RequestSuccess::NoContent)
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchFileData {
     pub file_name: Option<String>,
     pub parent_folder_path: Option<String>,

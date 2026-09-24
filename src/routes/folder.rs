@@ -81,28 +81,24 @@ pub async fn patch_folder(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [PATCH /folder/{}]", folder_path);
 
-    let mut current_path_buf = folder_path.to_path_buf();
+    let PatchFolderData {
+        folder_name,
+        parent_folder_path,
+    } = patch_data.into_inner();
 
-    if let Some(new_name) = &patch_data.folder_name {
-        let session = auth.session.clone();
-        session
-            .rename_folder(current_path_buf.clone(), new_name.clone())
-            .await?;
-
-        current_path_buf.set_file_name(new_name);
+    if folder_name.is_none() && parent_folder_path.is_none() {
+        return Err(RequestError::BadRequest("Nothing to change".into()));
     }
 
-    if let Some(destination_folder) = &patch_data.parent_folder_path {
-        let session = auth.session.clone();
-        session
-            .move_folder(current_path_buf, destination_folder.clone())
-            .await?;
-    }
+    auth.session
+        .update_folder(folder_path.to_path_buf(), folder_name, parent_folder_path)
+        .await?;
 
     Ok(RequestSuccess::NoContent)
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchFolderData {
     pub folder_name: Option<String>,
     pub parent_folder_path: Option<String>,

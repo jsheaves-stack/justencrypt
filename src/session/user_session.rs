@@ -434,60 +434,50 @@ impl UserSession {
         Ok(())
     }
 
-    pub async fn rename_folder(
+    /// Renames and/or moves a folder in one transaction.
+    pub async fn update_folder(
         &self,
         folder_path: PathBuf,
-        new_folder_name: String,
+        new_name: Option<String>,
+        destination: Option<String>,
     ) -> Result<(), DbError> {
         trace!(
-            "Entering UserSession::rename_folder for path: {:?}, new_name: {}",
-            folder_path,
-            new_folder_name
+            "Entering UserSession::update_folder for path: {:?}",
+            folder_path
         );
 
-        let folder_path_str = folder_path
-            .to_str()
-            .ok_or(DbError::InvalidPath)?
-            .to_string();
-
         self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for rename_folder");
-
-            sqlite::rename_folder(&mut db, &folder_path_str, &new_folder_name)
+            sqlite::update_folder(
+                &mut db,
+                folder_path.to_str().ok_or(DbError::InvalidPath)?,
+                new_name.as_deref(),
+                destination.as_deref(),
+            )
         })
-        .await?;
-
-        trace!("Exiting UserSession::rename_folder successfully.");
-
-        Ok(())
+        .await
     }
 
-    pub async fn move_folder(
+    /// Renames and/or moves a file in one transaction.
+    pub async fn update_file(
         &self,
-        folder_path: PathBuf,
-        destination_folder: String,
+        file_path: PathBuf,
+        new_name: Option<String>,
+        destination: Option<String>,
     ) -> Result<(), DbError> {
         trace!(
-            "Entering UserSession::move_folder for path: {:?}, destination: {}",
-            folder_path,
-            destination_folder
+            "Entering UserSession::update_file for path: {:?}",
+            file_path
         );
 
-        let folder_path_str = folder_path
-            .to_str()
-            .ok_or(DbError::InvalidPath)?
-            .to_string();
-
         self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for move_folder");
-
-            sqlite::move_folder(&mut db, &folder_path_str, &destination_folder)
+            sqlite::update_file(
+                &mut db,
+                file_path.to_str().ok_or(DbError::InvalidPath)?,
+                new_name.as_deref(),
+                destination.as_deref(),
+            )
         })
-        .await?;
-
-        trace!("Exiting UserSession::move_folder successfully.");
-
-        Ok(())
+        .await
     }
 
     pub async fn get_folder_id(&self, folder_path: PathBuf) -> Result<Option<i32>, DbError> {
@@ -573,58 +563,5 @@ impl UserSession {
         trace!("Exiting UserSession::get_file_decryption_data.");
 
         Ok(result)
-    }
-
-    pub async fn rename_file(
-        &self,
-        file_path: PathBuf,
-        new_file_name: String,
-    ) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::rename_file for path: {:?}, new_name: {}",
-            file_path,
-            new_file_name
-        );
-
-        let db_pool = self.db_pool.clone();
-        let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
-
-        task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for rename_file");
-
-            let mut db = db_pool.get()?;
-            sqlite::rename_file(&mut db, &file_path_str, &new_file_name)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
-
-        trace!("Exiting UserSession::rename_file successfully.");
-
-        Ok(())
-    }
-
-    pub async fn move_file(
-        &self,
-        file_path: PathBuf,
-        destination_folder: String,
-    ) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::move_file for path: {:?}, destination: {}",
-            file_path,
-            destination_folder
-        );
-
-        let file_path_str = file_path.to_str().ok_or(DbError::InvalidPath)?.to_string();
-
-        self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for move_file");
-
-            sqlite::move_file(&mut db, &file_path_str, &destination_folder)
-        })
-        .await?;
-
-        trace!("Exiting UserSession::move_file successfully.");
-
-        Ok(())
     }
 }
