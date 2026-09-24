@@ -131,7 +131,7 @@ pub async fn get_thumbnail(
                 })?;
 
         encryptor
-            .encrypt_stream(&mut thumbnail_buffer)
+            .encrypt_stream(&mut thumbnail_buffer, u64::MAX)
             .await
             .map_err(|e| {
                 error!("Encryption error: {}", e);

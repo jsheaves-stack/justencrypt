@@ -413,6 +413,9 @@ pub fn add_file(
         file_extension
     );
 
+    let total_size = i64::try_from(metadata.total_size)
+        .map_err(|_| DbError::InvalidInput("File is too large".to_string()))?;
+
     let parent_folder_id = get_folder_id_and_create_if_missing(db, &parent_path.to_string_lossy())?;
     trace!("Parent folder ID is: {}", parent_folder_id);
 
@@ -438,7 +441,7 @@ pub fn add_file(
             file_extension,
             metadata.key.unprotected_as_bytes(),
             metadata.encryption_version,
-            metadata.total_size as i64,
+            total_size,
         ],
     ).map(|_| ())
     .map_err(|e| {

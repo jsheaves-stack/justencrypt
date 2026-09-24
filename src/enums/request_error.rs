@@ -63,6 +63,9 @@ pub enum RequestError {
 
     #[error("Too many active uploads")]
     TooManyActiveUploads,
+
+    #[error("Payload too large")]
+    PayloadTooLarge,
 }
 
 impl From<DbError> for RequestError {

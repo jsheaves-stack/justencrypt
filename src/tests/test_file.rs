@@ -7,6 +7,7 @@ use rocket::{
 
 use super::*;
 use crate::{
+    db::sqlite,
     routes::file::{delete_file, file_options, get_file, patch_file, put_file},
     util::sharded_path::get_sharded_path,
     AppState,
@@ -314,4 +315,98 @@ async fn test_get_file_range_invalid() {
         .await;
 
     assert_eq!(response.status(), Status::RangeNotSatisfiable);
+}
+
+// Every file under the user's directory except the user's own database files,
+// i.e. encrypted blobs, partial uploads and cached thumbnails.
+fn stored_files(user_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+
+            if path.is_dir() {
+                walk(&path, depth + 1, out);
+            } else if depth > 0 {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(user_dir, 0, &mut out);
+
+    out
+}
+
+#[async_test]
+async fn test_put_file_over_the_file_limit_is_rejected_and_leaves_nothing_behind() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = with_upload_limits(rocket, 1000, 1 << 30);
+    let rocket = rocket.mount("/file", routes![put_file, get_file]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    let response = client
+        .put("/file/too-big.bin")
+        .private_cookie(cookie.clone())
+        .body(vec![b'A'; 1001])
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::PayloadTooLarge);
+
+    let response = client
+        .get("/file/too-big.bin")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::NotFound);
+    assert_eq!(
+        stored_files(&test_user.path),
+        Vec::<std::path::PathBuf>::new()
+    );
+
+    let session = client
+        .rocket()
+        .state::<AppState>()
+        .unwrap()
+        .sessions
+        .get_by_id(&session_id)
+        .await
+        .unwrap();
+    let db = session.db_pool.get().unwrap();
+
+    assert!(sqlite::get_all_active_uploads(&db).unwrap().is_empty());
+}
+
+#[async_test]
+async fn test_put_file_at_the_file_limit_is_stored_in_full() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = with_upload_limits(rocket, 1000, 1 << 30);
+    let rocket = rocket.mount("/file", routes![put_file, get_file]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    let response = client
+        .put("/file/exact.bin")
+        .private_cookie(cookie.clone())
+        .body(vec![b'A'; 1000])
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Created);
+
+    let response = client
+        .get("/file/exact.bin")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.into_bytes().await.unwrap(), vec![b'A'; 1000]);
 }

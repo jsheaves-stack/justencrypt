@@ -240,6 +240,8 @@ paths:
           description: File uploaded and encrypted successfully.
         '401':
           description: Unauthorized.
+        '413':
+          description: The body is larger than the maximum file size (`JUSTENCRYPT_LIMITS_FILE`). Nothing is stored.
         '500':
           description: Internal server error (Failed to encrypt or store file).
     get:
@@ -389,7 +391,7 @@ paths:
   /file/upload/chunk/{upload_id}:
     put:
       summary: Upload a file chunk
-      description: Uploads a 64KB chunk (or the last chunk) of the file at the specified offset.
+      description: Uploads one or more consecutive 64KB chunks of the file, starting at the specified offset. Every chunk except the last chunk of the file must be exactly 64KB. A single request may carry at most `JUSTENCRYPT_LIMITS_FILE_CHUNK` bytes (default 32MiB), and data may not extend past the maximum file size. Re-uploading a chunk replaces it.
       parameters:
         - in: path
           name: upload_id
@@ -414,16 +416,20 @@ paths:
       responses:
         '204':
           description: Chunk uploaded successfully.
+        '400':
+          description: The offset is not a multiple of 65536.
         '401':
           description: Unauthorized.
         '404':
           description: Upload session not found.
+        '413':
+          description: The body is larger than the per-request chunk limit, or the data would extend past the maximum file size. Chunks written before the limit was reached are kept.
         '500':
           description: Internal server error (Failed to encrypt or store chunk).
   /file/upload/finalize/{upload_id}:
     post:
       summary: Finalize a chunked upload
-      description: Completes the chunked upload process. Verifies that all chunks have been received and adds the file to the user's storage.
+      description: Completes the chunked upload process. Verifies that the uploaded chunks make up exactly `total_size` bytes and adds the file to the user's storage. If verification fails, the upload stays active so the client can upload the missing data and finalize again.
       parameters:
         - in: path
           name: upload_id
@@ -437,16 +443,22 @@ paths:
           schema:
             type: integer
             format: int64
-          description: The total size of the original plaintext file in bytes.
+          description: The total size of the original plaintext file in bytes. It must match the uploaded data exactly.
       responses:
         '201':
           description: File finalized and stored successfully.
         '400':
-          description: Bad request (e.g., missing chunks).
+          description: |
+            The uploaded data does not match `total_size`. The body is one of:
+            - `Missing chunks: [0, 1, ...]`, listing at most 100 chunk indexes, followed by `(and N more)` if more are missing.
+            - `Chunk N is incomplete: expected 65536 bytes, got M`, for a short chunk before the last one.
+            - `total_size does not match uploaded data`, when the last chunk's length or the number of chunks doesn't fit.
         '401':
           description: Unauthorized.
         '404':
           description: Upload session not found.
+        '413':
+          description: '`total_size` is larger than the maximum file size (`JUSTENCRYPT_LIMITS_FILE`).'
         '500':
           description: Internal server error (Failed to finalize or store file metadata).
   /admin/session:

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env,
     io::ErrorKind,
     path::PathBuf,
@@ -41,7 +41,8 @@ fn unix_now_secs() -> u64 {
 pub struct UploadState {
     pub file_path: PathBuf,
     pub encoded_file_name: String,
-    pub written_chunks: Arc<Mutex<HashSet<u64>>>,
+    /// Plaintext length of every chunk written so far, by chunk index.
+    pub written_chunks: Arc<Mutex<BTreeMap<u64, u32>>>,
     pub encryptor: Arc<Mutex<ChunkEncryptor>>,
     /// Unix seconds of the last activity. Atomic so it can be read and
     /// refreshed without taking a lock.
@@ -53,7 +54,7 @@ impl UploadState {
         Self {
             file_path,
             encoded_file_name,
-            written_chunks: Arc::new(Mutex::new(HashSet::new())),
+            written_chunks: Arc::new(Mutex::new(BTreeMap::new())),
             encryptor: Arc::new(Mutex::new(encryptor)),
             last_updated: Arc::new(AtomicU64::new(unix_now_secs())),
         }

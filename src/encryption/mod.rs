@@ -17,6 +17,15 @@ pub const KEY_LENGTH: usize = 32;
 pub const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000));
 pub const MPSC_CHANNEL_CAPACITY: usize = 2;
 
+/// Size on disk of an encrypted file holding `plaintext_len` bytes: every
+/// chunk carries its index, nonce and tag on top of its plaintext.
+pub fn encrypted_len(plaintext_len: u64) -> u64 {
+    let chunk_size = CHUNK_SIZE as u64;
+    let overhead = (ENCRYPTED_CHUNK_SIZE - CHUNK_SIZE) as u64;
+
+    plaintext_len + plaintext_len.div_ceil(chunk_size) * overhead
+}
+
 pub struct FileEncryptionMetadata {
     pub key: SecretKey,
     pub encryption_version: i32,

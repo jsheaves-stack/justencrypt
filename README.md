@@ -99,7 +99,8 @@ The application is configured through environment variables, which are loaded fr
 | `JUSTENCRYPT_ADMIN_API_KEY`                   | API key to enable and access administrative routes. | (none) |
 | `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size for form submissions. | `10MiB` |
 | `JUSTENCRYPT_LIMITS_DATA_FORM`                | Maximum size for data-form submissions. | `10MiB` |
-| `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file upload size. | `64GiB` |
+| `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file upload size. Larger uploads are rejected with `413`. | `64GiB` |
+| `JUSTENCRYPT_LIMITS_FILE_CHUNK`               | Maximum body size of a single chunked-upload request (`PUT /file/upload/chunk/...`). | `32MiB` |
 | `JUSTENCRYPT_LIMITS_JSON`                     | Maximum JSON payload size. | `10MiB` |
 | `JUSTENCRYPT_LIMITS_MSGPACK`                  | Maximum MessagePack payload size. | `1MiB` |
 | `JUSTENCRYPT_LIMITS_FILE_JPG`                 | Maximum size for JPG files. | `10GiB` |

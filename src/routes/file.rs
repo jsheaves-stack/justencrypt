@@ -1,7 +1,7 @@
-use std::{env, str::FromStr, time::Duration};
+use std::{collections::BTreeMap, env, time::Duration};
 
 use rocket::{
-    data::{ByteUnit, Data, ToByteUnit},
+    data::{ByteUnit, Data, Limits},
     delete, get,
     http::Status,
     options, patch, post, put,
@@ -16,7 +16,10 @@ use crate::{
         chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor, CHUNK_SIZE,
         MPSC_CHANNEL_CAPACITY,
     },
-    enums::{request_error::RequestError, request_success::RequestSuccess},
+    enums::{
+        encryption_error::EncryptionError, request_error::RequestError,
+        request_success::RequestSuccess,
+    },
     session::user_session::UploadState,
     util::{
         range::parse_range,
@@ -37,6 +40,103 @@ pub struct InitUploadResponse {
 #[derive(Serialize, Deserialize)]
 pub struct FinalizeErrorResponse {
     pub missing_chunks: Vec<u64>,
+}
+
+const DEFAULT_MAX_FILE_SIZE: u64 = 64 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_CHUNK_REQUEST_SIZE: u64 = 32 * 1024 * 1024;
+const MAX_REPORTED_MISSING_CHUNKS: usize = 100;
+
+/// Largest file, in plaintext bytes, that may be stored. Configured through
+/// Rocket's `file` limit (`JUSTENCRYPT_LIMITS_FILE`).
+fn max_file_size(limits: &Limits) -> u64 {
+    limits
+        .get("file")
+        .map(|limit| limit.as_u64())
+        .unwrap_or(DEFAULT_MAX_FILE_SIZE)
+}
+
+/// Most bytes a single chunk-upload request may carry. Configured through
+/// Rocket's `file-chunk` limit (`JUSTENCRYPT_LIMITS_FILE_CHUNK`).
+fn max_chunk_request_size(limits: &Limits) -> u64 {
+    limits
+        .get("file-chunk")
+        .map(|limit| limit.as_u64())
+        .unwrap_or(DEFAULT_MAX_CHUNK_REQUEST_SIZE)
+}
+
+/// Opens a request body so that reading more than `max_bytes` is detectable:
+/// Rocket ends the stream silently at its limit, so the limit is one byte
+/// higher and the encryptor reports the overflow.
+fn open_with_limit(data: Data<'_>, max_bytes: u64) -> rocket::data::DataStream<'_> {
+    data.open(ByteUnit::Byte(max_bytes.saturating_add(1)))
+}
+
+fn encryption_failure(e: EncryptionError) -> RequestError {
+    match e {
+        EncryptionError::TooLarge => RequestError::PayloadTooLarge,
+        EncryptionError::InvalidOffset(msg) => RequestError::BadRequest(msg),
+        e => {
+            error!("Encryption error: {}", e);
+
+            RequestError::FailedToProcessData
+        },
+    }
+}
+
+/// Checks that the chunks uploaded so far make up exactly `total_size`
+/// plaintext bytes: every chunk from the first to the last is present, every
+/// chunk but the last is full, and nothing lies past the end.
+fn check_uploaded_chunks(chunks: &BTreeMap<u64, u32>, total_size: u64) -> Result<(), RequestError> {
+    let chunk_size = CHUNK_SIZE as u64;
+    let expected_chunks = total_size.div_ceil(chunk_size);
+    let present = chunks.range(..expected_chunks).count() as u64;
+
+    if present < expected_chunks {
+        let missing_count = expected_chunks - present;
+        let missing: Vec<u64> = (0..expected_chunks)
+            .filter(|i| !chunks.contains_key(i))
+            .take(MAX_REPORTED_MISSING_CHUNKS)
+            .collect();
+        let mut message = format!("Missing chunks: {:?}", missing);
+
+        if missing_count > missing.len() as u64 {
+            message.push_str(&format!(
+                " (and {} more)",
+                missing_count - missing.len() as u64
+            ));
+        }
+
+        return Err(RequestError::BadRequest(message));
+    }
+
+    let size_mismatch =
+        || RequestError::BadRequest("total_size does not match uploaded data".to_string());
+
+    if chunks.len() as u64 != expected_chunks {
+        return Err(size_mismatch());
+    }
+
+    for (&index, &len) in chunks {
+        let is_last = index + 1 == expected_chunks;
+        let expected_len = if is_last {
+            total_size - index * chunk_size
+        } else {
+            chunk_size
+        };
+
+        if len as u64 != expected_len {
+            if is_last {
+                return Err(size_mismatch());
+            }
+
+            return Err(RequestError::BadRequest(format!(
+                "Chunk {} is incomplete: expected {} bytes, got {}",
+                index, expected_len, len
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 const DEFAULT_UPLOAD_TTL_SECONDS: u64 = 24 * 60 * 60;
@@ -128,6 +228,7 @@ pub async fn upload_chunk(
     upload_id: &str,
     offset: u64,
     auth: AuthenticatedSession,
+    limits: &Limits,
     data: Data<'_>,
 ) -> Result<RequestSuccess, RequestError> {
     trace!(
@@ -136,16 +237,20 @@ pub async fn upload_chunk(
         offset
     );
 
-    let max_file_size_str = env::var("JUSTENCRYPT_LIMITS_FILE").unwrap_or_else(|_| "64GiB".into());
-    let max_file_size = FromStr::from_str(&max_file_size_str)
-        .unwrap_or(ByteUnit::Gibibyte(64))
-        .as_u64();
+    if !offset.is_multiple_of(CHUNK_SIZE as u64) {
+        return Err(RequestError::BadRequest(format!(
+            "Offset must be a multiple of {}",
+            CHUNK_SIZE
+        )));
+    }
+
+    let max_file_size = max_file_size(limits);
 
     if offset > max_file_size {
-        return Err(RequestError::BadRequest(
-            "Offset exceeds max file size limit".into(),
-        ));
+        return Err(RequestError::PayloadTooLarge);
     }
+
+    let max_bytes = max_chunk_request_size(limits).min(max_file_size - offset);
 
     let upload_state = auth
         .session
@@ -161,15 +266,11 @@ pub async fn upload_chunk(
     let mut encryptor = upload_state.encryptor.lock().await;
     let mut written_chunks = upload_state.written_chunks.lock().await;
 
-    let mut stream = data.open(5.gibibytes());
+    let mut stream = open_with_limit(data, max_bytes);
     encryptor
-        .encrypt_stream_at_offset(&mut stream, offset, &mut written_chunks)
+        .encrypt_stream_at_offset(&mut stream, offset, max_bytes, &mut written_chunks)
         .await
-        .map_err(|e| {
-            error!("Encryption error: {}", e);
-
-            RequestError::FailedToProcessData
-        })?;
+        .map_err(encryption_failure)?;
 
     Ok(RequestSuccess::NoContent)
 }
@@ -179,12 +280,17 @@ pub async fn finalize_upload(
     upload_id: &str,
     total_size: u64,
     auth: AuthenticatedSession,
+    limits: &Limits,
 ) -> Result<RequestSuccess, RequestError> {
     trace!(
         "Entering route [POST /file/upload/finalize/{}] with total_size {}",
         upload_id,
         total_size
     );
+
+    if total_size > max_file_size(limits) {
+        return Err(RequestError::PayloadTooLarge);
+    }
 
     let session = auth.session.clone();
     let upload_state = session
@@ -194,18 +300,14 @@ pub async fn finalize_upload(
         .remove(upload_id)
         .ok_or(RequestError::NotFound)?;
 
+    // Same lock order as `upload_chunk`: encryptor, then chunks. Both are held
+    // until the file is sealed so no chunk write can slip in after the check.
+    let mut encryptor = upload_state.encryptor.lock().await;
     let written_chunks = upload_state.written_chunks.lock().await;
-    let expected_chunks = total_size.div_ceil(CHUNK_SIZE as u64);
 
-    let mut missing_chunks = Vec::new();
-    for i in 0..expected_chunks {
-        if !written_chunks.contains(&i) {
-            missing_chunks.push(i);
-        }
-    }
-
-    if !missing_chunks.is_empty() {
+    if let Err(e) = check_uploaded_chunks(&written_chunks, total_size) {
         drop(written_chunks);
+        drop(encryptor);
 
         // Re-insert the upload state so the client can retry
         session
@@ -214,19 +316,27 @@ pub async fn finalize_upload(
             .await
             .insert(upload_id.to_string(), upload_state);
 
-        return Err(RequestError::BadRequest(format!(
-            "Missing chunks: {:?}",
-            missing_chunks
-        )));
+        return Err(e);
     }
+
+    let sealed = encryptor.seal(total_size).await;
 
     drop(written_chunks);
 
-    let mut encryptor = upload_state.encryptor.lock().await;
+    if let Err(e) = sealed {
+        error!("Failed to seal uploaded file: {}", e);
 
-    encryptor.finalize_metadata(total_size);
+        drop(encryptor);
+        session
+            .abort_upload(upload_id, &upload_state.encoded_file_name)
+            .await;
+
+        return Err(RequestError::FailedToProcessData);
+    }
 
     let metadata = encryptor.get_metadata();
+
+    drop(encryptor);
 
     let user_path = session.get_user_path();
     let old_encoded_name = session
@@ -281,6 +391,7 @@ pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, Requ
 pub async fn put_file(
     file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
+    limits: &Limits,
     data: Data<'_>,
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [PUT /file/{}]", file_path);
@@ -335,23 +446,17 @@ pub async fn put_file(
         },
     };
 
-    let mut stream = data.open(5.gibibytes());
+    let max_file_size = max_file_size(limits);
+    let mut stream = open_with_limit(data, max_file_size);
 
-    let encrypt_result = encryptor
-        .encrypt_stream(&mut stream)
-        .await
-        .map_err(|e| e.to_string());
-
-    if let Err(e) = encrypt_result {
-        error!("Encryption error: {}", e);
-
+    if let Err(e) = encryptor.encrypt_stream(&mut stream, max_file_size).await {
         let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
         let _ = auth
             .session
             .remove_active_upload_db(upload_id.clone())
             .await;
 
-        return Err(RequestError::FailedToProcessData);
+        return Err(encryption_failure(e));
     }
 
     if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {

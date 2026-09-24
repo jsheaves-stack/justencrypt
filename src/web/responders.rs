@@ -68,6 +68,7 @@ impl<'r> Responder<'r, 'static> for RequestError {
             RequestError::NotFound => Status::NotFound,
             RequestError::RangeNotSatisfiable => Status::RangeNotSatisfiable,
             RequestError::TooManyActiveUploads => Status::TooManyRequests,
+            RequestError::PayloadTooLarge => Status::PayloadTooLarge,
         };
 
         let message = self.to_string();

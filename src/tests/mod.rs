@@ -68,6 +68,18 @@ pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
     (rocket, user)
 }
 
+// Gives a test's Rocket instance its own upload limits, so limit behavior can
+// be tested with small sizes without touching process-wide env vars.
+pub fn with_upload_limits(rocket: Rocket<Build>, file: u64, file_chunk: u64) -> Rocket<Build> {
+    let figment = rocket
+        .figment()
+        .clone()
+        .merge(("limits.file", file))
+        .merge(("limits.file-chunk", file_chunk));
+
+    rocket.configure(figment)
+}
+
 pub async fn create_test_session(
     rocket: &Rocket<Orbit>,
     temp_user: String,

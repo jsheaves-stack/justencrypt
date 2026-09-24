@@ -17,4 +17,6 @@ pub enum EncryptionError {
     MalformedChunk(u64),
     #[error("Invalid offset: {0}")]
     InvalidOffset(String),
+    #[error("Data exceeds the maximum allowed size")]
+    TooLarge,
 }

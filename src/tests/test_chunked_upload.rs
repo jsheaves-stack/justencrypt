@@ -4,7 +4,14 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes, tokio::time::timeout};
+use rocket::{
+    async_test,
+    http::{Cookie, Status},
+    local::asynchronous::Client,
+    routes,
+    tokio::time::timeout,
+    Build, Rocket,
+};
 
 use super::*;
 use crate::{
@@ -203,7 +210,7 @@ async fn test_chunked_upload_invalid_offset() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::InternalServerError); // encrypt_stream_at_offset returns Err which becomes InternalServerError
+    assert_eq!(response.status(), Status::BadRequest);
 }
 
 #[async_test]
@@ -413,4 +420,252 @@ async fn test_sweep_stale_uploads_uses_the_given_ttl() {
     assert!(!old_part.exists());
     assert!(recent_part.exists());
     assert_eq!(active_upload_rows(&session), vec![recent_id]);
+}
+
+async fn upload_client(rocket: Rocket<Build>, test_user: &TestUser) -> (Client, Cookie<'static>) {
+    let rocket = rocket.mount(
+        "/file",
+        routes![init_upload, upload_chunk, finalize_upload, get_file],
+    );
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    (client, cookie)
+}
+
+async fn put_chunk(
+    client: &Client,
+    cookie: &Cookie<'static>,
+    upload_id: &str,
+    offset: u64,
+    body: Vec<u8>,
+) -> Status {
+    client
+        .put(format!(
+            "/file/upload/chunk/{}?offset={}",
+            upload_id, offset
+        ))
+        .private_cookie(cookie.clone())
+        .body(body)
+        .dispatch()
+        .await
+        .status()
+}
+
+async fn finalize(
+    client: &Client,
+    cookie: &Cookie<'static>,
+    upload_id: &str,
+    total_size: u64,
+) -> (Status, String) {
+    let response = client
+        .post(format!(
+            "/file/upload/finalize/{}?total_size={}",
+            upload_id, total_size
+        ))
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await;
+    let status = response.status();
+
+    (status, response.into_string().await.unwrap_or_default())
+}
+
+#[async_test]
+async fn test_finalize_rejects_a_huge_total_size_quickly() {
+    let (rocket, test_user) = setup_rocket().await;
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "huge.bin").await;
+
+    for total_size in [1u64 << 40, u64::MAX] {
+        let started = std::time::Instant::now();
+        let (status, body) = finalize(&client, &cookie, &upload_id, total_size).await;
+
+        assert_eq!(status, Status::PayloadTooLarge, "total_size {}", total_size);
+        assert!(body.len() < 2048, "response body was {} bytes", body.len());
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+}
+
+#[async_test]
+async fn test_finalize_caps_the_list_of_missing_chunks() {
+    let (rocket, test_user) = setup_rocket().await;
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "sparse.bin").await;
+
+    let (status, body) = finalize(&client, &cookie, &upload_id, 200 * CHUNK_SIZE as u64).await;
+
+    assert_eq!(status, Status::BadRequest);
+    assert!(body.contains("Missing chunks: [0, 1, 2,"), "body: {}", body);
+    assert!(body.contains("(and 100 more)"), "body: {}", body);
+    assert!(body.len() < 2048, "response body was {} bytes", body.len());
+}
+
+#[async_test]
+async fn test_finalize_rejects_a_total_size_that_does_not_match_the_data() {
+    let (rocket, test_user) = setup_rocket().await;
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "small.txt").await;
+
+    assert_eq!(
+        put_chunk(&client, &cookie, &upload_id, 0, vec![b'A'; 10]).await,
+        Status::NoContent
+    );
+
+    for claimed in [CHUNK_SIZE as u64, 11, 9, 0] {
+        let (status, body) = finalize(&client, &cookie, &upload_id, claimed).await;
+
+        assert_eq!(status, Status::BadRequest, "claimed {}: {}", claimed, body);
+    }
+
+    // The upload is still active, so the client can finalize with the real size.
+    let (status, _) = finalize(&client, &cookie, &upload_id, 10).await;
+    assert_eq!(status, Status::Created);
+}
+
+#[async_test]
+async fn test_finalize_rejects_a_short_chunk_in_the_middle_of_the_file() {
+    let (rocket, test_user) = setup_rocket().await;
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "holey.bin").await;
+
+    put_chunk(&client, &cookie, &upload_id, 0, vec![b'A'; 10]).await;
+    put_chunk(
+        &client,
+        &cookie,
+        &upload_id,
+        CHUNK_SIZE as u64,
+        vec![b'B'; CHUNK_SIZE],
+    )
+    .await;
+
+    let (status, _) = finalize(&client, &cookie, &upload_id, 2 * CHUNK_SIZE as u64).await;
+
+    assert_eq!(status, Status::BadRequest);
+}
+
+#[async_test]
+async fn test_reuploading_a_shorter_last_chunk_downloads_correctly() {
+    let (rocket, test_user) = setup_rocket().await;
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "retried.bin").await;
+
+    put_chunk(&client, &cookie, &upload_id, 0, vec![b'A'; CHUNK_SIZE]).await;
+    put_chunk(
+        &client,
+        &cookie,
+        &upload_id,
+        CHUNK_SIZE as u64,
+        vec![b'B'; CHUNK_SIZE],
+    )
+    .await;
+    // The client retries the last chunk, and this time it is shorter.
+    put_chunk(
+        &client,
+        &cookie,
+        &upload_id,
+        CHUNK_SIZE as u64,
+        vec![b'C'; 100],
+    )
+    .await;
+
+    let (status, body) = finalize(&client, &cookie, &upload_id, CHUNK_SIZE as u64 + 100).await;
+    assert_eq!(status, Status::Created, "{}", body);
+
+    let response = client
+        .get("/file/retried.bin")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let body = response.into_bytes().await.unwrap();
+    let mut expected = vec![b'A'; CHUNK_SIZE];
+    expected.extend(vec![b'C'; 100]);
+
+    assert_eq!(body.len(), expected.len());
+    assert!(body == expected, "downloaded content does not match");
+}
+
+#[async_test]
+async fn test_empty_chunked_upload_can_be_finalized() {
+    let (rocket, test_user) = setup_rocket().await;
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "empty.bin").await;
+
+    let (status, body) = finalize(&client, &cookie, &upload_id, 0).await;
+
+    assert_eq!(status, Status::Created, "{}", body);
+}
+
+#[async_test]
+async fn test_chunk_request_over_the_chunk_limit_is_rejected() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = with_upload_limits(rocket, 1 << 30, 2 * CHUNK_SIZE as u64);
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "big-request.bin").await;
+
+    let at_limit = put_chunk(&client, &cookie, &upload_id, 0, vec![b'A'; 2 * CHUNK_SIZE]).await;
+    assert_eq!(at_limit, Status::NoContent);
+
+    let over_limit = put_chunk(
+        &client,
+        &cookie,
+        &upload_id,
+        0,
+        vec![b'A'; 2 * CHUNK_SIZE + 1],
+    )
+    .await;
+    assert_eq!(over_limit, Status::PayloadTooLarge);
+}
+
+#[async_test]
+async fn test_chunks_past_the_file_limit_are_rejected() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = with_upload_limits(rocket, 2 * CHUNK_SIZE as u64, 1 << 30);
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "past-the-end.bin").await;
+
+    // Starts inside the limit, but runs past it.
+    let straddling = put_chunk(
+        &client,
+        &cookie,
+        &upload_id,
+        CHUNK_SIZE as u64,
+        vec![b'A'; CHUNK_SIZE + 1],
+    )
+    .await;
+    assert_eq!(straddling, Status::PayloadTooLarge);
+
+    // Starts exactly at the limit.
+    let at_the_end = put_chunk(
+        &client,
+        &cookie,
+        &upload_id,
+        2 * CHUNK_SIZE as u64,
+        vec![b'A'; 1],
+    )
+    .await;
+    assert_eq!(at_the_end, Status::PayloadTooLarge);
+
+    // Filling the file exactly up to the limit is fine.
+    let exact = put_chunk(&client, &cookie, &upload_id, 0, vec![b'A'; 2 * CHUNK_SIZE]).await;
+    assert_eq!(exact, Status::NoContent);
+
+    let (status, body) = finalize(&client, &cookie, &upload_id, 2 * CHUNK_SIZE as u64).await;
+    assert_eq!(status, Status::Created, "{}", body);
+}
+
+#[async_test]
+async fn test_finalize_rejects_a_total_size_over_the_file_limit() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = with_upload_limits(rocket, 1000, 1 << 30);
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "claimed-too-big.bin").await;
+
+    let (status, _) = finalize(&client, &cookie, &upload_id, 1001).await;
+
+    assert_eq!(status, Status::PayloadTooLarge);
 }

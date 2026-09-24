@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::SeekFrom, path::PathBuf};
+use std::{collections::BTreeMap, io::SeekFrom, path::PathBuf};
 
 use orion::aead;
 use rocket::tokio::{
@@ -7,7 +7,7 @@ use rocket::tokio::{
 };
 
 use crate::{
-    encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE},
+    encryption::{encrypted_len, FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE},
     enums::encryption_error::EncryptionError,
 };
 
@@ -44,15 +44,27 @@ impl ChunkEncryptor {
         self.metadata.clone()
     }
 
-    pub fn finalize_metadata(&mut self, total_size: u64) {
+    /// Completes a chunked upload of `total_size` plaintext bytes. The file is
+    /// cut to exactly the encrypted length of that size, which drops anything
+    /// left past the end by an earlier, longer write of the last chunk.
+    pub async fn seal(&mut self, total_size: u64) -> Result<(), EncryptionError> {
+        self.file.set_len(encrypted_len(total_size)).await?;
+        self.file.flush().await?;
         self.metadata.total_size = total_size;
+
+        Ok(())
     }
 
+    /// Encrypts `source` into the file starting at plaintext `offset`, and
+    /// records the plaintext length of every chunk written in
+    /// `written_chunks`. Fails with `TooLarge`, before writing the offending
+    /// chunk, once more than `max_bytes` have been read.
     pub async fn encrypt_stream_at_offset<R: AsyncReadExt + Unpin>(
         &mut self,
         source: &mut R,
         offset: u64,
-        written_chunks: &mut HashSet<u64>,
+        max_bytes: u64,
+        written_chunks: &mut BTreeMap<u64, u32>,
     ) -> Result<u64, EncryptionError> {
         trace!(
             "Entering ChunkEncryptor::encrypt_stream_at_offset at offset: {}",
@@ -91,6 +103,12 @@ impl ChunkEncryptor {
                 break;
             }
 
+            if total_bytes_read + bytes_read as u64 > max_bytes {
+                self.file.flush().await?;
+
+                return Err(EncryptionError::TooLarge);
+            }
+
             indexed_plaintext[..8].copy_from_slice(&current_chunk_index.to_le_bytes());
             indexed_plaintext[8..8 + bytes_read].copy_from_slice(&plaintext_buffer[..bytes_read]);
 
@@ -105,7 +123,7 @@ impl ChunkEncryptor {
 
             self.file.write_all(&encrypted_chunk).await?;
 
-            written_chunks.insert(current_chunk_index);
+            written_chunks.insert(current_chunk_index, bytes_read as u32);
 
             total_bytes_read += bytes_read as u64;
             current_chunk_index += 1;
@@ -125,9 +143,12 @@ impl ChunkEncryptor {
         Ok(total_bytes_read)
     }
 
+    /// Encrypts all of `source` into the file. Fails with `TooLarge`, before
+    /// writing the offending chunk, once more than `max_bytes` have been read.
     pub async fn encrypt_stream<R: AsyncReadExt + Unpin>(
         &mut self,
         source: &mut R,
+        max_bytes: u64,
     ) -> Result<u64, EncryptionError> {
         trace!("Entering ChunkEncryptor::encrypt_stream");
 
@@ -150,6 +171,12 @@ impl ChunkEncryptor {
 
             if bytes_read == 0 {
                 break;
+            }
+
+            if total_plaintext_size + bytes_read as u64 > max_bytes {
+                self.file.flush().await?;
+
+                return Err(EncryptionError::TooLarge);
             }
 
             indexed_plaintext[..8].copy_from_slice(&chunk_index.to_le_bytes());

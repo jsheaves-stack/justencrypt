@@ -150,6 +150,14 @@ pub fn get_app_config() -> Figment {
                     .unwrap(),
                 )
                 .limit(
+                    "file-chunk",
+                    ByteUnit::from_str(
+                        &env::var("JUSTENCRYPT_LIMITS_FILE_CHUNK")
+                            .unwrap_or_else(|_| "32MiB".into()),
+                    )
+                    .unwrap(),
+                )
+                .limit(
                     "json",
                     ByteUnit::from_str(
                         &env::var("JUSTENCRYPT_LIMITS_JSON").unwrap_or_else(|_| "10MiB".into()),
