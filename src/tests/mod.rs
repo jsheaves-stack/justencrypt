@@ -2,6 +2,7 @@ mod test_admin;
 mod test_chunked_upload;
 mod test_credentials;
 mod test_db_files;
+mod test_db_folder_delete;
 mod test_db_folder_move;
 mod test_encryption;
 mod test_file;
@@ -9,6 +10,7 @@ mod test_file_delete_patch;
 mod test_folder;
 mod test_folder_delete;
 mod test_folder_patch;
+mod test_orphans;
 mod test_session;
 mod test_session_store;
 mod test_thumbnail;
@@ -26,8 +28,8 @@ use crate::{
     enums::request_error::RequestError,
     get_app_config,
     session::{
-        accounts::create_account_storage, policy::SessionPolicy, store::SessionStore,
-        user_session::UserSession,
+        accounts::create_account_storage, orphans::OrphanScanner, policy::SessionPolicy,
+        store::SessionStore, user_session::UserSession,
     },
     AppState,
 };
@@ -67,6 +69,13 @@ pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
 pub async fn setup_rocket_with_session_policy(
     session_policy: SessionPolicy,
 ) -> (Rocket<Build>, TestUser) {
+    setup_rocket_with_options(session_policy, false).await
+}
+
+pub async fn setup_rocket_with_options(
+    session_policy: SessionPolicy,
+    orphan_scan_enabled: bool,
+) -> (Rocket<Build>, TestUser) {
     dotenv::dotenv().ok();
 
     let temp_user = Uuid::new_v4().to_string();
@@ -90,6 +99,7 @@ pub async fn setup_rocket_with_session_policy(
 
     let state = AppState {
         sessions: Arc::new(SessionStore::new(session_policy)),
+        orphan_scanner: OrphanScanner::new(orphan_scan_enabled),
         thumbnail_semaphore: Arc::new(Semaphore::new(1)),
     };
 
@@ -144,4 +154,25 @@ pub async fn create_test_session(
     let cookie = Cookie::build(("sid", user_token)).build();
 
     (session_id, cookie)
+}
+
+// Every file under the user's directory except the user's own database files,
+// i.e. encrypted blobs, partial uploads and cached thumbnails.
+pub fn stored_files(user_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+
+            if path.is_dir() {
+                walk(&path, depth + 1, out);
+            } else if depth > 0 {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(user_dir, 0, &mut out);
+
+    out
 }

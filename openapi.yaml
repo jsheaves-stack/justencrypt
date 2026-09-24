@@ -602,7 +602,7 @@ paths:
           description: Internal server error (Failed to read folder contents).
     delete:
       summary: Delete a folder recursively
-      description: Recursively deletes the folder, sub-folders, and all encrypted files and thumbnails inside it.
+      description: Recursively deletes the folder, sub-folders, and all encrypted files and thumbnails inside it. The database changes are all-or-nothing; the encrypted data is removed after they commit. The root folder can't be deleted.
       parameters:
         - in: path
           name: folder_path
@@ -614,7 +614,7 @@ paths:
         '204':
           description: Complete recursive deletion successful.
         '400':
-          description: Bad request (e.g., invalid path).
+          description: The path is the root folder (`Cannot delete the root folder`), or is otherwise invalid. Nothing is deleted.
         '401':
           description: Unauthorized.
         '404':

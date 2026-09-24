@@ -679,3 +679,34 @@ async fn test_finalize_rejects_a_total_size_over_the_file_limit() {
 
     assert_eq!(status, Status::PayloadTooLarge);
 }
+
+// M7: a finalize whose database write fails must not leave the upload's
+// tracking row (or its data) behind.
+#[async_test]
+async fn test_failed_finalize_leaves_no_upload_behind() {
+    let (rocket, test_user) = setup_rocket().await;
+    let (client, cookie) = upload_client(rocket, &test_user).await;
+    let upload_id = initiate(&client, &cookie, "doomed.bin").await;
+    put_chunk(&client, &cookie, &upload_id, 0, vec![b'A'; 10]).await;
+
+    // Make every insert into `files` fail, in this test's own database.
+    let state = client.rocket().state::<AppState>().unwrap();
+    let session = state.sessions.snapshot().await.pop().unwrap();
+    session
+        .db_pool
+        .get()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER fail_file_insert BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+        )
+        .unwrap();
+
+    let (status, _) = finalize(&client, &cookie, &upload_id, 10).await;
+
+    assert_eq!(status, Status::InternalServerError);
+    assert!(active_upload_rows(&session).is_empty());
+    assert_eq!(
+        stored_files(&test_user.path),
+        Vec::<std::path::PathBuf>::new()
+    );
+}

@@ -235,7 +235,9 @@ pub async fn finalize_upload(
     if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {
         error!("Failed to rename part file to final file: {}", e);
 
-        let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
+        session
+            .abort_upload(upload_id, &upload_state.encoded_file_name)
+            .await;
 
         return Err(RequestError::FailedToProcessData);
     }
@@ -251,6 +253,7 @@ pub async fn finalize_upload(
         Ok(replaced) => replaced,
         Err(e) => {
             let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+            let _ = session.remove_active_upload_db(upload_id.to_string()).await;
 
             return Err(e.into());
         },

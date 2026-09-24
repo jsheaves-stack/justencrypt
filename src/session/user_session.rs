@@ -13,7 +13,6 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio::{sync::Mutex, task};
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -23,12 +22,6 @@ use crate::{
     session::{accounts::user_data_path, credentials::is_valid_username, policy::SessionPolicy},
     util::{sharded_path, time::unix_now_secs},
 };
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct EncodedFile {
-    pub id: i32,
-    pub encoded_name: String,
-}
 
 #[derive(Clone)]
 pub struct UploadState {
@@ -299,6 +292,23 @@ impl UserSession {
         }
     }
 
+    /// The encoded names of every blob the database refers to: those of stored
+    /// files, and those of uploads still in progress (in any session).
+    pub async fn referenced_blob_names(
+        &self,
+    ) -> Result<(HashSet<String>, HashSet<String>), DbError> {
+        self.with_db(|db| {
+            let files = sqlite::get_all_encoded_names(&db)?.into_iter().collect();
+            let uploads = sqlite::get_all_active_uploads(&db)?
+                .into_iter()
+                .map(|(_, _, encoded_file_name)| encoded_file_name)
+                .collect();
+
+            Ok((files, uploads))
+        })
+        .await
+    }
+
     pub async fn cleanup_orphaned_uploads(
         &self,
         active_session_ids: HashSet<String>,
@@ -391,6 +401,21 @@ impl UserSession {
         Ok(deleted)
     }
 
+    /// Deletes a folder and everything under it, and returns the encoded names
+    /// of the blobs that belonged to the deleted files. The caller owns
+    /// deleting those blobs.
+    pub async fn delete_folder_tree(&self, folder_path: PathBuf) -> Result<Vec<String>, DbError> {
+        trace!(
+            "Entering UserSession::delete_folder_tree for path: {:?}",
+            folder_path
+        );
+
+        self.with_db(move |mut db| {
+            sqlite::delete_folder_tree(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
+        })
+        .await
+    }
+
     pub async fn add_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
         trace!(
             "Entering UserSession::add_folder for path: {:?}",
@@ -465,60 +490,6 @@ impl UserSession {
         Ok(())
     }
 
-    pub async fn delete_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::delete_folder for path: {:?}",
-            folder_path
-        );
-
-        self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for delete_folder");
-
-            sqlite::delete_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await?;
-
-        trace!("Exiting UserSession::delete_folder successfully.");
-
-        Ok(())
-    }
-
-    pub async fn delete_folder_by_id(&self, folder_id: i32) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::delete_folder_by_id for id: {}",
-            folder_id
-        );
-
-        self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for delete_folder_by_id");
-
-            sqlite::delete_folder_by_id(&mut db, folder_id)
-        })
-        .await?;
-
-        trace!("Exiting UserSession::delete_folder_by_id successfully.");
-
-        Ok(())
-    }
-
-    pub async fn delete_file_by_id(&self, file_id: i32) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::delete_file_by_id for id: {}",
-            file_id
-        );
-
-        self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for delete_file_by_id");
-
-            sqlite::delete_file_by_id(&mut db, file_id)
-        })
-        .await?;
-
-        trace!("Exiting UserSession::delete_file_by_id successfully.");
-
-        Ok(())
-    }
-
     pub async fn get_folder_id(&self, folder_path: PathBuf) -> Result<Option<i32>, DbError> {
         trace!(
             "Entering UserSession::get_folder_id for path: {:?}",
@@ -534,44 +505,6 @@ impl UserSession {
             .await?;
 
         trace!("Exiting UserSession::get_folder_id.");
-
-        Ok(result)
-    }
-
-    pub async fn get_files_in_folder(&self, folder_id: i32) -> Result<Vec<EncodedFile>, DbError> {
-        trace!(
-            "Entering UserSession::get_files_in_folder for id: {}",
-            folder_id
-        );
-
-        let result = self
-            .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_files_in_folder");
-
-                sqlite::get_files_in_folder(&db, folder_id)
-            })
-            .await?;
-
-        trace!("Exiting UserSession::get_files_in_folder.");
-
-        Ok(result)
-    }
-
-    pub async fn get_child_folders(&self, folder_id: i32) -> Result<Vec<i32>, DbError> {
-        trace!(
-            "Entering UserSession::get_child_folders for id: {}",
-            folder_id
-        );
-
-        let result = self
-            .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_child_folders");
-
-                sqlite::get_child_folders(&db, folder_id)
-            })
-            .await?;
-
-        trace!("Exiting UserSession::get_child_folders.");
 
         Ok(result)
     }

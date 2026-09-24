@@ -317,27 +317,6 @@ async fn test_get_file_range_invalid() {
     assert_eq!(response.status(), Status::RangeNotSatisfiable);
 }
 
-// Every file under the user's directory except the user's own database files,
-// i.e. encrypted blobs, partial uploads and cached thumbnails.
-fn stored_files(user_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
-        for entry in fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-
-            if path.is_dir() {
-                walk(&path, depth + 1, out);
-            } else if depth > 0 {
-                out.push(path);
-            }
-        }
-    }
-
-    let mut out = Vec::new();
-    walk(user_dir, 0, &mut out);
-
-    out
-}
-
 #[async_test]
 async fn test_put_file_over_the_file_limit_is_rejected_and_leaves_nothing_behind() {
     let (rocket, test_user) = setup_rocket().await;

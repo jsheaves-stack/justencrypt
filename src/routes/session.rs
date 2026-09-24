@@ -126,6 +126,8 @@ pub async fn create_session(
         );
     }
 
+    state.orphan_scanner.scan_in_background(session.clone());
+
     trace!("Exiting route [POST /session] successfully.");
 
     Ok(RequestSuccess::Created)

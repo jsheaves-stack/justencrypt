@@ -26,7 +26,9 @@ use routes::{
     session::{create_session, destroy_session, session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
 };
-use session::{policy::SessionPolicy, reaper::SessionReaper, store::SessionStore};
+use session::{
+    orphans::OrphanScanner, policy::SessionPolicy, reaper::SessionReaper, store::SessionStore,
+};
 use web::fairings::Cors;
 
 pub mod db;
@@ -43,6 +45,7 @@ extern crate serde;
 
 pub struct AppState {
     pub sessions: Arc<SessionStore>,
+    pub orphan_scanner: OrphanScanner,
     pub thumbnail_semaphore: Arc<Semaphore>,
 }
 
@@ -288,8 +291,20 @@ async fn rocket() -> _ {
         session_policy.max_per_user
     );
 
+    let orphan_scanner = OrphanScanner::from_env();
+
+    info!(
+        "Orphan file scan at login is {} (JUSTENCRYPT_ORPHAN_SCAN_ENABLED).",
+        if orphan_scanner.is_enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+
     let state = AppState {
         sessions: Arc::new(SessionStore::new(session_policy)),
+        orphan_scanner,
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
     };
 

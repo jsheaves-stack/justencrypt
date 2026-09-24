@@ -10,11 +10,8 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use session::user_session::EncodedFile;
 
-use crate::{
-    db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError, session,
-};
+use crate::{db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError};
 
 pub fn verify_user_db_password(db_path: &Path, password: &SecretString) -> Result<(), DbError> {
     trace!(
@@ -731,21 +728,75 @@ pub fn get_folder(
     Ok(entries)
 }
 
-pub fn delete_folder(
+/// Deletes the folder at `path_str` with everything under it, in one
+/// transaction, and returns the encoded names of the blobs of every deleted
+/// file. Nothing is deleted if any step fails. The caller removes the blobs
+/// after this returns.
+///
+/// The root folder can't be deleted.
+pub fn delete_folder_tree(
     db: &mut PooledConnection<SqliteConnectionManager>,
     path_str: &str,
-) -> Result<(), DbError> {
+) -> Result<Vec<String>, DbError> {
     trace!(
-        "Entering sqlite::delete_folder with path_str: '{}'",
+        "Entering sqlite::delete_folder_tree with path_str: '{}'",
         path_str
     );
-    let folder_id = get_folder_id(db, path_str)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-    trace!("Found folder ID to delete: {}", folder_id);
 
-    let result = delete_folder_by_id(db, folder_id);
-    trace!("Exiting sqlite::delete_folder.");
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
-    result
+    let folder_id = get_folder_id(&tx, path_str)?.ok_or(DbError::NotFound)?;
+
+    if folder_id == 1 {
+        return Err(DbError::InvalidInput(
+            "Cannot delete the root folder".to_string(),
+        ));
+    }
+
+    // Every folder in the subtree, deepest first, so each folder is deleted
+    // after its children.
+    let subtree: Vec<i32> = {
+        let mut stmt = tx.prepare(
+            r#"WITH RECURSIVE subtree(id, depth) AS (
+                   SELECT ?1, 0
+                   UNION
+                   SELECT f.id, s.depth + 1 FROM folders f
+                   INNER JOIN subtree s ON f.parent_folder_id = s.id
+               )
+               SELECT id FROM subtree ORDER BY depth DESC"#,
+        )?;
+        let rows = stmt.query_map(params![folder_id], |row| row.get(0))?;
+
+        rows.collect::<Result<_, _>>()?
+    };
+    trace!("Deleting {} folder(s)", subtree.len());
+
+    let mut blobs = Vec::new();
+
+    for id in &subtree {
+        {
+            let mut stmt =
+                tx.prepare("SELECT encoded_name FROM files WHERE parent_folder_id = ?1")?;
+            let names = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+
+            for name in names {
+                blobs.push(name?);
+            }
+        }
+
+        tx.execute("DELETE FROM files WHERE parent_folder_id = ?1", params![id])
+            .map_err(|e| DbError::FailedToDeleteFileFromDb(e.to_string()))?;
+        tx.execute("DELETE FROM folders WHERE id = ?1", params![id])
+            .map_err(|e| DbError::FailedToDeleteFileFromDb(e.to_string()))?;
+    }
+
+    tx.commit()?;
+    trace!(
+        "Transaction committed. Exiting sqlite::delete_folder_tree with {} blob(s) to remove.",
+        blobs.len()
+    );
+
+    Ok(blobs)
 }
 
 pub fn add_folder(
@@ -964,120 +1015,6 @@ pub fn move_file(
     Ok(())
 }
 
-pub fn get_files_in_folder(
-    db: &PooledConnection<SqliteConnectionManager>,
-    folder_id: i32,
-) -> Result<Vec<EncodedFile>, DbError> {
-    trace!(
-        "Entering sqlite::get_files_in_folder with folder_id: {}",
-        folder_id
-    );
-    let mut stmt = db.prepare("SELECT id, encoded_name FROM files WHERE parent_folder_id = ?1")?;
-    let mut rows = stmt.query(params![folder_id])?;
-
-    let mut files = Vec::new();
-
-    while let Some(row) = rows.next()? {
-        let file = EncodedFile {
-            id: row.get(0)?,
-            encoded_name: row.get(1)?,
-        };
-        trace!(
-            "Found file: id={}, encoded_name='{}'",
-            file.id,
-            file.encoded_name
-        );
-        files.push(file);
-    }
-
-    trace!(
-        "Exiting sqlite::get_files_in_folder with {} files.",
-        files.len()
-    );
-
-    Ok(files)
-}
-
-pub fn get_child_folders(
-    db: &PooledConnection<SqliteConnectionManager>,
-    folder_id: i32,
-) -> Result<Vec<i32>, DbError> {
-    trace!(
-        "Entering sqlite::get_child_folders with folder_id: {}",
-        folder_id
-    );
-    let mut stmt = db.prepare("SELECT id FROM folders WHERE parent_folder_id = ?1")?;
-    let mut rows = stmt.query(params![folder_id])?;
-
-    let mut folders = Vec::new();
-
-    while let Some(row) = rows.next()? {
-        let id: i32 = row.get(0)?;
-        trace!("Found child folder with id: {}", id);
-
-        folders.push(id);
-    }
-
-    trace!(
-        "Exiting sqlite::get_child_folders with {} folders.",
-        folders.len()
-    );
-
-    Ok(folders)
-}
-
-pub fn delete_file_by_id(
-    db: &mut PooledConnection<SqliteConnectionManager>,
-    file_id: i32,
-) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::delete_file_by_id with file_id: {}",
-        file_id
-    );
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    trace!("Transaction started for deleting file by ID.");
-
-    tx.execute("DELETE FROM files WHERE id = ?1", params![file_id])
-        .map(|_| ())
-        .map_err(|e| {
-            error!("Failed to delete file from the db: {}", e);
-
-            DbError::FailedToDeleteFileFromDb(e.to_string())
-        })?;
-    trace!("File delete by ID executed.");
-
-    tx.commit()?;
-    trace!("Transaction committed. Exiting sqlite::delete_file_by_id successfully.");
-
-    Ok(())
-}
-
-pub fn delete_folder_by_id(
-    db: &mut PooledConnection<SqliteConnectionManager>,
-    folder_id: i32,
-) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::delete_folder_by_id with folder_id: {}",
-        folder_id
-    );
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    trace!("Transaction started for deleting folder by ID.");
-
-    tx.execute("DELETE FROM folders WHERE id = ?1", params![folder_id])
-        .map(|_| ())
-        .map_err(|e| {
-            error!("Failed to delete folder from the db: {}", e);
-
-            DbError::FailedToDeleteFileFromDb(e.to_string())
-        })?;
-    trace!("Folder delete by ID executed.");
-
-    tx.commit()?;
-    trace!("Transaction committed. Exiting sqlite::delete_folder_by_id successfully.");
-
-    Ok(())
-}
-
 pub fn add_active_upload(
     db: &rusqlite::Connection,
     upload_id: &str,
@@ -1112,6 +1049,20 @@ pub fn remove_active_upload(db: &rusqlite::Connection, upload_id: &str) -> Resul
         trace!("Exiting sqlite::remove_active_upload successfully.");
     })
     .map_err(|e| DbError::FailedToDeleteFileFromDb(e.to_string()))
+}
+
+/// The encoded blob name of every file.
+pub fn get_all_encoded_names(db: &rusqlite::Connection) -> Result<Vec<String>, DbError> {
+    let mut stmt = db
+        .prepare("SELECT encoded_name FROM files")
+        .map_err(|e| DbError::FailedToQueryDb(e.to_string()))?;
+    let names = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(|e| DbError::FailedToQueryDb(e.to_string()))?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| DbError::FailedToQueryDb(e.to_string()))?;
+
+    Ok(names)
 }
 
 pub fn get_all_active_uploads(
