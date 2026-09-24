@@ -13,7 +13,10 @@ use rocket::{
     tokio::sync::Semaphore,
 };
 use routes::{
-    admin::{admin_options, delete_session, delete_session_options, get_session},
+    admin::{
+        admin_options, create_user, create_user_options, delete_session, delete_session_options,
+        get_session,
+    },
     file::{
         delete_file, file_options, finalize_upload, get_file, init_upload, patch_file, put_file,
         upload_chunk,
@@ -342,7 +345,9 @@ async fn rocket() -> _ {
                 get_session,
                 admin_options,
                 delete_session,
-                delete_session_options
+                delete_session_options,
+                create_user,
+                create_user_options
             ],
         );
     } else {

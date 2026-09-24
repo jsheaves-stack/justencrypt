@@ -1,13 +1,21 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rocket::{delete, get, options, serde::json::Json, State};
-use serde::Serialize;
+use rocket::{delete, get, options, post, serde::json::Json, State};
+use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
+    session::accounts::create_account,
     web::forwarding_guards::AdminGuard,
     AppState,
 };
+
+#[derive(Deserialize, Serialize)]
+pub struct CreateUser {
+    pub username: String,
+    pub password: String,
+}
 
 #[derive(Serialize)]
 pub struct ActiveSessionInfo {
@@ -78,3 +86,20 @@ pub async fn admin_options() {}
 
 #[options("/session/<_session_id>")]
 pub async fn delete_session_options(_session_id: String) {}
+
+#[post("/users", format = "json", data = "<reqbody>")]
+pub async fn create_user(
+    _admin_guard: AdminGuard,
+    reqbody: Json<CreateUser>,
+) -> Result<RequestSuccess, RequestError> {
+    trace!("Entering route [POST /admin/users]");
+
+    let CreateUser { username, password } = reqbody.into_inner();
+
+    create_account(&username, &SecretString::from(password)).await?;
+
+    Ok(RequestSuccess::Created)
+}
+
+#[options("/users")]
+pub async fn create_user_options() {}

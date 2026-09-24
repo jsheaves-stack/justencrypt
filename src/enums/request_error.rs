@@ -66,6 +66,9 @@ pub enum RequestError {
 
     #[error("Payload too large")]
     PayloadTooLarge,
+
+    #[error("Account already exists")]
+    AccountAlreadyExists,
 }
 
 impl From<DbError> for RequestError {

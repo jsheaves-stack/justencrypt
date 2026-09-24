@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    env,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -21,7 +20,7 @@ use crate::{
     db::sqlite::{self, FolderContent},
     encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
     enums::db_error::DbError,
-    session::policy::SessionPolicy,
+    session::{accounts::user_data_path, credentials::is_valid_username, policy::SessionPolicy},
     util::{sharded_path, time::unix_now_secs},
 };
 
@@ -123,7 +122,7 @@ impl UserSession {
     ) -> Result<Self, DbError> {
         trace!("Entering UserSession::open for user: '{}'", user_name);
 
-        if user_name.is_empty() || user_name.contains(['/', '\\', '.']) || user_name.len() > 64 {
+        if !is_valid_username(user_name) {
             return Err(DbError::InvalidInput(
                 "Invalid user name format or length.".to_string(),
             ));
@@ -136,18 +135,17 @@ impl UserSession {
         let session = task::spawn_blocking(move || {
             trace!("Inside spawn_blocking for UserSession::open");
 
-            let user_data_path = env::var("JUSTENCRYPT_USER_DATA_PATH")
-                .unwrap_or_else(|_| String::from("./user_data"));
+            let user_path = user_data_path().join(&user_name);
+            let user_db_path = user_path.join(format!("{user_name}.db"));
 
-            let user_path = PathBuf::from(&user_data_path).join(&user_name);
-
-            if !user_path.exists() {
-                trace!("User path does not exist.");
+            // Accounts are created only through `accounts::create_account`, so
+            // a missing database means there is no account. Checking first also
+            // keeps SQLite from creating an empty database here.
+            if !user_db_path.is_file() {
+                trace!("User database does not exist.");
 
                 return Err(DbError::UserDoesNotExist);
             }
-
-            let user_db_path = user_path.join(format!("{user_name}.db"));
 
             let db_pool = if let Some(pool) = existing_pool {
                 trace!("Using existing database pool.");

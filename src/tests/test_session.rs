@@ -338,3 +338,116 @@ async fn test_login_removes_expired_sessions_when_the_reaper_is_disabled() {
     assert_eq!(response.status(), Status::Created);
     assert!(!session_exists(&client, &abandoned_id).await);
 }
+
+async fn login(client: &Client, username: &str, password: &str) -> (Status, String) {
+    let body = serde_json::json!({ "username": username, "password": password }).to_string();
+    let response = client
+        .post("/session")
+        .header(ContentType::JSON)
+        .body(body)
+        .dispatch()
+        .await;
+    let status = response.status();
+
+    (status, response.into_string().await.unwrap_or_default())
+}
+
+// M4: every failed login looks the same, so a response never reveals whether
+// the username exists.
+#[async_test]
+async fn test_failed_logins_are_indistinguishable() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket.mount("/session", routes![create_session]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("valid rocket instance");
+    let _ = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    // A folder with no database: an account that was never set up.
+    let name = uuid::Uuid::new_v4().to_string();
+    let never_set_up = TestUser {
+        path: std::env::temp_dir().join(&name),
+        name,
+    };
+    fs::create_dir_all(&never_set_up.path).unwrap();
+
+    let unknown = uuid::Uuid::new_v4().to_string();
+    let attempts = [
+        (test_user.name.as_str(), "wrong_password"),
+        (test_user.name.as_str(), "a"),
+        (unknown.as_str(), "wrong_password"),
+        (unknown.as_str(), "a"),
+        (unknown.as_str(), "a-Very-strong-passphrase-9!-horse"),
+        (never_set_up.name.as_str(), "a"),
+        (
+            never_set_up.name.as_str(),
+            "a-Very-strong-passphrase-9!-horse",
+        ),
+    ];
+
+    let (first_status, first_body) = login(&client, attempts[0].0, attempts[0].1).await;
+    assert_eq!(first_status, Status::Unauthorized);
+
+    for (username, password) in attempts {
+        let (status, body) = login(&client, username, password).await;
+
+        assert_eq!(
+            (status, body.as_str()),
+            (first_status, first_body.as_str()),
+            "login as {} with {:?}",
+            username,
+            password
+        );
+    }
+
+    // Logging in must never create an account.
+    assert!(!never_set_up
+        .path
+        .join(format!("{}.db", never_set_up.name))
+        .exists());
+}
+
+#[async_test]
+async fn test_login_rejects_malformed_credentials_before_touching_the_filesystem() {
+    let (rocket, _test_user) = setup_rocket().await;
+    let rocket = rocket.mount("/session", routes![create_session]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("valid rocket instance");
+
+    // An absolute-path username used to make the server probe for
+    // `<path>.db` anywhere on disk, answering differently if it existed.
+    let probe_dir = tempfile::tempdir().unwrap();
+    fs::write(probe_dir.path().join("exists.db"), b"").unwrap();
+    let existing_probe = probe_dir
+        .path()
+        .join("exists")
+        .to_string_lossy()
+        .to_string();
+    let missing_probe = probe_dir
+        .path()
+        .join("missing")
+        .to_string_lossy()
+        .to_string();
+    let too_long = "a".repeat(65);
+    let long_password = "p".repeat(1025);
+
+    for (username, password) in [
+        (existing_probe.as_str(), "a"),
+        (missing_probe.as_str(), "a"),
+        ("../x", "a"),
+        ("a/b", "a"),
+        ("a.b", "a"),
+        ("a\\b", "a"),
+        ("a\u{0}b", "a"),
+        ("a\nb", "a"),
+        ("", "a"),
+        (too_long.as_str(), "a"),
+        ("alice", ""),
+        ("alice", long_password.as_str()),
+    ] {
+        let (status, _) = login(&client, username, password).await;
+
+        assert_eq!(status, Status::BadRequest, "username {:?}", username);
+    }
+}

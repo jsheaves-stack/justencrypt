@@ -77,6 +77,7 @@ impl<'r> Responder<'r, 'static> for RequestError {
             RequestError::RangeNotSatisfiable { .. } => Status::RangeNotSatisfiable,
             RequestError::TooManyActiveUploads => Status::TooManyRequests,
             RequestError::PayloadTooLarge => Status::PayloadTooLarge,
+            RequestError::AccountAlreadyExists => Status::Conflict,
         };
 
         let message = self.to_string();

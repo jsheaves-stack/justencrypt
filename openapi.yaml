@@ -189,7 +189,7 @@ paths:
   /session:
     post:
       summary: Create a new session
-      description: Initializes a new user session or logs into an existing one. Returns a session cookie.
+      description: Logs into an existing account and returns a session cookie. Accounts are created with `POST /admin/users`; logging in never creates one.
       security: []
       requestBody:
         required: true
@@ -201,9 +201,9 @@ paths:
         '201':
           description: 'Session created successfully, cookie provided in headers. The `sid` cookie has a `Max-Age` equal to the session''s maximum lifetime (`JUSTENCRYPT_SESSION_MAX_LIFETIME_SECONDS`). If the user already has the maximum number of sessions (`JUSTENCRYPT_MAX_SESSIONS_PER_USER`), their oldest session is ended.'
         '400':
-          description: Bad request (e.g. password does not meet requirements).
+          description: 'The username or password is malformed: usernames are 1-64 bytes with no `/`, `\`, `.` or control characters, passwords are 1-1024 bytes. Says nothing about whether the account exists.'
         '401':
-          description: Unauthorized (invalid credentials or user does not exist).
+          description: 'Login failed. The same status and body are returned for a wrong password, an unknown user, and an account that was never set up.'
     delete:
       summary: Destroy the active session
       description: Invalidates the active session identified by the sid cookie, removes that session's unfinished uploads, and expires the sid cookie (sent even when the session was already gone).
@@ -463,6 +463,43 @@ paths:
           description: '`total_size` is larger than the maximum file size (`JUSTENCRYPT_LIMITS_FILE`).'
         '500':
           description: Internal server error (Failed to finalize or store file metadata).
+  /admin/users:
+    post:
+      summary: Create a user account (Admin)
+      description: Creates a user's directory and encrypted database. This is the only way to create an account. A directory that exists without a database is set up normally. Requires admin API key.
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  description: 1-64 bytes; no `/`, `\`, `.` or control characters.
+                password:
+                  type: string
+                  description: 1-1024 bytes; must meet `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE`.
+      responses:
+        '201':
+          description: Account created.
+        '400':
+          description: The username is malformed, or the password is malformed or too weak.
+        '401':
+          description: Missing or invalid admin API key.
+        '409':
+          description: An account with this username already exists.
+    options:
+      summary: Pre-flight check
+      security: []
+      responses:
+        '204':
+          description: CORS pre-flight response
   /admin/session:
     get:
       summary: List all active sessions (Admin)

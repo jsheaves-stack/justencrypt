@@ -1,20 +1,19 @@
-use std::{collections::HashSet, env, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashSet, env, str::FromStr, sync::Arc};
 
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
     options, post,
     serde::json::Json,
-    time,
-    tokio::task,
-    State,
+    time, State,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use zxcvbn::{zxcvbn, Score};
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    session::{reaper::discard_sessions, user_session::UserSession},
+    session::{
+        credentials::validate_credentials, reaper::discard_sessions, user_session::UserSession,
+    },
     util::time::unix_now_secs,
     AppState,
 };
@@ -40,55 +39,7 @@ pub async fn create_session(
 ) -> Result<RequestSuccess, RequestError> {
     trace!("Entering route [POST /session]");
 
-    let user_name = reqbody.username.clone();
-    let password = reqbody.password.clone();
-
-    task::spawn_blocking(move || {
-        let user_data_path =
-            env::var("JUSTENCRYPT_USER_DATA_PATH").unwrap_or_else(|_| String::from("./user_data"));
-        let user_db_path = PathBuf::from(&user_data_path)
-            .join(&user_name)
-            .join(format!("{}.db", user_name));
-
-        if !user_db_path.exists() {
-            trace!("User database does not exist, performing security score check.");
-
-            let score_str = env::var("JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE")
-                .unwrap_or_else(|_| "4".to_string());
-            let score_num = score_str.parse::<u8>().unwrap_or(4);
-
-            let minimum_password_security_score = match score_num {
-                0 => Score::Zero,
-                1 => Score::One,
-                2 => Score::Two,
-                3 => Score::Three,
-                4 => Score::Four,
-                _ => Score::Three,
-            };
-
-            let password_security_estimate = zxcvbn(password.as_str(), &[]).score();
-
-            if password_security_estimate < minimum_password_security_score {
-                trace!(
-                    "Password score {} does not meet minimum required score {}.",
-                    password_security_estimate,
-                    minimum_password_security_score
-                );
-
-                return Err(RequestError::PasswordDoesNotMeetRequirements);
-            }
-            trace!("Password security score check passed.");
-        } else {
-            trace!("User database exists, skipping security score check.");
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| {
-        error!("Blocking task failed: {}", e);
-
-        RequestError::FailedToCreateUserSession
-    })??;
+    validate_credentials(&reqbody.username, &reqbody.password)?;
 
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
     let user_name = reqbody.username.clone();
@@ -109,6 +60,8 @@ pub async fn create_session(
                 a
             },
             Err(e) => {
+                // Every failure is the same 401, so the response never reveals
+                // whether the account exists.
                 warn!("Failed to open user session: {}", e);
 
                 return Err(RequestError::Unauthorized);

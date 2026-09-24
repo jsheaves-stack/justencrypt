@@ -1,5 +1,6 @@
 mod test_admin;
 mod test_chunked_upload;
+mod test_credentials;
 mod test_db_files;
 mod test_db_folder_move;
 mod test_encryption;
@@ -22,8 +23,12 @@ use uuid::Uuid;
 
 use crate::{
     db::migrations::get_migrations,
+    enums::request_error::RequestError,
     get_app_config,
-    session::{policy::SessionPolicy, store::SessionStore, user_session::UserSession},
+    session::{
+        accounts::create_account_storage, policy::SessionPolicy, store::SessionStore,
+        user_session::UserSession,
+    },
     AppState,
 };
 
@@ -113,6 +118,14 @@ pub async fn create_test_session(
 ) -> (String, Cookie<'static>) {
     let user_token = Uuid::new_v4().to_string();
     let passphrase = SecretString::from_str("test_password").unwrap();
+
+    // Tests use a weak password, so this skips the strength check that
+    // `accounts::create_account` applies. The account may already exist when a
+    // test logs in more than once.
+    match create_account_storage(&temp_user, &passphrase).await {
+        Ok(()) | Err(RequestError::AccountAlreadyExists) => {},
+        Err(e) => panic!("Failed to create test account: {}", e),
+    }
 
     let user_session = match UserSession::open(&temp_user, &passphrase, None).await {
         Ok(session) => Arc::new(session),

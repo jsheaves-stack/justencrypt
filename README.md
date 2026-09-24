@@ -66,6 +66,19 @@ cargo run --release
 
 The server will start on the address and port specified in your configuration (default: `http://0.0.0.0:8000`).
 
+### 4. Create a User
+
+Accounts are created by an administrator; logging in never creates one. Set `JUSTENCRYPT_ADMIN_API_KEY`, then:
+
+```sh
+curl -X POST http://localhost:8000/admin/users \
+  -H 'Content-Type: application/json' \
+  -H "X-Admin-Api-Key: $JUSTENCRYPT_ADMIN_API_KEY" \
+  -d '{"username": "alice", "password": "<a strong password>"}'
+```
+
+This returns `201` and creates `user_data/alice/` with the user's encrypted database. Usernames are 1-64 bytes with no `/`, `\`, `.` or control characters; passwords are 1-1024 bytes and must meet `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE`. The user can then log in with `POST /session`.
+
 ## Configuration
 
 The application is configured through environment variables, which are loaded from the `env/justencrypt.env` file. The following table details the available variables and their default values.
@@ -76,7 +89,7 @@ The application is configured through environment variables, which are loaded fr
 | `JUSTENCRYPT_PORT`                            | The port Rocket will listen on. | `8000` |
 | `JUSTENCRYPT_WORKERS`                         | Number of worker threads for handling requests. | `16` |
 | `JUSTENCRYPT_KEEP_ALIVE`                      | Keep-alive timeout in seconds. | `5` |
-| `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` | The minimum password security score (`0`-`4`). | `3` |
+| `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` | The minimum zxcvbn password score (`0`-`4`) required when creating an account. | `4` |
 | `JUSTENCRYPT_ROCKET_LOG_LEVEL`                | Logging level for Rocket (`Off`, `Debug`, `Normal`, `Critical`). | `Critical` |
 | `JUSTENCRYPT_LOG_LEVEL`                       | Logging level for the application (`Off`, `Trace`, `Debug`, `Info`, `Warn`, `Error`). | `Warn` |
 | `JUSTENCRYPT_USER_DATA_PATH`                  | The path to store user data. | `./user_data` |
@@ -100,7 +113,7 @@ The application is configured through environment variables, which are loaded fr
 | `JUSTENCRYPT_TLS_CERT_PATH`                   | Path to the TLS cert file for HTTPS. | (none) |
 | `JUSTENCRYPT_ALLOW_ORIGIN`                    | Access-Control-Allow-Origin domain for CORS. | (none) |
 | `JUSTENCRYPT_SECURE_COOKIES`                  | Whether session cookies require HTTPS. Set to false for local dev. | `true` |
-| `JUSTENCRYPT_ADMIN_API_KEY`                   | API key to enable and access administrative routes. | (none) |
+| `JUSTENCRYPT_ADMIN_API_KEY`                   | API key to enable and access administrative routes, including creating user accounts. | (none) |
 | `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size for form submissions. | `10MiB` |
 | `JUSTENCRYPT_LIMITS_DATA_FORM`                | Maximum size for data-form submissions. | `10MiB` |
 | `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file upload size. Larger uploads are rejected with `413`. | `64GiB` |
