@@ -82,10 +82,14 @@ pub async fn delete_session(
 }
 
 #[options("/session")]
-pub async fn admin_options() {}
+pub fn admin_options() -> RequestSuccess {
+    RequestSuccess::NoContent
+}
 
 #[options("/session/<_session_id>")]
-pub async fn delete_session_options(_session_id: String) {}
+pub fn delete_session_options(_session_id: String) -> RequestSuccess {
+    RequestSuccess::NoContent
+}
 
 #[post("/users", format = "json", data = "<reqbody>")]
 pub async fn create_user(
@@ -103,4 +107,6 @@ pub async fn create_user(
 }
 
 #[options("/users")]
-pub async fn create_user_options() {}
+pub fn create_user_options() -> RequestSuccess {
+    RequestSuccess::NoContent
+}

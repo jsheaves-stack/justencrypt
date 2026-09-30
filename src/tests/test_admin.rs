@@ -277,3 +277,21 @@ async fn test_create_user_requires_the_admin_key() {
     );
     assert!(!user.path.exists());
 }
+
+// M11h: the admin preflight routes answered 200 while every other preflight
+// route, and the spec, use 204.
+#[async_test]
+async fn test_admin_preflight_routes_return_no_content() {
+    let (rocket, _test_user) = setup_rocket().await;
+    let rocket = rocket.mount(
+        "/admin",
+        routes![admin_options, delete_session_options, create_user_options],
+    );
+    let client = Client::tracked(rocket).await.expect("valid rocket");
+
+    for path in ["/admin/session", "/admin/session/some-id", "/admin/users"] {
+        let response = client.options(path).dispatch().await;
+
+        assert_eq!(response.status(), Status::NoContent, "{path}");
+    }
+}
