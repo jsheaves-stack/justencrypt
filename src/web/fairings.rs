@@ -56,3 +56,23 @@ impl Fairing for Cors {
         trace!("Exiting fairing::Cors::on_response");
     }
 }
+
+/// Headers every response gets. Responses hold decrypted files and user
+/// data, so browsers and proxies must never store them, and requests the
+/// client makes from a page must not leak its URL.
+pub struct SecurityHeaders;
+
+#[async_trait]
+impl Fairing for SecurityHeaders {
+    fn info(&self) -> Info {
+        Info {
+            name: "Add security headers to responses",
+            kind: Kind::Response,
+        }
+    }
+
+    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
+        response.set_header(Header::new("Cache-Control", "no-store"));
+        response.set_header(Header::new("Referrer-Policy", "no-referrer"));
+    }
+}

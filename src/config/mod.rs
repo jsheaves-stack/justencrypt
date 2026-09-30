@@ -500,7 +500,7 @@ impl AppConfig {
     }
 
     /// Rocket's own settings: address, port, workers, keep-alive, body
-    /// limits, secret key and TLS.
+    /// limits, secret key and TLS. Responses get no `Server` header.
     pub fn rocket_figment(&self) -> Figment {
         let server = &self.server;
 
@@ -509,6 +509,7 @@ impl AppConfig {
             .merge(("port", server.port))
             .merge(("workers", server.workers))
             .merge(("keep_alive", server.keep_alive))
+            .merge(("ident", false))
             .merge(("limits", self.limits.to_rocket()));
 
         if let Some(secret_key) = &server.secret_key {

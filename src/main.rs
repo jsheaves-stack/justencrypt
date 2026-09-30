@@ -26,7 +26,7 @@ use routes::{
 use session::{
     orphans::OrphanScanner, policy::SessionPolicy, reaper::SessionReaper, store::SessionStore,
 };
-use web::fairings::Cors;
+use web::fairings::{Cors, SecurityHeaders};
 
 pub mod config;
 pub mod db;
@@ -166,6 +166,7 @@ async fn rocket() -> _ {
 
     let mut rocket = rocket::custom(config.rocket_figment())
         .attach(Cors::new(config.allow_origin.clone()))
+        .attach(SecurityHeaders)
         .attach(Shield::default().enable(hsts))
         .attach(CleanupOnShutdown)
         .manage(state)
