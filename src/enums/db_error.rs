@@ -46,4 +46,7 @@ pub enum DbError {
 
     #[error("Failed to query db: {0}")]
     FailedToQueryDb(String),
+
+    #[error("Database migration failed: {0}")]
+    Migration(String),
 }

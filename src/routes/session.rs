@@ -50,6 +50,9 @@ pub async fn create_session(
     // session limit and don't linger when the background reaper is disabled.
     discard_sessions(state.sessions.remove_expired(unix_now_secs()).await).await;
 
+    // Held until the new session is in the store, so concurrent logins for
+    // this user don't each create a pool and migrate the database at once.
+    let login_guard = state.sessions.lock_login(&user_name).await;
     let existing_pool = state.sessions.pool_for_user(&user_name).await;
 
     let session = Arc::new(
@@ -93,6 +96,8 @@ pub async fn create_session(
     trace!("Session cookie added to jar.");
 
     let evicted = state.sessions.insert(user_token, session.clone()).await;
+
+    drop(login_guard);
 
     trace!("Session added to active session map.");
 

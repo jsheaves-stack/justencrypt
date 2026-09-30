@@ -10,6 +10,7 @@ use rocket::{
 use super::*;
 use crate::{
     db::sqlite,
+    enums::db_error::DbError,
     routes::{
         file::{init_upload, InitUploadResponse},
         folder::get_folder,
@@ -450,4 +451,66 @@ async fn test_login_rejects_malformed_credentials_before_touching_the_filesystem
 
         assert_eq!(status, Status::BadRequest, "username {:?}", username);
     }
+}
+
+// An encrypted user database that has never been migrated, like one created
+// before a new migration was added.
+fn create_unmigrated_user_db(test_user: &TestUser, password: &str) -> PathBuf {
+    let db_path = test_user.path.join(format!("{}.db", test_user.name));
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+    conn.pragma_update(None, "key", password).unwrap();
+    conn.execute_batch("CREATE TABLE placeholder (x INTEGER);")
+        .unwrap();
+
+    db_path
+}
+
+// M12: concurrent first logins used to migrate the same database at once, and
+// every login but the first failed with a 401.
+#[async_test]
+async fn test_concurrent_first_logins_all_succeed() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket.mount("/session", routes![create_session]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("valid rocket instance");
+
+    create_unmigrated_user_db(&test_user, "test_password");
+
+    let logins = (0..8).map(|_| login(&client, &test_user.name, "test_password"));
+    let results = rocket::futures::future::join_all(logins).await;
+
+    for (status, body) in results {
+        assert_eq!(status, Status::Created, "body: {}", body);
+    }
+}
+
+// M12: a failed migration is reported as a migration error rather than being
+// disguised as a missing row.
+#[async_test]
+async fn test_failed_migration_is_reported_as_a_migration_error() {
+    let (_rocket, test_user) = setup_rocket().await;
+    let db_path = create_unmigrated_user_db(&test_user, "test_password");
+    let password = SecretString::from_str("test_password").unwrap();
+    let db_config = test_config().db;
+
+    let pool = sqlite::create_user_db_connection(db_path.clone(), password.clone(), &db_config)
+        .expect("first migration should succeed");
+
+    // Rewinding the version makes the next open re-run a migration whose
+    // objects already exist.
+    pool.get()
+        .unwrap()
+        .pragma_update(None, "user_version", 0)
+        .unwrap();
+    drop(pool);
+
+    let result = sqlite::create_user_db_connection(db_path, password, &db_config);
+
+    assert!(
+        matches!(result, Err(DbError::Migration(_))),
+        "unexpected result: {:?}",
+        result.err()
+    );
 }

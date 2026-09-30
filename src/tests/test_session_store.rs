@@ -323,3 +323,32 @@ fn test_session_tokens_are_256_bit_base64url() {
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_ne!(a.expose_secret(), b.expose_secret());
 }
+
+// M12: logins for the same user wait for each other; other users don't.
+#[async_test]
+async fn test_login_lock_serialises_logins_per_user() {
+    let store = SessionStore::default();
+    let alice = store.lock_login("alice").await;
+
+    assert!(
+        timeout(Duration::from_millis(50), store.lock_login("alice"))
+            .await
+            .is_err(),
+        "a second login for the same user must wait"
+    );
+    assert!(
+        timeout(Duration::from_millis(50), store.lock_login("bob"))
+            .await
+            .is_ok(),
+        "another user's login must not wait"
+    );
+
+    drop(alice);
+
+    assert!(
+        timeout(Duration::from_millis(50), store.lock_login("alice"))
+            .await
+            .is_ok(),
+        "the lock must be free once the first login finishes"
+    );
+}

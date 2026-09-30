@@ -1,8 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex as StdMutex},
+};
 
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::tokio::sync::RwLock;
+use rocket::tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 use crate::session::{policy::SessionPolicy, user_session::UserSession};
 
@@ -21,6 +24,33 @@ use crate::session::{policy::SessionPolicy, user_session::UserSession};
 pub struct SessionStore {
     inner: RwLock<Inner>,
     policy: SessionPolicy,
+    login_locks: LoginLocks,
+}
+
+type LoginLocks = StdMutex<HashMap<String, Arc<Mutex<()>>>>;
+
+/// Held while a user logs in; see [`SessionStore::lock_login`]. Dropping it
+/// releases the lock, and removes the user's entry once nobody else holds or
+/// is waiting for it.
+pub struct LoginGuard<'a> {
+    guard: Option<OwnedMutexGuard<()>>,
+    lock: Arc<Mutex<()>>,
+    username: String,
+    login_locks: &'a LoginLocks,
+}
+
+impl Drop for LoginGuard<'_> {
+    fn drop(&mut self) {
+        self.guard.take();
+
+        let mut locks = self.login_locks.lock().unwrap_or_else(|e| e.into_inner());
+
+        // One reference is the map's and one is ours; any more belong to
+        // logins still waiting for the lock.
+        if Arc::strong_count(&self.lock) == 2 {
+            locks.remove(&self.username);
+        }
+    }
 }
 
 impl Default for SessionStore {
@@ -42,6 +72,29 @@ impl SessionStore {
         Self {
             inner: RwLock::default(),
             policy,
+            login_locks: StdMutex::default(),
+        }
+    }
+
+    /// Waits until no other login for `username` is in progress. Holding the
+    /// guard from the pool lookup until the new session is inserted means
+    /// concurrent logins open (and migrate) the user's database one at a
+    /// time, and later ones reuse the pool the first one created.
+    pub async fn lock_login(&self, username: &str) -> LoginGuard<'_> {
+        let lock = self
+            .login_locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(username.to_owned())
+            .or_default()
+            .clone();
+        let guard = lock.clone().lock_owned().await;
+
+        LoginGuard {
+            guard: Some(guard),
+            lock,
+            username: username.to_owned(),
+            login_locks: &self.login_locks,
         }
     }
 

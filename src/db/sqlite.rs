@@ -40,6 +40,19 @@ pub fn verify_user_db_password(
     Ok(())
 }
 
+/// A one-line description of a migration failure. The error's own `Display`
+/// includes the full text of the migration SQL, which is far too long to log.
+fn migration_error_summary(error: &rusqlite_migration::Error) -> String {
+    match error {
+        rusqlite_migration::Error::RusqliteError {
+            err: rusqlite::Error::SqlInputError { msg, .. },
+            ..
+        } => msg.clone(),
+        rusqlite_migration::Error::RusqliteError { err, .. } => err.to_string(),
+        other => other.to_string(),
+    }
+}
+
 pub fn create_user_db_connection(
     db_path: PathBuf,
     password: SecretString,
@@ -76,9 +89,12 @@ pub fn create_user_db_connection(
         trace!("Running one-time database migrations...");
 
         if let Err(e) = migrations::get_migrations().to_latest(&mut conn) {
-            error!("Migration error: {}", e);
+            let summary = migration_error_summary(&e);
 
-            return Err(DbError::Rusqlite(rusqlite::Error::QueryReturnedNoRows));
+            error!("Database migration failed: {}", summary);
+            debug!("Database migration error detail: {:?}", e);
+
+            return Err(DbError::Migration(summary));
         }
 
         trace!("Migrations are up to date.");
