@@ -299,7 +299,7 @@ async fn test_reap_once_removes_expired_sessions() {
     store.insert("live".into(), live).await;
     store.insert("expired".into(), expired).await;
 
-    reap_once(&store).await;
+    reap_once(&store, Duration::from_secs(24 * 60 * 60)).await;
 
     assert!(store.get("live").await.is_some());
     assert!(store.get("expired").await.is_none());

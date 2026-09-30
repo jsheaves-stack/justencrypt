@@ -1,5 +1,4 @@
 use std::{
-    env,
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -12,23 +11,22 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError,
+    config::DbConfig, db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError,
     util::names::is_valid_entry_name,
 };
 
-pub fn verify_user_db_password(db_path: &Path, password: &SecretString) -> Result<(), DbError> {
+pub fn verify_user_db_password(
+    db_path: &Path,
+    password: &SecretString,
+    config: &DbConfig,
+) -> Result<(), DbError> {
     trace!(
         "Entering sqlite::verify_user_db_password for db_path: {:?}",
         db_path
     );
 
-    let busy_timeout_ms = env::var("JUSTENCRYPT_DB_BUSY_TIMEOUT_MS")
-        .unwrap_or_else(|_| "60000".to_string())
-        .parse::<u64>()
-        .unwrap_or(60000);
-
     let conn = rusqlite::Connection::open(db_path)?;
-    conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
+    conn.busy_timeout(Duration::from_millis(config.busy_timeout_ms))?;
     conn.pragma_update(None, "key", password.expose_secret())?;
 
     if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())) {
@@ -45,37 +43,18 @@ pub fn verify_user_db_password(db_path: &Path, password: &SecretString) -> Resul
 pub fn create_user_db_connection(
     db_path: PathBuf,
     password: SecretString,
+    config: &DbConfig,
 ) -> Result<Pool<SqliteConnectionManager>, DbError> {
     trace!(
         "Entering sqlite::create_user_db_connection with db_path: {:?}",
         db_path
     );
 
-    let busy_timeout_ms = env::var("JUSTENCRYPT_DB_BUSY_TIMEOUT_MS")
-        .unwrap_or_else(|_| "60000".to_string())
-        .parse::<u64>()
-        .unwrap_or(60000);
-
-    let synchronous_mode =
-        env::var("JUSTENCRYPT_DB_SYNCHRONOUS_MODE").unwrap_or_else(|_| "NORMAL".to_string());
-
-    let cache_size_kb = env::var("JUSTENCRYPT_DB_CACHE_SIZE_KB")
-        .unwrap_or_else(|_| "16000".to_string())
-        .parse::<i64>()
-        .unwrap_or(16000);
-
-    let temp_store_mode =
-        env::var("JUSTENCRYPT_DB_TEMP_STORE").unwrap_or_else(|_| "MEMORY".to_string());
-
-    let journal_size_limit_bytes = env::var("JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES")
-        .unwrap_or_else(|_| "67108864".to_string())
-        .parse::<i64>()
-        .unwrap_or(67108864);
-
-    let connection_timeout_seconds = env::var("JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS")
-        .unwrap_or_else(|_| "30".to_string())
-        .parse::<u64>()
-        .unwrap_or(30);
+    let busy_timeout = Duration::from_millis(config.busy_timeout_ms);
+    let synchronous_mode = config.synchronous_mode.as_sql();
+    let cache_size_kb = config.cache_size_kb;
+    let temp_store_mode = config.temp_store.as_sql();
+    let journal_size_limit_bytes = config.journal_size_limit_bytes;
 
     // Open a connection to validate the password and run migrations.
     // This fails immediately if the password is wrong, avoiding r2d2's exponential
@@ -85,7 +64,7 @@ pub fn create_user_db_connection(
 
         let mut conn = rusqlite::Connection::open(&db_path)?;
 
-        conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
+        conn.busy_timeout(busy_timeout)?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
         if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())) {
@@ -108,7 +87,7 @@ pub fn create_user_db_connection(
     let db_manager = SqliteConnectionManager::file(db_path).with_init(move |conn| {
         trace!("Initializing new pool DB connection.");
 
-        conn.busy_timeout(Duration::from_millis(busy_timeout_ms))?;
+        conn.busy_timeout(busy_timeout)?;
         conn.pragma_update(None, "key", password.expose_secret())?;
 
         conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(()))?;
@@ -140,26 +119,11 @@ pub fn create_user_db_connection(
         Ok(())
     });
 
-    let min_connections = env::var("JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER")
-        .unwrap_or_else(|_| "0".to_string())
-        .parse::<u32>()
-        .unwrap_or(0);
-
-    let max_connections = env::var("JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER")
-        .unwrap_or_else(|_| "16".to_string())
-        .parse::<u32>()
-        .unwrap_or(16);
-
-    let idle_timeout_seconds = env::var("JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS")
-        .unwrap_or_else(|_| "600".to_string())
-        .parse::<u64>()
-        .unwrap_or(600);
-
     let pool = Pool::builder()
-        .max_size(max_connections)
-        .min_idle(Some(min_connections))
-        .idle_timeout(Some(Duration::from_secs(idle_timeout_seconds)))
-        .connection_timeout(Duration::from_secs(connection_timeout_seconds))
+        .max_size(config.max_connections.get())
+        .min_idle(Some(config.min_connections))
+        .idle_timeout(Some(Duration::from_secs(config.idle_timeout_seconds.get())))
+        .connection_timeout(Duration::from_secs(config.connection_timeout_seconds.get()))
         .build(db_manager)
         .map_err(DbError::PoolError)?;
 

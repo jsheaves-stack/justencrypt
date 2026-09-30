@@ -1,5 +1,6 @@
 mod test_admin;
 mod test_chunked_upload;
+mod test_config;
 mod test_credentials;
 mod test_db_files;
 mod test_db_folder_delete;
@@ -24,9 +25,9 @@ use secrecy::SecretString;
 use uuid::Uuid;
 
 use crate::{
+    config::AppConfig,
     db::migrations::get_migrations,
     enums::request_error::RequestError,
-    get_app_config,
     session::{
         accounts::create_account_storage, orphans::OrphanScanner, policy::SessionPolicy,
         store::SessionStore, user_session::UserSession,
@@ -63,7 +64,14 @@ impl Drop for TestUser {
 }
 
 pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
-    setup_rocket_with_session_policy(SessionPolicy::default()).await
+    setup_rocket_with_config(|_| {}).await
+}
+
+// Lets a test change the config its Rocket instance is built with.
+pub async fn setup_rocket_with_config(
+    configure: impl FnOnce(&mut AppConfig),
+) -> (Rocket<Build>, TestUser) {
+    build_test_rocket(configure, SessionPolicy::default(), false, 1)
 }
 
 pub async fn setup_rocket_with_session_policy(
@@ -77,8 +85,34 @@ pub async fn setup_rocket_with_options(
     orphan_scan_enabled: bool,
     thumbnail_permits: usize,
 ) -> (Rocket<Build>, TestUser) {
-    dotenv::dotenv().ok();
+    build_test_rocket(
+        |_| {},
+        session_policy,
+        orphan_scan_enabled,
+        thumbnail_permits,
+    )
+}
 
+// Users are created under the system temp directory, and the fixed secret
+// key lets tests also run as release builds, which require one.
+pub fn test_config() -> AppConfig {
+    let mut config = AppConfig {
+        user_data_path: env::temp_dir(),
+        ..AppConfig::default()
+    };
+
+    config.server.secret_key =
+        Some(SecretString::from_str("BlN4QMqM8+wmRLPNRn10X/ZwmM58tEcCOgeY8cuMsB8=").unwrap());
+
+    config
+}
+
+fn build_test_rocket(
+    configure: impl FnOnce(&mut AppConfig),
+    session_policy: SessionPolicy,
+    orphan_scan_enabled: bool,
+    thumbnail_permits: usize,
+) -> (Rocket<Build>, TestUser) {
     let temp_user = Uuid::new_v4().to_string();
     let temp_dir = env::temp_dir().join(&temp_user);
     fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
@@ -88,25 +122,18 @@ pub async fn setup_rocket_with_options(
         path: temp_dir,
     };
 
-    env::set_var(
-        "JUSTENCRYPT_ROCKET_SECRET_KEY",
-        "BlN4QMqM8+wmRLPNRn10X/ZwmM58tEcCOgeY8cuMsB8=",
-    );
-
-    env::set_var(
-        "JUSTENCRYPT_USER_DATA_PATH",
-        env::temp_dir().to_str().unwrap(),
-    );
+    let mut config = test_config();
+    config.orphan_scan_enabled = orphan_scan_enabled;
+    configure(&mut config);
 
     let state = AppState {
+        config: Arc::new(config.clone()),
         sessions: Arc::new(SessionStore::new(session_policy)),
         orphan_scanner: OrphanScanner::new(orphan_scan_enabled),
         thumbnail_semaphore: Arc::new(Semaphore::new(thumbnail_permits)),
     };
 
-    let app_config = get_app_config();
-
-    let rocket = custom(app_config).manage(state);
+    let rocket = custom(config.rocket_figment()).manage(state);
 
     (rocket, user)
 }
@@ -129,23 +156,22 @@ pub async fn create_test_session(
 ) -> (String, Cookie<'static>) {
     let user_token = Uuid::new_v4().to_string();
     let passphrase = SecretString::from_str("test_password").unwrap();
+    let state = rocket.state::<AppState>().unwrap();
 
     // Tests use a weak password, so this skips the strength check that
     // `accounts::create_account` applies. The account may already exist when a
     // test logs in more than once.
-    match create_account_storage(&temp_user, &passphrase).await {
+    match create_account_storage(&temp_user, &passphrase, &state.config).await {
         Ok(()) | Err(RequestError::AccountAlreadyExists) => {},
         Err(e) => panic!("Failed to create test account: {}", e),
     }
 
-    let user_session = match UserSession::open(&temp_user, &passphrase, None).await {
+    let user_session = match UserSession::open(&temp_user, &passphrase, None, &state.config).await {
         Ok(session) => Arc::new(session),
         Err(e) => panic!("Failed to open user session: {}", e),
     };
 
     let session_id = user_session.session_id.clone();
-
-    let state = rocket.state::<AppState>().unwrap();
 
     state
         .sessions

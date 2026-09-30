@@ -15,10 +15,7 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     routes::{file::put_file, session::create_session},
-    session::{
-        orphans::{is_enabled_value, remove_orphaned_files},
-        policy::SessionPolicy,
-    },
+    session::{orphans::remove_orphaned_files, policy::SessionPolicy},
     util::sharded_path::get_sharded_path,
     AppState,
 };
@@ -116,24 +113,6 @@ async fn test_remove_orphaned_files_removes_only_unreferenced_files() {
 
     for path in &removed {
         assert!(!path.exists(), "{:?} should have been removed", path);
-    }
-}
-
-#[test]
-fn test_orphan_scan_is_off_unless_explicitly_enabled() {
-    for value in [
-        None,
-        Some(""),
-        Some("false"),
-        Some("0"),
-        Some("no"),
-        Some("nonsense"),
-    ] {
-        assert!(!is_enabled_value(value), "{:?}", value);
-    }
-
-    for value in [Some("true"), Some("TRUE"), Some("1"), Some(" yes ")] {
-        assert!(is_enabled_value(value), "{:?}", value);
     }
 }
 

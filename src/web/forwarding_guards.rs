@@ -1,8 +1,9 @@
-use std::{env, sync::Arc};
+use std::sync::Arc;
 
 use rocket::{
     async_trait, http::Status, outcome::Outcome, request::FromRequest, tokio, Request, State,
 };
+use secrecy::ExposeSecret;
 
 use crate::{
     enums::request_error::RequestError,
@@ -41,15 +42,19 @@ impl<'r> FromRequest<'r> for AdminGuard {
     ) -> Outcome<Self, (Status, Self::Error), Status> {
         trace!("Entering forwarding_guard::AdminGuard::from_request");
 
-        let api_key = match env::var("JUSTENCRYPT_ADMIN_API_KEY") {
-            Ok(key) => key,
-            Err(_) => {
+        let api_key = match request
+            .rocket()
+            .state::<AppState>()
+            .and_then(|state| state.config.admin_api_key.as_ref())
+        {
+            Some(key) => key,
+            None => {
                 return Outcome::Error((Status::InternalServerError, RequestError::InvalidApiKey))
             },
         };
 
         match request.headers().get_one("X-Admin-Api-Key") {
-            Some(key) if key == api_key => Outcome::Success(AdminGuard),
+            Some(key) if key == api_key.expose_secret() => Outcome::Success(AdminGuard),
             _ => Outcome::Error((Status::Unauthorized, RequestError::InvalidApiKey)),
         }
     }

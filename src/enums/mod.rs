@@ -1,3 +1,4 @@
+pub mod config_error;
 pub mod db_error;
 pub mod encryption_error;
 pub mod request_error;

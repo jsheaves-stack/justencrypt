@@ -1,5 +1,3 @@
-use std::env;
-
 use zxcvbn::{zxcvbn, Score};
 
 use crate::enums::request_error::RequestError;
@@ -36,21 +34,15 @@ pub fn validate_credentials(username: &str, password: &str) -> Result<(), Reques
     Ok(())
 }
 
-/// Applies the minimum zxcvbn score from
-/// `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` (default 4; any value above
-/// 4 means 3).
-pub fn check_password_strength(password: &str) -> Result<(), RequestError> {
-    let minimum = match env::var("JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE")
-        .ok()
-        .and_then(|v| v.parse::<u8>().ok())
-        .unwrap_or(4)
-    {
+/// Requires a zxcvbn score of at least `minimum_score` (0-4; the config
+/// rejects anything higher at startup).
+pub fn check_password_strength(password: &str, minimum_score: u8) -> Result<(), RequestError> {
+    let minimum = match minimum_score {
         0 => Score::Zero,
         1 => Score::One,
         2 => Score::Two,
         3 => Score::Three,
-        4 => Score::Four,
-        _ => Score::Three,
+        _ => Score::Four,
     };
 
     let score = zxcvbn(password, &[]).score();

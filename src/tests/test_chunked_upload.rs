@@ -1,5 +1,5 @@
 use std::{
-    env,
+    num::NonZeroUsize,
     sync::atomic::Ordering,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -330,20 +330,10 @@ async fn test_init_upload_reclaims_stale_upload_instead_of_hanging() {
     assert!(uploads.contains_key(&new_id));
 }
 
-struct EnvVarGuard(&'static str);
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        env::remove_var(self.0);
-    }
-}
-
-// The limit is process-wide, so it is set to 2: no other test keeps more than
-// two uploads active in one session, which keeps them unaffected while this
-// runs.
 #[async_test]
 async fn test_stale_uploads_do_not_count_against_the_upload_limit() {
-    let (rocket, test_user) = setup_rocket().await;
+    let (rocket, test_user) =
+        setup_rocket_with_config(|config| config.max_active_uploads = NonZeroUsize::new(2)).await;
     let rocket = rocket.mount("/file", routes![init_upload]);
     let client = Client::tracked(rocket)
         .await
@@ -357,9 +347,6 @@ async fn test_stale_uploads_do_not_count_against_the_upload_limit() {
         .get_by_id(&session_id)
         .await
         .unwrap();
-
-    env::set_var("JUSTENCRYPT_MAX_ACTIVE_UPLOADS", "2");
-    let _restore = EnvVarGuard("JUSTENCRYPT_MAX_ACTIVE_UPLOADS");
 
     let stale_id = initiate(&client, &cookie, "stale.txt").await;
     let kept_id = initiate(&client, &cookie, "kept.txt").await;

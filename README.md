@@ -83,6 +83,8 @@ This returns `201` and creates `user_data/alice/` with the user's encrypted data
 
 The application is configured through environment variables, which are loaded from the `env/justencrypt.env` file. The following table details the available variables and their default values.
 
+All variables are read once at startup (`src/config/mod.rs`). An empty value counts as unset. A value that can't be parsed or is out of range, or a `JUSTENCRYPT_*` variable the server doesn't recognize, stops the server with an error that names the variable.
+
 | Variable Name                                 | Description | Default |
 |-----------------------------------------------|-------------|---------|
 | `JUSTENCRYPT_ADDRESS`                         | The IP address Rocket will bind to. | `0.0.0.0` |
@@ -94,22 +96,22 @@ The application is configured through environment variables, which are loaded fr
 | `JUSTENCRYPT_LOG_LEVEL`                       | Logging level for the application (`Off`, `Trace`, `Debug`, `Info`, `Warn`, `Error`). | `Warn` |
 | `JUSTENCRYPT_USER_DATA_PATH`                  | The path to store user data. | `./user_data` |
 | `JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER`     | Minimum number of idle SQLite connections per user. | `0` |
-| `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`     | Maximum number of concurrent SQLite connections per user. | `2` |
+| `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`     | Maximum number of concurrent SQLite connections per user. | `16` |
 | `JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS`         | Seconds a connection can be idle before being closed. | `600` |
 | `JUSTENCRYPT_DB_BUSY_TIMEOUT_MS`              | Milliseconds to wait when the database is locked. | `60000` |
-| `JUSTENCRYPT_DB_SYNCHRONOUS_MODE`             | SQLite PRAGMA synchronous setting (`NORMAL`, `FULL`, `OFF`). | `NORMAL` |
+| `JUSTENCRYPT_DB_SYNCHRONOUS_MODE`             | SQLite PRAGMA synchronous setting (`OFF`, `NORMAL`, `FULL`, `EXTRA`). | `NORMAL` |
 | `JUSTENCRYPT_DB_CACHE_SIZE_KB`                | SQLite PRAGMA cache_size in kilobytes. | `16000` |
-| `JUSTENCRYPT_DB_TEMP_STORE`                   | SQLite PRAGMA temp_store setting (`MEMORY`, `FILE`). | `MEMORY` |
+| `JUSTENCRYPT_DB_TEMP_STORE`                   | SQLite PRAGMA temp_store setting (`DEFAULT`, `FILE`, `MEMORY`). | `MEMORY` |
 | `JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES`     | Max size in bytes for the WAL file. | `67108864` |
 | `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds to wait for an available DB connection. | `30` |
-| `JUSTENCRYPT_MAX_ACTIVE_UPLOADS`              | Maximum number of concurrent active uploads allowed. | (none) |
+| `JUSTENCRYPT_MAX_ACTIVE_UPLOADS`              | Maximum number of uploads a session may have in progress at once. | (no limit) |
 | `JUSTENCRYPT_UPLOAD_TTL_SECONDS`              | Seconds an upload can sit idle before it is considered abandoned and removed (checked when a new upload starts, and by the session reaper if enabled). | `86400` |
 | `JUSTENCRYPT_SESSION_IDLE_TIMEOUT_SECONDS`    | A session with no requests for this long expires. | `3600` |
 | `JUSTENCRYPT_SESSION_MAX_LIFETIME_SECONDS`    | A session expires this long after login, however active it is. Also the session cookie's `Max-Age`. | `604800` |
 | `JUSTENCRYPT_MAX_SESSIONS_PER_USER`           | Logging in beyond this many sessions ends the user's oldest session. | `5` |
 | `JUSTENCRYPT_ORPHAN_SCAN_ENABLED`             | When `true`, every login starts a background job that removes that user's stored files that no database row refers to: blobs, thumbnails and `.part` files left behind by crashes or failed deletes. | `false` |
 | `JUSTENCRYPT_SESSION_REAPER_INTERVAL_SECONDS` | How often a background job removes expired sessions and stale uploads. `0` disables it; expired sessions are then still rejected on their next request and cleared out on every login. | `0` |
-| `JUSTENCRYPT_ROCKET_SECRET_KEY`               | **Required.** A 256-bit base64 key for securing cookies. Generate one with `openssl rand -base64 32`. | (none) |
+| `JUSTENCRYPT_ROCKET_SECRET_KEY`               | **Required in release builds.** A 256-bit base64 key for securing cookies. Generate one with `openssl rand -base64 32`. Debug builds without one use a random key for each launch. | (none) |
 | `JUSTENCRYPT_TLS_KEY_PATH`                    | Path to the TLS key file for HTTPS. | (none) |
 | `JUSTENCRYPT_TLS_CERT_PATH`                   | Path to the TLS cert file for HTTPS. | (none) |
 | `JUSTENCRYPT_ALLOW_ORIGIN`                    | Access-Control-Allow-Origin domain for CORS. | (none) |

@@ -1,12 +1,9 @@
-use std::{env, io::Write, str::FromStr, sync::Arc};
+use std::{io::Write, process, sync::Arc};
 
-use log::LevelFilter;
+use config::AppConfig;
 use rocket::{
     async_trait,
-    config::{Config, TlsConfig},
-    data::{ByteUnit, Limits},
     fairing::{Fairing, Info, Kind},
-    figment::Figment,
     launch,
     shield::{Hsts, Shield},
     time::Duration,
@@ -31,6 +28,7 @@ use session::{
 };
 use web::fairings::Cors;
 
+pub mod config;
 pub mod db;
 pub mod encryption;
 pub mod enums;
@@ -44,6 +42,7 @@ extern crate rocket;
 extern crate serde;
 
 pub struct AppState {
+    pub config: Arc<AppConfig>,
     pub sessions: Arc<SessionStore>,
     pub orphan_scanner: OrphanScanner,
     pub thumbnail_semaphore: Arc<Semaphore>,
@@ -76,164 +75,18 @@ impl Fairing for CleanupOnShutdown {
     }
 }
 
-fn get_required_env_var(var_name: &str, default: &str, error_msg: &str) -> String {
-    if cfg!(debug_assertions) {
-        match env::var(var_name) {
-            Ok(v) => v,
-
-            Err(_) => default.to_owned(),
-        }
-    } else {
-        match env::var(var_name) {
-            Ok(v) => v,
-
-            Err(e) => panic!("{} Error: {}", error_msg, e),
-        }
-    }
-}
-
-pub fn get_app_config() -> Figment {
-    trace!("Entering config::get_app_config");
-
-    let secret_key = get_required_env_var(
-        "JUSTENCRYPT_ROCKET_SECRET_KEY",
-        "ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=",
-        "JUSTENCRYPT_ROCKET_SECRET_KEY must be set in release mode.",
-    );
-
-    trace!("Secret key loaded.");
-
-    let app_config = Config::figment()
-        .merge((
-            "address",
-            env::var("JUSTENCRYPT_ADDRESS").unwrap_or_else(|_| "0.0.0.0".into()),
-        ))
-        .merge((
-            "port",
-            env::var("JUSTENCRYPT_PORT")
-                .unwrap_or_else(|_| "8000".into())
-                .parse::<u16>()
-                .unwrap_or(8000),
-        ))
-        .merge((
-            "workers",
-            env::var("JUSTENCRYPT_WORKERS")
-                .unwrap_or_else(|_| "16".into())
-                .parse::<usize>()
-                .unwrap_or(16),
-        ))
-        .merge((
-            "keep_alive",
-            env::var("JUSTENCRYPT_KEEP_ALIVE")
-                .unwrap_or_else(|_| "5".into())
-                .parse::<u64>()
-                .unwrap_or(5),
-        ))
-        .merge(("secret_key", secret_key))
-        .merge((
-            "limits",
-            Limits::default()
-                .limit(
-                    "form",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_FORM").unwrap_or_else(|_| "10MiB".into()),
-                    )
-                    .unwrap(),
-                )
-                .limit(
-                    "data-form",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_DATA_FORM")
-                            .unwrap_or_else(|_| "10MiB".into()),
-                    )
-                    .unwrap(),
-                )
-                .limit(
-                    "file",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_FILE").unwrap_or_else(|_| "64GiB".into()),
-                    )
-                    .unwrap(),
-                )
-                .limit(
-                    "file-chunk",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_FILE_CHUNK")
-                            .unwrap_or_else(|_| "32MiB".into()),
-                    )
-                    .unwrap(),
-                )
-                .limit(
-                    "json",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_JSON").unwrap_or_else(|_| "10MiB".into()),
-                    )
-                    .unwrap(),
-                )
-                .limit(
-                    "msgpack",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_MSGPACK").unwrap_or_else(|_| "1MiB".into()),
-                    )
-                    .unwrap(),
-                )
-                .limit(
-                    "file/jpg",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_FILE_JPG").unwrap_or_else(|_| "10GiB".into()),
-                    )
-                    .unwrap(),
-                )
-                .limit(
-                    "bytes",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_BYTES").unwrap_or_else(|_| "10MiB".into()),
-                    )
-                    .unwrap(),
-                )
-                .limit(
-                    "string",
-                    ByteUnit::from_str(
-                        &env::var("JUSTENCRYPT_LIMITS_STRING").unwrap_or_else(|_| "10MiB".into()),
-                    )
-                    .unwrap(),
-                ),
-        ));
-    trace!("Merged standard and limits configuration from environment variables.");
-
-    let tls_key_path = env::var("JUSTENCRYPT_TLS_KEY_PATH").unwrap_or_default();
-    let tls_cert_path = env::var("JUSTENCRYPT_TLS_CERT_PATH").unwrap_or_default();
-
-    // Only add TLS config if both paths are non-empty
-
-    if !tls_cert_path.is_empty() && !tls_key_path.is_empty() {
-        trace!(
-            "TLS paths provided, merging TLS configuration. Cert: {}, Key: {}",
-            tls_cert_path,
-            tls_key_path
-        );
-
-        app_config.merge(("tls", TlsConfig::from_paths(tls_cert_path, tls_key_path)))
-    } else {
-        trace!("No TLS paths provided, skipping TLS configuration.");
-
-        app_config
-    }
-}
-
 #[launch]
 async fn rocket() -> _ {
     dotenv::dotenv().ok();
 
-    let app_log_level = env::var("JUSTENCRYPT_LOG_LEVEL").unwrap_or_else(|_| "Warn".into());
-    let rocket_log_level_str =
-        env::var("JUSTENCRYPT_ROCKET_LOG_LEVEL").unwrap_or_else(|_| "Critical".into());
+    // The logger isn't set up yet, and its level comes from this config.
+    let config = match AppConfig::from_env() {
+        Ok(config) => Arc::new(config),
+        Err(e) => {
+            eprintln!("Invalid configuration: {}", e);
 
-    let rocket_log_level = match rocket_log_level_str.as_str() {
-        "Off" => LevelFilter::Off,
-        "Debug" => LevelFilter::Debug,
-        "Critical" => LevelFilter::Error,
-        _ => LevelFilter::Info,
+            process::exit(1);
+        },
     };
 
     env_logger::Builder::new()
@@ -261,20 +114,16 @@ async fn rocket() -> _ {
                 msg = record.args()
             )
         })
-        .filter_level(LevelFilter::from_str(&app_log_level).unwrap_or(LevelFilter::Error))
-        .filter_module("rocket", rocket_log_level)
+        .filter_level(config.server.log_level.filter())
+        .filter_module("rocket", config.server.rocket_log_level.filter())
         .init();
 
     trace!("Loaded .env file and initialized logger.");
 
     trace!("Entering main::rocket launch function.");
 
-    let app_config = get_app_config();
-
-    trace!("Application configuration loaded.");
-
-    let workers: u16 = app_config.extract_inner("workers").unwrap();
-    let semaphore_tickets = ((workers as usize * 7) / 10).max(1);
+    let workers = config.server.workers.get();
+    let semaphore_tickets = ((workers * 7) / 10).max(1);
 
     trace!(
         "Calculated thumbnail semaphore tickets: {} (from {} workers)",
@@ -282,7 +131,7 @@ async fn rocket() -> _ {
         workers
     );
 
-    let session_policy = SessionPolicy::from_env();
+    let session_policy = SessionPolicy::from(&config.session);
 
     info!(
         "Session policy: idle timeout {}s, max lifetime {}s, max {} session(s) per user.",
@@ -291,7 +140,7 @@ async fn rocket() -> _ {
         session_policy.max_per_user
     );
 
-    let orphan_scanner = OrphanScanner::from_env();
+    let orphan_scanner = OrphanScanner::new(config.orphan_scan_enabled);
 
     info!(
         "Orphan file scan at login is {} (JUSTENCRYPT_ORPHAN_SCAN_ENABLED).",
@@ -303,6 +152,7 @@ async fn rocket() -> _ {
     );
 
     let state = AppState {
+        config: config.clone(),
         sessions: Arc::new(SessionStore::new(session_policy)),
         orphan_scanner,
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
@@ -316,8 +166,8 @@ async fn rocket() -> _ {
 
     trace!("Building Rocket instance...");
 
-    let mut rocket = rocket::custom(app_config)
-        .attach(Cors)
+    let mut rocket = rocket::custom(config.rocket_figment())
+        .attach(Cors::new(config.allow_origin.clone()))
         .attach(Shield::default().enable(hsts))
         .attach(CleanupOnShutdown)
         .manage(state)
@@ -351,7 +201,7 @@ async fn rocket() -> _ {
             routes![create_session, destroy_session, session_options,],
         );
 
-    if env::var("JUSTENCRYPT_ADMIN_API_KEY").is_ok() {
+    if config.admin_api_key.is_some() {
         trace!("JUSTENCRYPT_ADMIN_API_KEY is set, mounting admin routes.");
 
         rocket = rocket.mount(
@@ -369,7 +219,7 @@ async fn rocket() -> _ {
         warn!("JUSTENCRYPT_ADMIN_API_KEY is not set, admin routes will NOT be available.");
     }
 
-    match SessionReaper::from_env() {
+    match SessionReaper::every(config.session.reaper_interval_seconds) {
         Some(reaper) => {
             rocket = rocket.attach(reaper);
         },

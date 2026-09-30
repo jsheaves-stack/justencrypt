@@ -1,5 +1,3 @@
-use std::env;
-
 use rocket::{
     data::{Data, Limits},
     delete, get,
@@ -7,6 +5,7 @@ use rocket::{
     options, patch, post, put,
     serde::json::Json,
     tokio::{self, fs, sync::mpsc},
+    State,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -25,12 +24,13 @@ use crate::{
             get_sharded_path, remove_blob_and_thumbnail, remove_sharded_path, sync_parent_dir,
         },
         unrestricted_path::UnrestrictedPath,
-        upload_limits::{max_chunk_request_size, max_file_size, open_with_limit, upload_ttl},
+        upload_limits::{max_chunk_request_size, max_file_size, open_with_limit},
     },
     web::{
         forwarding_guards::{AuthenticatedSession, RangeHeader},
         responders::RangeResponder,
     },
+    AppState,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -47,16 +47,15 @@ pub struct FinalizeErrorResponse {
 pub async fn init_upload(
     file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
+    state: &State<AppState>,
 ) -> Result<Json<InitUploadResponse>, RequestError> {
     trace!("Entering route [POST /file/upload/initiate/{}]", file_path);
 
     let session = auth.session.clone();
 
-    session.sweep_stale_uploads(upload_ttl()).await;
+    session.sweep_stale_uploads(state.config.upload_ttl()).await;
 
-    let max_uploads = env::var("JUSTENCRYPT_MAX_ACTIVE_UPLOADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok());
+    let max_uploads = state.config.max_active_uploads.map(|limit| limit.get());
 
     // Reject early so a client at the limit doesn't cost any I/O. The limit is
     // checked again under the same lock as the insert below, because the file

@@ -1,5 +1,5 @@
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -29,12 +29,6 @@ impl OrphanScanner {
         Self { enabled }
     }
 
-    pub fn from_env() -> Self {
-        Self::new(is_enabled_value(
-            env::var("JUSTENCRYPT_ORPHAN_SCAN_ENABLED").ok().as_deref(),
-        ))
-    }
-
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -57,12 +51,6 @@ impl OrphanScanner {
             }
         });
     }
-}
-
-/// `true`, `1` and `yes` (in any case) enable the scan; anything else,
-/// including no value, leaves it off.
-pub fn is_enabled_value(value: Option<&str>) -> bool {
-    value.is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
 }
 
 #[derive(PartialEq)]

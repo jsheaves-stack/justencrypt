@@ -1,4 +1,4 @@
-use std::{collections::HashSet, env, str::FromStr, sync::Arc};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
@@ -53,7 +53,7 @@ pub async fn create_session(
     let existing_pool = state.sessions.pool_for_user(&user_name).await;
 
     let session = Arc::new(
-        match UserSession::open(&user_name, &passphrase, existing_pool).await {
+        match UserSession::open(&user_name, &passphrase, existing_pool, &state.config).await {
             Ok(a) => {
                 trace!("User session opened successfully.");
 
@@ -79,16 +79,11 @@ pub async fn create_session(
 
     trace!("Generated new session ID: {}", session_id);
 
-    let secure_cookies = env::var("JUSTENCRYPT_SECURE_COOKIES")
-        .unwrap_or_else(|_| "true".to_string())
-        .parse::<bool>()
-        .unwrap_or(true);
-
     let max_lifetime_secs = state.sessions.policy().max_lifetime.as_secs();
 
     let mut cookie = Cookie::new("sid", user_token.clone());
     cookie.set_same_site(Some(SameSite::Strict));
-    cookie.set_secure(secure_cookies);
+    cookie.set_secure(state.config.secure_cookies);
     cookie.set_path("/");
     cookie.set_max_age(time::Duration::seconds(
         i64::try_from(max_lifetime_secs).unwrap_or(i64::MAX),

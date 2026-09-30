@@ -1,33 +1,33 @@
 use std::{
-    env,
     fs::{self, OpenOptions},
     io::ErrorKind,
-    path::PathBuf,
 };
 
 use rocket::tokio::task;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::{
+    config::AppConfig,
     db::sqlite,
     enums::request_error::RequestError,
     session::credentials::{check_password_strength, validate_credentials},
 };
 
-/// Directory that holds one sub-directory per user
-/// (`JUSTENCRYPT_USER_DATA_PATH`, default `./user_data`).
-pub fn user_data_path() -> PathBuf {
-    PathBuf::from(env::var("JUSTENCRYPT_USER_DATA_PATH").unwrap_or_else(|_| "./user_data".into()))
-}
-
 /// Creates an account after checking the username and the password's
 /// strength. Accounts are only ever created here; logging in never creates
 /// one.
-pub async fn create_account(username: &str, password: &SecretString) -> Result<(), RequestError> {
+pub async fn create_account(
+    username: &str,
+    password: &SecretString,
+    config: &AppConfig,
+) -> Result<(), RequestError> {
     validate_credentials(username, password.expose_secret())?;
-    check_password_strength(password.expose_secret())?;
+    check_password_strength(
+        password.expose_secret(),
+        config.minimum_password_security_score,
+    )?;
 
-    create_account_storage(username, password).await
+    create_account_storage(username, password, config).await
 }
 
 /// Creates the user's directory and encrypted database, without checking the
@@ -36,12 +36,14 @@ pub async fn create_account(username: &str, password: &SecretString) -> Result<(
 pub async fn create_account_storage(
     username: &str,
     password: &SecretString,
+    config: &AppConfig,
 ) -> Result<(), RequestError> {
     let username = username.to_owned();
     let password = password.clone();
+    let user_path = config.user_data_path.join(&username);
+    let db_config = config.db.clone();
 
     task::spawn_blocking(move || {
-        let user_path = user_data_path().join(&username);
         let db_path = user_path.join(format!("{username}.db"));
 
         fs::create_dir_all(&user_path).map_err(|e| {
@@ -69,7 +71,7 @@ pub async fn create_account_storage(
         }
 
         // Keys the new database with the password and runs the migrations.
-        if let Err(e) = sqlite::create_user_db_connection(db_path.clone(), password) {
+        if let Err(e) = sqlite::create_user_db_connection(db_path.clone(), password, &db_config) {
             error!("Failed to initialize database for {}: {}", username, e);
 
             let _ = fs::remove_file(&db_path);

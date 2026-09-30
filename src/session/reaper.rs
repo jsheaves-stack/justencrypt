@@ -1,4 +1,4 @@
-use std::{env, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use rocket::{
     async_trait,
@@ -9,7 +9,7 @@ use rocket::{
 
 use crate::{
     session::{store::SessionStore, user_session::UserSession},
-    util::{time::unix_now_secs, upload_limits::upload_ttl},
+    util::time::unix_now_secs,
     AppState,
 };
 
@@ -29,8 +29,9 @@ pub async fn discard_sessions(sessions: Vec<Arc<UserSession>>) {
 }
 
 /// One reaper pass: removes expired sessions and cleans up after them, then
-/// removes stale uploads from the sessions that are still live.
-pub async fn reap_once(store: &SessionStore) {
+/// removes uploads idle for longer than `upload_ttl` from the sessions that
+/// are still live.
+pub async fn reap_once(store: &SessionStore, upload_ttl: Duration) {
     let expired = store.remove_expired(unix_now_secs()).await;
 
     if !expired.is_empty() {
@@ -39,10 +40,8 @@ pub async fn reap_once(store: &SessionStore) {
 
     discard_sessions(expired).await;
 
-    let ttl = upload_ttl();
-
     for session in store.snapshot().await {
-        session.sweep_stale_uploads(ttl).await;
+        session.sweep_stale_uploads(upload_ttl).await;
     }
 }
 
@@ -63,17 +62,6 @@ impl SessionReaper {
             interval: Duration::from_secs(seconds),
         })
     }
-
-    /// Reads `JUSTENCRYPT_SESSION_REAPER_INTERVAL_SECONDS`. Missing, unparsable
-    /// or 0 disables the reaper.
-    pub fn from_env() -> Option<Self> {
-        let seconds = env::var("JUSTENCRYPT_SESSION_REAPER_INTERVAL_SECONDS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0);
-
-        Self::every(seconds)
-    }
 }
 
 #[async_trait]
@@ -93,6 +81,7 @@ impl Fairing for SessionReaper {
         };
 
         let store = state.sessions.clone();
+        let upload_ttl = state.config.upload_ttl();
         let period = self.interval;
 
         info!(
@@ -109,7 +98,7 @@ impl Fairing for SessionReaper {
 
             loop {
                 ticker.tick().await;
-                reap_once(&store).await;
+                reap_once(&store, upload_ttl).await;
             }
         });
     }

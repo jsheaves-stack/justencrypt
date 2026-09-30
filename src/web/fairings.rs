@@ -1,5 +1,3 @@
-use std::env;
-
 use rocket::{
     async_trait,
     fairing::{Fairing, Info, Kind},
@@ -7,7 +5,17 @@ use rocket::{
     Request, Response,
 };
 
-pub struct Cors;
+pub struct Cors {
+    allow_origin: Option<String>,
+}
+
+impl Cors {
+    /// `allow_origin` is sent as `Access-Control-Allow-Origin`; with none, the
+    /// header is left out.
+    pub fn new(allow_origin: Option<String>) -> Self {
+        Self { allow_origin }
+    }
+}
 
 #[async_trait]
 impl Fairing for Cors {
@@ -25,10 +33,10 @@ impl Fairing for Cors {
 
         let methods = "POST, GET, PATCH, PUT, HEAD, OPTIONS, DELETE";
 
-        if let Ok(origin) = env::var("JUSTENCRYPT_ALLOW_ORIGIN") {
+        if let Some(origin) = &self.allow_origin {
             trace!("Setting Access-Control-Allow-Origin to: {}", origin);
 
-            response.set_header(Header::new("Access-Control-Allow-Origin", origin));
+            response.set_header(Header::new("Access-Control-Allow-Origin", origin.clone()));
         }
 
         response.set_header(Header::new("Allow", methods));

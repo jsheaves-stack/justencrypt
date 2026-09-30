@@ -16,10 +16,11 @@ use secrecy::SecretString;
 use uuid::Uuid;
 
 use crate::{
+    config::AppConfig,
     db::sqlite::{self, FolderContent},
     encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
     enums::db_error::DbError,
-    session::{accounts::user_data_path, credentials::is_valid_username, policy::SessionPolicy},
+    session::{credentials::is_valid_username, policy::SessionPolicy},
     util::{sharded_path, time::unix_now_secs},
 };
 
@@ -112,6 +113,7 @@ impl UserSession {
         user_name: &str,
         passphrase: &SecretString,
         existing_pool: Option<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+        config: &AppConfig,
     ) -> Result<Self, DbError> {
         trace!("Entering UserSession::open for user: '{}'", user_name);
 
@@ -124,11 +126,12 @@ impl UserSession {
         let user_name = user_name.to_owned();
         let passphrase = passphrase.clone();
         let user_name_clone = user_name.clone();
+        let user_path = config.user_data_path.join(&user_name);
+        let db_config = config.db.clone();
 
         let session = task::spawn_blocking(move || {
             trace!("Inside spawn_blocking for UserSession::open");
 
-            let user_path = user_data_path().join(&user_name);
             let user_db_path = user_path.join(format!("{user_name}.db"));
 
             // Accounts are created only through `accounts::create_account`, so
@@ -143,12 +146,12 @@ impl UserSession {
             let db_pool = if let Some(pool) = existing_pool {
                 trace!("Using existing database pool.");
 
-                sqlite::verify_user_db_password(&user_db_path, &passphrase)?;
+                sqlite::verify_user_db_password(&user_db_path, &passphrase, &db_config)?;
                 pool
             } else {
                 trace!("Creating new database pool.");
 
-                sqlite::create_user_db_connection(user_db_path, passphrase)?
+                sqlite::create_user_db_connection(user_db_path, passphrase, &db_config)?
             };
 
             trace!("DB connection pool ready.");
