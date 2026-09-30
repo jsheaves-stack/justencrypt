@@ -492,6 +492,22 @@ impl AppConfig {
             );
         }
 
+        if let Some(origin) = &self.allow_origin {
+            if origin == "*" {
+                return invalid(
+                    "ALLOW_ORIGIN",
+                    "must be a single origin; browsers don't allow `*` with credentials",
+                );
+            }
+
+            if !is_origin(origin) {
+                return invalid(
+                    "ALLOW_ORIGIN",
+                    "must be an origin such as https://app.example.com, with no path or trailing slash",
+                );
+            }
+        }
+
         if !cfg!(debug_assertions) && self.server.secret_key.is_none() {
             return invalid("ROCKET_SECRET_KEY", "must be set in release builds");
         }
@@ -534,6 +550,20 @@ impl AppConfig {
     pub fn upload_ttl(&self) -> Duration {
         Duration::from_secs(self.upload_ttl_seconds.get())
     }
+}
+
+// Whether `value` has the form of a web origin: an http(s) scheme and a host,
+// optionally with a port, and nothing after it. Browsers send the `Origin`
+// header in exactly this form, so anything else could never match.
+fn is_origin(value: &str) -> bool {
+    let Some(host) = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+    else {
+        return false;
+    };
+
+    !host.is_empty() && !host.contains(['/', '?', '#', ' '])
 }
 
 // Reports each error against the environment variable it came from.

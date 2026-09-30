@@ -116,7 +116,7 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 | `JUSTENCRYPT_ROCKET_SECRET_KEY`               | **Required in release builds.** A 256-bit base64 key for securing cookies. Generate one with `openssl rand -base64 32`. Debug builds without one use a random key for each launch. | (none) |
 | `JUSTENCRYPT_TLS_KEY_PATH`                    | Path to the TLS key file for HTTPS. | (none) |
 | `JUSTENCRYPT_TLS_CERT_PATH`                   | Path to the TLS cert file for HTTPS. | (none) |
-| `JUSTENCRYPT_ALLOW_ORIGIN`                    | Access-Control-Allow-Origin domain for CORS. | (none) |
+| `JUSTENCRYPT_ALLOW_ORIGIN`                    | The one origin (e.g. `https://app.example.com`, no trailing slash) whose pages may call the API from a browser, with cookies. Other origins get no CORS headers. `*` is rejected. | (none) |
 | `JUSTENCRYPT_SECURE_COOKIES`                  | Whether session cookies require HTTPS. Set to false for local dev. | `true` |
 | `JUSTENCRYPT_ADMIN_API_KEY`                   | API key to enable and access administrative routes, including creating user accounts. | (none) |
 | `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size for form submissions. | `10MiB` |

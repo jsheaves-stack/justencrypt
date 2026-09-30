@@ -202,3 +202,28 @@ fn test_config_thumbnail_settings() {
     assert!(load_err(&[("JUSTENCRYPT_THUMBNAIL_CONCURRENCY", "0")])
         .contains("JUSTENCRYPT_THUMBNAIL_CONCURRENCY"));
 }
+
+// M11b: an origin that can never match, or a wildcard, which browsers refuse
+// together with credentials, is a configuration error.
+#[test]
+fn test_config_rejects_unusable_allow_origin() {
+    for value in [
+        "*",
+        "https://app.example.com/",
+        "https://app.example.com/path",
+        "app.example.com",
+    ] {
+        let error = load_err(&[("JUSTENCRYPT_ALLOW_ORIGIN", value)]);
+
+        assert!(
+            error.contains("JUSTENCRYPT_ALLOW_ORIGIN"),
+            "{value}: {error}"
+        );
+    }
+
+    for value in ["https://app.example.com", "http://localhost:5173"] {
+        let config = load(&[("JUSTENCRYPT_ALLOW_ORIGIN", value)]).unwrap();
+
+        assert_eq!(config.allow_origin.as_deref(), Some(value));
+    }
+}

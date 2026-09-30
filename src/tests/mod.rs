@@ -1,6 +1,7 @@
 mod test_admin;
 mod test_chunked_upload;
 mod test_config;
+mod test_cors;
 mod test_credentials;
 mod test_db_files;
 mod test_db_folder_delete;
