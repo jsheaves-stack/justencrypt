@@ -13,6 +13,7 @@ mod test_folder;
 mod test_folder_delete;
 mod test_folder_patch;
 mod test_orphans;
+mod test_range;
 mod test_response_headers;
 mod test_session;
 mod test_session_store;

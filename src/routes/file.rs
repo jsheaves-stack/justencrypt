@@ -425,10 +425,13 @@ pub async fn get_file(
     drop(session);
 
     let total_size = metadata.total_size;
-    let (start, end, status) = if let Some(range_str) = range.0 {
-        parse_range(&range_str, total_size)?
-    } else {
-        (0, total_size.saturating_sub(1), Status::Ok)
+    let requested_range = match range.0 {
+        Some(range_str) => parse_range(&range_str, total_size)?,
+        None => None,
+    };
+    let (start, end, status) = match requested_range {
+        Some((start, end)) => (start, end, Status::PartialContent),
+        None => (0, total_size.saturating_sub(1), Status::Ok),
     };
 
     // Nothing to decrypt. Dropping the sender ends the body immediately.

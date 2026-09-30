@@ -605,3 +605,42 @@ async fn test_delete_file_succeeds_when_the_blob_is_already_missing() {
 
     assert_eq!(response.status(), Status::NotFound);
 }
+
+// M11f: the last N bytes of a file.
+#[async_test]
+async fn test_get_file_suffix_range() {
+    let (client, cookie, _test_user) = download_client().await;
+    upload(&client, &cookie, "digits.txt", b"0123456789".to_vec()).await;
+
+    let response = client
+        .get("/file/digits.txt")
+        .private_cookie(cookie)
+        .header(Header::new("Range", "bytes=-3"))
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::PartialContent);
+    assert_eq!(
+        response.headers().get_one("Content-Range"),
+        Some("bytes 7-9/10")
+    );
+    assert_eq!(response.into_string().await.unwrap(), "789");
+}
+
+// M11f: a multi-range request gets the whole file.
+#[async_test]
+async fn test_get_file_multiple_ranges_sends_the_whole_file() {
+    let (client, cookie, _test_user) = download_client().await;
+    upload(&client, &cookie, "digits.txt", b"0123456789".to_vec()).await;
+
+    let response = client
+        .get("/file/digits.txt")
+        .private_cookie(cookie)
+        .header(Header::new("Range", "bytes=0-1,5-6"))
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.headers().get_one("Content-Range"), None);
+    assert_eq!(response.into_string().await.unwrap(), "0123456789");
+}
