@@ -110,6 +110,8 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 | `JUSTENCRYPT_SESSION_MAX_LIFETIME_SECONDS`    | A session expires this long after login, however active it is. Also the session cookie's `Max-Age`. | `604800` |
 | `JUSTENCRYPT_MAX_SESSIONS_PER_USER`           | Logging in beyond this many sessions ends the user's oldest session. | `5` |
 | `JUSTENCRYPT_ORPHAN_SCAN_ENABLED`             | When `true`, every login starts a background job that removes that user's stored files that no database row refers to: blobs, thumbnails and `.part` files left behind by crashes or failed deletes. | `false` |
+| `JUSTENCRYPT_THUMBNAIL_CONCURRENCY`           | Maximum number of thumbnails generated at once. | 70% of `JUSTENCRYPT_WORKERS` |
+| `JUSTENCRYPT_THUMBNAIL_MAX_DECODE_MEMORY`     | Maximum memory one image may need to decode for a thumbnail (e.g. `256MiB`); larger images, or ones wider or taller than 16384 pixels, get a `422`. Decoding uses at most this times `JUSTENCRYPT_THUMBNAIL_CONCURRENCY`. | `256MiB` |
 | `JUSTENCRYPT_SESSION_REAPER_INTERVAL_SECONDS` | How often a background job removes expired sessions and stale uploads. `0` disables it; expired sessions are then still rejected on their next request and cleared out on every login. | `0` |
 | `JUSTENCRYPT_ROCKET_SECRET_KEY`               | **Required in release builds.** A 256-bit base64 key for securing cookies. Generate one with `openssl rand -base64 32`. Debug builds without one use a random key for each launch. | (none) |
 | `JUSTENCRYPT_TLS_KEY_PATH`                    | Path to the TLS key file for HTTPS. | (none) |

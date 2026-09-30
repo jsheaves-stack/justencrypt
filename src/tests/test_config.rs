@@ -40,6 +40,8 @@ fn test_config_defaults_with_no_variables() {
     assert_eq!(config.db.synchronous_mode, SyncMode::Normal);
     assert_eq!(config.db.temp_store, TempStore::Memory);
     assert_eq!(config.limits.file, 64.gibibytes());
+    assert!(config.thumbnail.concurrency.is_none());
+    assert_eq!(config.thumbnail.max_decode_memory, 256.mebibytes());
 }
 
 #[test]
@@ -176,4 +178,27 @@ fn test_config_rejects_inconsistent_values() {
 
     let error = load_err(&[("JUSTENCRYPT_TLS_CERT_PATH", "/cert.pem")]);
     assert!(error.contains("JUSTENCRYPT_TLS_KEY_PATH"), "{}", error);
+}
+
+#[test]
+fn test_config_thumbnail_settings() {
+    // Without a setting, 70% of the workers, and never zero.
+    assert_eq!(load(&[]).unwrap().thumbnail_concurrency(), 11);
+    assert_eq!(
+        load(&[("JUSTENCRYPT_WORKERS", "1")])
+            .unwrap()
+            .thumbnail_concurrency(),
+        1
+    );
+
+    let config = load(&[
+        ("JUSTENCRYPT_THUMBNAIL_CONCURRENCY", "3"),
+        ("JUSTENCRYPT_THUMBNAIL_MAX_DECODE_MEMORY", "64MiB"),
+    ])
+    .unwrap();
+
+    assert_eq!(config.thumbnail_concurrency(), 3);
+    assert_eq!(config.thumbnail.max_decode_memory, 64.mebibytes());
+    assert!(load_err(&[("JUSTENCRYPT_THUMBNAIL_CONCURRENCY", "0")])
+        .contains("JUSTENCRYPT_THUMBNAIL_CONCURRENCY"));
 }

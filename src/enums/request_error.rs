@@ -25,6 +25,9 @@ pub enum RequestError {
     #[error("Unsupported file type")]
     UnsupportedFileType,
 
+    #[error("Image is too large to process")]
+    ImageTooLarge,
+
     #[error("Failed to remove file")]
     FailedToRemoveFile,
 

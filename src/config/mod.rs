@@ -70,6 +70,8 @@ const ENV_KEYS: &[(&str, &str)] = &[
         "DB_CONNECTION_TIMEOUT_SECONDS",
         "db.connection_timeout_seconds",
     ),
+    ("THUMBNAIL_CONCURRENCY", "thumbnail.concurrency"),
+    ("THUMBNAIL_MAX_DECODE_MEMORY", "thumbnail.max_decode_memory"),
     ("USER_DATA_PATH", "user_data_path"),
     (
         "MINIMUM_PASSWORD_SECURITY_SCORE",
@@ -90,6 +92,7 @@ pub struct AppConfig {
     pub limits: LimitsConfig,
     pub session: SessionConfig,
     pub db: DbConfig,
+    pub thumbnail: ThumbnailConfig,
     /// Directory that holds one sub-directory per user.
     pub user_data_path: PathBuf,
     /// Minimum zxcvbn score (0-4) for the password of a new account.
@@ -149,6 +152,19 @@ pub struct SessionConfig {
     pub max_per_user: NonZeroUsize,
     /// How often the background reaper runs; 0 disables it.
     pub reaper_interval_seconds: u64,
+}
+
+/// Limits on generating thumbnails. At most `concurrency` images are decoded
+/// at once, each using at most `max_decode_memory`, so decoding never needs
+/// more than their product.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ThumbnailConfig {
+    /// Most thumbnails generated at once; 70% of the workers when unset.
+    pub concurrency: Option<NonZeroUsize>,
+    /// Most memory one image may need to decode. Larger images get no
+    /// thumbnail.
+    pub max_decode_memory: ByteUnit,
 }
 
 /// Connection pool and SQLite settings for each user's database.
@@ -307,6 +323,7 @@ impl Default for AppConfig {
             limits: LimitsConfig::default(),
             session: SessionConfig::default(),
             db: DbConfig::default(),
+            thumbnail: ThumbnailConfig::default(),
             user_data_path: PathBuf::from("./user_data"),
             minimum_password_security_score: 4,
             secure_cookies: true,
@@ -374,6 +391,16 @@ impl Default for DbConfig {
             temp_store: TempStore::Memory,
             journal_size_limit_bytes: 64 * 1024 * 1024,
             connection_timeout_seconds: NonZeroU64::new(30).unwrap(),
+        }
+    }
+}
+
+impl Default for ThumbnailConfig {
+    fn default() -> Self {
+        Self {
+            concurrency: None,
+            // Enough for a 64-megapixel RGB photo.
+            max_decode_memory: 256.mebibytes(),
         }
     }
 }
@@ -493,6 +520,14 @@ impl AppConfig {
         }
 
         figment
+    }
+
+    /// How many thumbnails may be generated at once.
+    pub fn thumbnail_concurrency(&self) -> usize {
+        match self.thumbnail.concurrency {
+            Some(concurrency) => concurrency.get(),
+            None => (self.server.workers.get() * 7 / 10).max(1),
+        }
     }
 
     pub fn upload_ttl(&self) -> Duration {

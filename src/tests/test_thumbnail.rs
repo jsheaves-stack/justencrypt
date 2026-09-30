@@ -1,6 +1,12 @@
 use std::{fs, io::Cursor};
 
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
+use rocket::{
+    async_test,
+    data::ToByteUnit,
+    http::{ContentType, Status},
+    local::asynchronous::Client,
+    routes,
+};
 
 use super::*;
 use crate::{
@@ -312,4 +318,176 @@ async fn test_concurrent_thumbnail_requests_all_succeed() {
         .await;
     assert_eq!(again.status(), Status::Ok);
     assert_eq!(again.into_bytes().await.unwrap(), results[0].1);
+}
+
+async fn upload_bytes(
+    client: &Client,
+    cookie: &rocket::http::Cookie<'static>,
+    path: &str,
+    body: &[u8],
+) {
+    let response = client
+        .put(format!("/file/{}", path))
+        .private_cookie(cookie.clone())
+        .body(body)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Created);
+}
+
+async fn thumbnail_status(
+    client: &Client,
+    cookie: &rocket::http::Cookie<'static>,
+    path: &str,
+) -> Status {
+    client
+        .get(format!("/thumbnail/{}", path))
+        .private_cookie(cookie.clone())
+        .dispatch()
+        .await
+        .status()
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+
+    !crc
+}
+
+fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+    let mut crc_input = kind.to_vec();
+    crc_input.extend_from_slice(data);
+
+    chunk.extend_from_slice(&crc_input);
+    chunk.extend_from_slice(&crc32(&crc_input).to_be_bytes());
+
+    chunk
+}
+
+// A few hundred bytes of PNG whose header claims 60000x60000 RGBA pixels,
+// which would need about 13 GiB to decode.
+fn decompression_bomb_png() -> Vec<u8> {
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&60_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&60_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend(png_chunk(b"IHDR", &ihdr));
+    png.extend(png_chunk(
+        b"IDAT",
+        &[0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
+    ));
+    png.extend(png_chunk(b"IEND", &[]));
+
+    png
+}
+
+// M13: decoding had no dimension limit and a 512 MiB memory limit, so a few
+// such images at once could exhaust the server's memory.
+#[async_test]
+async fn test_thumbnail_rejects_huge_image_dimensions() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket
+        .mount("/thumbnail", routes![get_thumbnail])
+        .mount("/file", routes![put_file]);
+    let client = Client::tracked(rocket).await.expect("valid rocket");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    upload_bytes(&client, &cookie, "bomb.png", &decompression_bomb_png()).await;
+
+    assert_eq!(
+        thumbnail_status(&client, &cookie, "bomb.png").await,
+        Status::UnprocessableEntity
+    );
+    assert!(cached_thumbnails(&test_user.path).is_empty());
+}
+
+// M13: the decode memory limit comes from the config.
+#[async_test]
+async fn test_thumbnail_respects_configured_decode_memory_limit() {
+    let (rocket, test_user) = setup_rocket_with_config(|config| {
+        config.thumbnail.max_decode_memory = 1.kibibytes();
+    })
+    .await;
+    let rocket = rocket
+        .mount("/thumbnail", routes![get_thumbnail])
+        .mount("/file", routes![put_file]);
+    let client = Client::tracked(rocket).await.expect("valid rocket");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    // 40x30 RGB needs 3600 bytes.
+    upload_image(&client, &cookie, "small.png").await;
+
+    assert_eq!(
+        thumbnail_status(&client, &cookie, "small.png").await,
+        Status::UnprocessableEntity
+    );
+}
+
+// M13: the decoder used to be chosen from the file name alone.
+#[async_test]
+async fn test_thumbnail_rejects_content_that_does_not_match_the_extension() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket
+        .mount("/thumbnail", routes![get_thumbnail])
+        .mount("/file", routes![put_file]);
+    let client = Client::tracked(rocket).await.expect("valid rocket");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    let mut png_data = Vec::new();
+    image::DynamicImage::new_rgb8(10, 10)
+        .write_to(&mut Cursor::new(&mut png_data), image::ImageFormat::Png)
+        .unwrap();
+
+    upload_bytes(&client, &cookie, "actually_png.jpg", &png_data).await;
+    upload_bytes(&client, &cookie, "not_an_image.png", b"just some text").await;
+
+    assert_eq!(
+        thumbnail_status(&client, &cookie, "actually_png.jpg").await,
+        Status::UnsupportedMediaType
+    );
+    assert_eq!(
+        thumbnail_status(&client, &cookie, "not_an_image.png").await,
+        Status::UnsupportedMediaType
+    );
+}
+
+// M13: thumbnails were sent as `application/octet-stream`.
+#[async_test]
+async fn test_thumbnail_has_image_content_type() {
+    let (rocket, test_user) = setup_rocket().await;
+    let rocket = rocket
+        .mount("/thumbnail", routes![get_thumbnail])
+        .mount("/file", routes![put_file]);
+    let client = Client::tracked(rocket).await.expect("valid rocket");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+
+    upload_image(&client, &cookie, "typed.png").await;
+
+    // Once generated, and once from the cache.
+    for _ in 0..2 {
+        let response = client
+            .get("/thumbnail/typed.png")
+            .private_cookie(cookie.clone())
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type(), Some(ContentType::PNG));
+    }
 }

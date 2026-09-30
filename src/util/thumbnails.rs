@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use image::ImageFormat;
+use image::{ImageError, ImageFormat, ImageReader, Limits};
 use rocket::{
     http::ContentType,
     tokio::{fs, io::AsyncReadExt, task},
@@ -11,6 +11,7 @@ use rocket::{
 use uuid::Uuid;
 
 use crate::{
+    config::ThumbnailConfig,
     encryption::{
         chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor,
         sync_chunk_decryptor::SyncChunkDecryptReader, FileEncryptionMetadata,
@@ -21,6 +22,9 @@ use crate::{
 };
 
 const THUMBNAIL_SIZE: u32 = 150;
+
+/// Largest width or height of an image that gets a thumbnail.
+const MAX_IMAGE_DIMENSION: u32 = 16_384;
 
 /// The image format for a file, judged by its extension, if thumbnails are
 /// supported for it.
@@ -42,8 +46,9 @@ pub fn image_format_for(file_path: &Path) -> Option<ImageFormat> {
     }
 }
 
-/// Returns the thumbnail of the image at `file_path`, from the encrypted cache
-/// if it has a good copy, otherwise by generating it.
+/// Returns the thumbnail of the image at `file_path` and its content type,
+/// from the encrypted cache if it has a good copy, otherwise by generating it.
+/// The thumbnail has the same format as the image.
 ///
 /// A cache entry that fails to decrypt (for example, one damaged by a crash)
 /// is deleted and regenerated. Writing the cache is best-effort: if it fails,
@@ -52,7 +57,10 @@ pub async fn get_or_create_thumbnail(
     session: &UserSession,
     file_path: PathBuf,
     format: ImageFormat,
-) -> Result<Vec<u8>, RequestError> {
+    config: &ThumbnailConfig,
+) -> Result<(ContentType, Vec<u8>), RequestError> {
+    let content_type =
+        ContentType::parse_flexible(format.to_mime_type()).unwrap_or(ContentType::Binary);
     let user_path = session.get_user_path();
     let (encoded_file_name, file_metadata) = session.get_file_decryption_data(file_path).await?;
     let thumbnail_metadata = file_metadata
@@ -66,7 +74,7 @@ pub async fn get_or_create_thumbnail(
 
     if fs::try_exists(&cache_path).await.unwrap_or(false) {
         match read_cached(&cache_path, thumbnail_metadata.clone()).await {
-            Ok(thumbnail) => return Ok(thumbnail),
+            Ok(thumbnail) => return Ok((content_type, thumbnail)),
             Err(e) => {
                 warn!(
                     "Cached thumbnail for {} is unreadable ({}); regenerating it",
@@ -83,7 +91,13 @@ pub async fn get_or_create_thumbnail(
     }
 
     let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
-    let thumbnail = generate(encoded_file_path, file_metadata, format).await?;
+    let thumbnail = generate(
+        encoded_file_path,
+        file_metadata,
+        format,
+        decode_limits(config),
+    )
+    .await?;
 
     if let Err(e) = write_encrypted_atomically(
         &cache_path,
@@ -98,7 +112,16 @@ pub async fn get_or_create_thumbnail(
         );
     }
 
-    Ok(thumbnail)
+    Ok((content_type, thumbnail))
+}
+
+fn decode_limits(config: &ThumbnailConfig) -> Limits {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(config.max_decode_memory.as_u64());
+
+    limits
 }
 
 /// Encrypts `source` into a temporary file next to `final_path`, makes sure it
@@ -142,11 +165,14 @@ async fn read_cached(
         .await
 }
 
-// Decrypts the image and scales it down, off the async runtime.
+// Decrypts the image and scales it down, off the async runtime. The content
+// must be in the format its extension names, and decoding it must fit within
+// `limits`.
 async fn generate(
     encoded_file_path: PathBuf,
     metadata: FileEncryptionMetadata,
     format: ImageFormat,
+    limits: Limits,
 ) -> Result<Vec<u8>, RequestError> {
     task::spawn_blocking(move || {
         let decrypt_reader =
@@ -156,10 +182,37 @@ async fn generate(
                 RequestError::FailedToProcessData
             })?;
 
-        let img = image::load(BufReader::new(decrypt_reader), format).map_err(|e| {
-            error!("Image load error: {}", e);
+        let mut reader = ImageReader::new(BufReader::new(decrypt_reader))
+            .with_guessed_format()
+            .map_err(|e| {
+                error!("Failed to read image header: {}", e);
 
-            RequestError::FailedToProcessData
+                RequestError::FailedToProcessData
+            })?;
+
+        if reader.format() != Some(format) {
+            debug!(
+                "Image content is {:?}, but its extension says {:?}",
+                reader.format(),
+                format
+            );
+
+            return Err(RequestError::UnsupportedFileType);
+        }
+
+        reader.limits(limits);
+
+        let img = reader.decode().map_err(|e| match e {
+            ImageError::Limits(e) => {
+                debug!("Image exceeds the decode limits: {}", e);
+
+                RequestError::ImageTooLarge
+            },
+            e => {
+                error!("Image load error: {}", e);
+
+                RequestError::FailedToProcessData
+            },
         })?;
 
         let mut buf = Cursor::new(Vec::new());

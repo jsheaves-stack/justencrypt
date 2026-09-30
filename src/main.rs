@@ -122,13 +122,11 @@ async fn rocket() -> _ {
 
     trace!("Entering main::rocket launch function.");
 
-    let workers = config.server.workers.get();
-    let semaphore_tickets = ((workers * 7) / 10).max(1);
+    let semaphore_tickets = config.thumbnail_concurrency();
 
-    trace!(
-        "Calculated thumbnail semaphore tickets: {} (from {} workers)",
-        semaphore_tickets,
-        workers
+    info!(
+        "Thumbnails: at most {} generated at once, each decode limited to {}.",
+        semaphore_tickets, config.thumbnail.max_decode_memory
     );
 
     let session_policy = SessionPolicy::from(&config.session);

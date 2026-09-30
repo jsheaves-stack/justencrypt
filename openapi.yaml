@@ -683,7 +683,7 @@ paths:
   /thumbnail/{file_path}:
     get:
       summary: Get or generate a thumbnail
-      description: Fetches a thumbnail for an image file. If the thumbnail does not exist, it securely decrypts the original, resizes it to 150x150, encrypts the thumbnail to a cache, and streams it.
+      description: Fetches a thumbnail for an image file (JPEG, PNG, GIF, WebP or AVIF, judged by the extension). If the thumbnail does not exist, it securely decrypts the original, checks that its content matches the extension, resizes it to fit within 150x150, encrypts the thumbnail to a cache, and returns it. The thumbnail has the same format as the original.
       parameters:
         - in: path
           name: file_path
@@ -693,9 +693,25 @@ paths:
           description: The logical path of the original image file.
       responses:
         '200':
-          description: Decrypted raw byte stream of the thumbnail.
+          description: The thumbnail, with the original image's content type.
           content:
-            application/octet-stream:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/gif:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            image/avif:
               schema:
                 type: string
                 format: binary
@@ -704,7 +720,9 @@ paths:
         '404':
           description: Original image file not found.
         '415':
-          description: Unsupported media type (e.g., not a supported image format).
+          description: Unsupported media type (the extension isn't a supported image format, or the file's content isn't in the format its extension names).
+        '422':
+          description: The image is too large to process (wider or taller than 16384 pixels, or needs more memory to decode than JUSTENCRYPT_THUMBNAIL_MAX_DECODE_MEMORY).
         '500':
           description: Internal server error (Failed to generate or process thumbnail).
     options:

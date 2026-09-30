@@ -70,6 +70,7 @@ impl<'r> Responder<'r, 'static> for RequestError {
             | RequestError::InternalServerError => Status::InternalServerError,
 
             RequestError::UnsupportedFileType => Status::UnsupportedMediaType,
+            RequestError::ImageTooLarge => Status::UnprocessableEntity,
             RequestError::PasswordDoesNotMeetRequirements | RequestError::BadRequest(_) => {
                 Status::BadRequest
             },
