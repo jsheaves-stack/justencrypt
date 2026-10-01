@@ -1,13 +1,17 @@
 openapi: 3.0.3
 info:
   title: JustEncrypt API
-  version: 1.0.0
+  version: 0.1.0
   description: |
     API specification for the JustEncrypt file encryption service.
 
     **Error bodies.** Errors returned by a route have a short plain-text message as the body and no `Content-Type` header. Errors raised before a route runs use Rocket's default HTML error page instead: a missing or expired session (`401`), no matching route (`404`, which includes a request to `POST /session` or `POST /admin/users` without `Content-Type: application/json`), a malformed JSON body (`400`), and a missing or mistyped JSON field or query parameter (`422`).
 
     **Timestamps.** Folder and file dates are UTC, formatted as `YYYY-MM-DD HH:MM:SS` with no time-zone marker.
+
+    **Response headers.** Every response carries `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and no `Server` header. CORS headers are sent only to the origin configured in `JUSTENCRYPT_ALLOW_ORIGIN`, which may then send cookies.
+
+    **Admin routes.** The `/admin` routes exist only when `JUSTENCRYPT_ADMIN_API_KEY` is set; otherwise they answer `404`.
 servers:
   - url: /
     description: Relative server URL
@@ -270,7 +274,7 @@ paths:
           description: Internal server error (Failed to encrypt or store file).
     get:
       summary: Download and decrypt a file
-      description: Streams and decrypts the file on the fly based on the logical file path. Supports Range requests for partial content.
+      description: Streams and decrypts the file on the fly based on the logical file path. Supports Range requests for partial content. If the stored file turns out to be shorter than its recorded size, the response is cut short (the connection is closed before `Content-Length` bytes arrive) and the server logs the error.
       parameters:
         - in: path
           name: file_path
@@ -612,7 +616,7 @@ paths:
           description: Internal server error.
     get:
       summary: List folder contents
-      description: Returns a list of files and folders contained within the specified folder path.
+      description: Returns the files and folders directly inside the specified folder, in no particular order, without pagination.
       parameters:
         - in: path
           name: folder_path

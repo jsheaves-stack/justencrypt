@@ -5,7 +5,7 @@
 [![Rust Version][rust-badge]][rust-link]
 [![License: MIT][license-badge]][license-link]
 
-[rust-badge]: https://img.shields.io/badge/Rust-1.70%2B-orange.svg
+[rust-badge]: https://img.shields.io/badge/Rust-1.87%2B-orange.svg
 [rust-link]: https://www.rust-lang.org/
 [license-badge]: https://img.shields.io/badge/License-MIT-blue.svg
 [license-link]: https://opensource.org/licenses/MIT
@@ -14,11 +14,11 @@ JustEncrypt is a self-hostable, high-performance file encryption service accessi
 
 ## Features
 
-- **End-to-End Encryption:** Files are encrypted and decrypted on the fly.
-- **Chunked Uploads:** Supports uploading large files in chunks.
-- **Thumbnail Generation:** Automatically generates thumbnails for image files.
-- **User-Based Sessions:** Secure session management for multi-user environments.
-- **Detailed Configuration:** Highly configurable through environment variables.
+- **Encryption at Rest:** Every file is encrypted on the server with its own key as it is uploaded, and decrypted as it is downloaded. Each user's file keys and metadata live in a database encrypted with that user's password (SQLCipher). The server handles plaintext while a request is in progress, so this is not end-to-end encryption.
+- **Chunked and Ranged Transfers:** Large files can be uploaded in chunks, in any order and in parallel, and downloads support single byte ranges.
+- **Thumbnails:** Generates and caches (encrypted) thumbnails for JPEG, PNG, GIF, WebP and AVIF images.
+- **Multi-User Sessions:** Cookie-based sessions with idle and absolute timeouts and a per-user session limit.
+- **Detailed Configuration:** Configured through environment variables, validated at startup.
 - **Docker Support:** Ready to be deployed as a Docker container.
 
 ## Technologies
@@ -31,12 +31,10 @@ JustEncrypt is a self-hostable, high-performance file encryption service accessi
 
 ## Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) (1.70 or later)
-- [Cargo](https://doc.rust-lang.org/cargo/)
-- [SQLCipher](https://www.zetetic.net/sqlcipher/open-source/)
-- For static builds:
-    - `x86_64-unknown-linux-musl` toolchain
-    - `musl`
+- [Rust](https://www.rust-lang.org/tools/install) 1.87 or later, with Cargo. (The code uses APIs stabilised in 1.87; older versions are not tested.)
+- A C compiler, `make` and `perl`: SQLCipher and OpenSSL are compiled from source as part of the build, so neither needs to be installed.
+- Linux or another Unix: the server writes file chunks with Unix positional writes and does not build on Windows.
+- For static builds: the `x86_64-unknown-linux-musl` Rust target and the musl C toolchain.
 
 ## Getting Started
 
@@ -49,12 +47,13 @@ cd justencrypt
 
 ### 2. Set Up Environment Variables
 
-Create an `env/justencrypt.env` file. You can start with the provided example and uncomment the variables you need to change.
+`env/justencrypt.env` is an example configuration listing every variable. When run with `cargo run`, the server loads a `.env` file from the current directory, so copy the example there and uncomment the variables you need to change:
 
 ```sh
-mkdir -p env
-cp env/justencrypt.env.example env/justencrypt.env
+cp env/justencrypt.env .env
 ```
+
+Generate your own secret key with `openssl rand -base64 32` and set it as `JUSTENCRYPT_ROCKET_SECRET_KEY`; release builds refuse to start without one. Set `JUSTENCRYPT_ADMIN_API_KEY` too, since accounts are created through the admin API. For development over plain HTTP, set `JUSTENCRYPT_SECURE_COOKIES=false` so the session cookie isn't marked HTTPS-only.
 
 ### 3. Build and Run
 
@@ -77,11 +76,11 @@ curl -X POST http://localhost:8000/admin/users \
   -d '{"username": "alice", "password": "<a strong password>"}'
 ```
 
-This returns `201` and creates `user_data/alice/` with the user's encrypted database. Usernames are 1-64 bytes with no `/`, `\`, `.` or control characters; passwords are 1-1024 bytes and must meet `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE`. The user can then log in with `POST /session`.
+This returns `201` and creates `user_data/alice/` with the user's encrypted database. With the default `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` of `4`, the password must be very strong by [zxcvbn](https://github.com/dropbox/zxcvbn)'s measure; a weak one gets `400`. Usernames are 1-64 bytes with no `/`, `\`, `.` or control characters; passwords are 1-1024 bytes and must meet `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE`. The user can then log in with `POST /session`.
 
 ## Configuration
 
-The application is configured through environment variables, which are loaded from the `env/justencrypt.env` file. The following table details the available variables and their default values.
+The application is configured through environment variables. When run directly, the server also loads a `.env` file from its working directory; variables already set in the environment take precedence over it. With Docker, pass the file with `--env-file`. The following table details the available variables and their default values.
 
 All variables are read once at startup (`src/config/mod.rs`). An empty value counts as unset. A value that can't be parsed or is out of range, or a `JUSTENCRYPT_*` variable the server doesn't recognize, stops the server with an error that names the variable.
 
@@ -121,15 +120,17 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 | `JUSTENCRYPT_ADMIN_API_KEY`                   | API key to enable and access administrative routes, including creating user accounts. | (none) |
 | `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size for form submissions. | `10MiB` |
 | `JUSTENCRYPT_LIMITS_DATA_FORM`                | Maximum size for data-form submissions. | `10MiB` |
-| `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file upload size. Larger uploads are rejected with `413`. | `64GiB` |
+| `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file size, for both single and chunked uploads. Larger uploads are rejected with `413`. | `64GiB` |
 | `JUSTENCRYPT_LIMITS_FILE_CHUNK`               | Maximum body size of a single chunked-upload request (`PUT /file/upload/chunk/...`). | `32MiB` |
-| `JUSTENCRYPT_LIMITS_JSON`                     | Maximum JSON payload size. | `10MiB` |
+| `JUSTENCRYPT_LIMITS_JSON`                     | Maximum JSON body size (login, account creation and `PATCH` requests). | `10MiB` |
 | `JUSTENCRYPT_LIMITS_MSGPACK`                  | Maximum MessagePack payload size. | `1MiB` |
 | `JUSTENCRYPT_LIMITS_FILE_JPG`                 | Maximum size for JPG files. | `10GiB` |
 | `JUSTENCRYPT_LIMITS_BYTES`                    | Maximum size for raw byte payloads. | `10MiB` |
 | `JUSTENCRYPT_LIMITS_STRING`                   | Maximum size for string payloads. | `10MiB` |
 
 ## API Endpoints
+
+The full API, including request and response formats and every status code, is described in [`openapi.yaml`](openapi.yaml). Apart from `GET /`, `POST /session`, preflight `OPTIONS` requests and the admin routes, every route needs the `sid` session cookie set by `POST /session`.
 
 ### Info (`/`)
 - `GET /`: Get server information.
@@ -147,6 +148,8 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 - `PUT /upload/chunk/<upload_id>?<offset>`: Upload a chunk of a file.
 - `POST /upload/finalize/<upload_id>?<total_size>`: Finalize a chunked upload.
 
+A chunked upload starts with `initiate`, which returns an `upload_id`. The file is then sent in 64 KiB chunks: each `chunk` request carries one or more consecutive chunks starting at `offset` (a multiple of 65536), and requests may be sent in any order or in parallel. `finalize` checks that the chunks add up to exactly `total_size` bytes and stores the file. Because these routes share the `/file` prefix, files can't be stored under `upload/initiate/`, `upload/chunk/` or `upload/finalize/`.
+
 ### Folder (`/folder`)
 - `GET /<folder_path..>`: List the contents of a folder.
 - `PUT /<folder_path..>`: Create a new folder.
@@ -157,8 +160,10 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 - `GET /<file_path..>`: Get a thumbnail for a file.
 
 ### Admin (`/admin`)
-- `GET /session`: Get information about the current session.
-- `DELETE /session/<session_id>`: Delete a specific session.
+These routes exist only when `JUSTENCRYPT_ADMIN_API_KEY` is set, and every request must send the key in the `X-Admin-Api-Key` header.
+- `POST /users`: Create a user account.
+- `GET /session`: List all active sessions, with their unfinished uploads.
+- `DELETE /session/<session_id>`: End a session.
 
 ## Building and Running
 
@@ -195,7 +200,9 @@ docker run -d -p 8000:8000 \
   --name justencrypt justencrypt
 ```
 
-The image only contains the server binary, so it runs without any capabilities. If you set `JUSTENCRYPT_TLS_CERT_PATH` and `JUSTENCRYPT_TLS_KEY_PATH`, mount the certificate and key into the container as well.
+The image only contains the server binary, so it runs without any capabilities. User data is written to `/user_data` inside the container, so it is lost when the container is removed. If you set `JUSTENCRYPT_TLS_CERT_PATH` and `JUSTENCRYPT_TLS_KEY_PATH`, mount the certificate and key into the container as well.
+
+Building the image runs the test suite in release mode before building the binary.
 
 ## Testing
 
@@ -204,6 +211,20 @@ Run the test suite using `cargo`:
 ```sh
 cargo test
 ```
+
+The tests write temporary files to the system temp directory and need no running server. Code is formatted with nightly rustfmt (`rustfmt.toml` uses unstable options):
+
+```sh
+cargo +nightly fmt
+```
+
+## Deployment and Security Notes
+
+- **A forgotten password can't be recovered.** A user's file keys live in their database, which is encrypted with their password. Without the password, their files can't be decrypted by anyone, including an administrator.
+- **Back up the user data directory** (`JUSTENCRYPT_USER_DATA_PATH`). Losing a user's `.db` file loses the keys to all of their files, even if the encrypted files themselves survive.
+- **Use HTTPS.** Run behind a reverse proxy that terminates TLS, or set `JUSTENCRYPT_TLS_CERT_PATH` and `JUSTENCRYPT_TLS_KEY_PATH`, and keep `JUSTENCRYPT_SECURE_COOKIES=true`. Passwords and files travel in the requests.
+- **Keep the secret key and the admin key secret.** The secret key protects the session cookies. Anyone with the admin key can create accounts and end sessions, so use a long random value.
+- **Sessions live in memory.** Restarting the server logs everyone out and discards unfinished chunked uploads.
 
 ## License
 
