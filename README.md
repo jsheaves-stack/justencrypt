@@ -189,8 +189,13 @@ The repository includes a `Dockerfile` for building and running the application 
 docker build -t justencrypt .
 
 # Run the container
-docker run -d -p 8000:8000 --env-file env/justencrypt.env --name justencrypt justencrypt
+docker run -d -p 8000:8000 \
+  --env-file env/justencrypt.env \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --name justencrypt justencrypt
 ```
+
+The image only contains the server binary, so it runs without any capabilities. If you set `JUSTENCRYPT_TLS_CERT_PATH` and `JUSTENCRYPT_TLS_KEY_PATH`, mount the certificate and key into the container as well.
 
 ## Testing
 

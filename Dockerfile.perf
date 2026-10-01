@@ -58,8 +58,8 @@ COPY perf-test/ /perf-test/
 RUN chmod +x /perf-test/entrypoint.sh
 
 # Environment setup
-ENV JUSTENCRYPT_ROCKET_SECRET_KEY="ept8SXw6KDzOX2Yko87xvH9lwRvOzdUc/BoheaN0Uhk=" \
-    JUSTENCRYPT_ADDRESS="0.0.0.0" \
+# The entrypoint generates a throwaway secret key unless one is passed in.
+ENV JUSTENCRYPT_ADDRESS="0.0.0.0" \
     JUSTENCRYPT_PORT="8000" \
     ROCKET_LOG_LEVEL="off"
 

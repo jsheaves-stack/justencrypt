@@ -12,8 +12,10 @@ MAX_SIZE=${MAX_SIZE:-100}
 echo "Setting up workspace for $VUS Virtual Users..."
 mkdir -p user_data /results
 
-# Accounts are created through the admin API, so the server needs an admin key.
-# Generate a throwaway one unless the caller provided one.
+# Release builds require a secret key, and accounts are created through the
+# admin API, which needs an admin key. Generate throwaway ones unless the
+# caller provided them.
+export JUSTENCRYPT_ROCKET_SECRET_KEY="${JUSTENCRYPT_ROCKET_SECRET_KEY:-$(head -c 32 /dev/urandom | base64)}"
 export JUSTENCRYPT_ADMIN_API_KEY="${JUSTENCRYPT_ADMIN_API_KEY:-$(head -c 32 /dev/urandom | base64)}"
 
 # Generate random data based on user-requested max size

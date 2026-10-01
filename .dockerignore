@@ -1,2 +1,7 @@
 target
 user_data
+perf-results
+.env
+.git
+.vscode
+*.md
