@@ -28,6 +28,7 @@ pub fn parse_range(range_str: &str, total_size: u64) -> Result<Option<(u64, u64)
     };
 
     // `bytes=-N`: the last N bytes.
+
     if first.is_empty() {
         let suffix_length = parse(last, "suffix length")?;
 

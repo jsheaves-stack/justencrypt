@@ -86,8 +86,6 @@ impl ChunkDecryptor {
         end: u64,
         tx: Sender<Vec<u8>>,
     ) -> Result<(), EncryptionError> {
-        trace!("Entering ChunkDecryptor::decrypt_range, {}-{}", start, end);
-
         let first_chunk_index = start / CHUNK_SIZE as u64;
         let last_chunk_index = end / CHUNK_SIZE as u64;
         let disk_offset = first_chunk_index * ENCRYPTED_CHUNK_SIZE as u64;

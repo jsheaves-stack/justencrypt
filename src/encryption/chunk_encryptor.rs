@@ -75,11 +75,6 @@ impl ChunkEncryptor {
         max_bytes: u64,
         written_chunks: &mut BTreeMap<u64, u32>,
     ) -> Result<u64, EncryptionError> {
-        trace!(
-            "Entering ChunkEncryptor::encrypt_stream_at_offset at offset: {}",
-            offset
-        );
-
         if !offset.is_multiple_of(CHUNK_SIZE as u64) {
             return Err(EncryptionError::InvalidOffset(
                 "Offset must be a multiple of CHUNK_SIZE".to_string(),
@@ -144,11 +139,6 @@ impl ChunkEncryptor {
 
         self.file.flush().await?;
 
-        trace!(
-            "Exiting ChunkEncryptor::encrypt_stream_at_offset, total_bytes_read: {}",
-            total_bytes_read
-        );
-
         Ok(total_bytes_read)
     }
 
@@ -159,8 +149,6 @@ impl ChunkEncryptor {
         source: &mut R,
         max_bytes: u64,
     ) -> Result<u64, EncryptionError> {
-        trace!("Entering ChunkEncryptor::encrypt_stream");
-
         let mut chunk_index: u64 = 0;
         let mut total_plaintext_size: u64 = 0;
 
@@ -213,10 +201,6 @@ impl ChunkEncryptor {
         self.file.flush().await?;
 
         self.metadata.total_size = total_plaintext_size;
-        trace!(
-            "Exiting ChunkEncryptor::encrypt_stream, total_size: {}",
-            total_plaintext_size
-        );
 
         Ok(total_plaintext_size)
     }

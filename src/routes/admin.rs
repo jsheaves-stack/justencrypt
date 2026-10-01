@@ -97,8 +97,6 @@ pub async fn create_user(
     reqbody: Json<CreateUser>,
     state: &State<AppState>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [POST /admin/users]");
-
     let CreateUser { username, password } = reqbody.into_inner();
 
     create_account(&username, &SecretString::from(password), &state.config).await?;

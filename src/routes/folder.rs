@@ -7,10 +7,8 @@ use crate::{
     web::forwarding_guards::AuthenticatedSession,
 };
 
-#[options("/<folder_path..>")]
-pub fn folder_options(folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [OPTIONS /folder/{}]", folder_path);
-
+#[options("/<_folder_path..>")]
+pub fn folder_options(_folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
@@ -19,8 +17,6 @@ pub async fn get_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<Json<Vec<FolderContent>>, RequestError> {
-    trace!("Entering route [GET /folder/{}]", folder_path);
-
     let folder_path_buf = folder_path.to_path_buf();
     let folder_contents = {
         let session = auth.session.clone();
@@ -35,8 +31,6 @@ pub async fn create_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PUT /folder/{}]", folder_path);
-
     let folder_path_buf = folder_path.to_path_buf();
     {
         let session = auth.session.clone();
@@ -51,8 +45,6 @@ pub async fn delete_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [DELETE /folder/{}]", folder_path);
-
     let session = auth.session.clone();
     let user_path = session.get_user_path();
 
@@ -75,8 +67,6 @@ pub async fn patch_folder(
     auth: AuthenticatedSession,
     patch_data: Json<PatchFolderData>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PATCH /folder/{}]", folder_path);
-
     let PatchFolderData {
         folder_name,
         parent_folder_path,

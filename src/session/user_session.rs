@@ -115,8 +115,6 @@ impl UserSession {
         existing_pool: Option<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
         config: &AppConfig,
     ) -> Result<Self, DbError> {
-        trace!("Entering UserSession::open for user: '{}'", user_name);
-
         if !is_valid_username(user_name) {
             return Err(DbError::InvalidInput(
                 "Invalid user name format or length.".to_string(),
@@ -130,13 +128,12 @@ impl UserSession {
         let db_config = config.db.clone();
 
         let session = task::spawn_blocking(move || {
-            trace!("Inside spawn_blocking for UserSession::open");
-
             let user_db_path = user_path.join(format!("{user_name}.db"));
 
             // Accounts are created only through `accounts::create_account`, so
             // a missing database means there is no account. Checking first also
             // keeps SQLite from creating an empty database here.
+
             if !user_db_path.is_file() {
                 trace!("User database does not exist.");
 
@@ -170,8 +167,6 @@ impl UserSession {
         .await
         .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
 
-        trace!("Exiting UserSession::open successfully.");
-
         Ok(session)
     }
 
@@ -192,29 +187,15 @@ impl UserSession {
     }
 
     pub fn get_user_path(&self) -> PathBuf {
-        trace!(
-            "Entering and exiting UserSession::get_user_path. Path: {:?}",
-            self.user_path
-        );
-
         self.user_path.clone()
     }
 
     pub async fn get_encoded_file_name(&self, file_path: PathBuf) -> Result<String, DbError> {
-        trace!(
-            "Entering UserSession::get_encoded_file_name for path: {:?}",
-            file_path
-        );
-
         let result = self
             .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_encoded_file_name");
-
                 sqlite::get_encoded_file_name(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
-
-        trace!("Exiting UserSession::get_encoded_file_name.");
 
         Ok(result)
     }
@@ -240,11 +221,6 @@ impl UserSession {
     /// Deletes an upload's partial file and its tracking row. A partial file
     /// that is already gone is not an error.
     pub async fn abort_upload(&self, upload_id: &str, encoded_file_name: &str) {
-        trace!(
-            "Entering UserSession::abort_upload for upload: {}",
-            upload_id
-        );
-
         let part_path =
             sharded_path::get_sharded_path(self.user_path.clone(), &encoded_file_name.to_owned())
                 .await
@@ -316,8 +292,6 @@ impl UserSession {
         &self,
         active_session_ids: HashSet<String>,
     ) -> Result<(), DbError> {
-        trace!("Entering cleanup_orphaned_uploads for session");
-
         let active_uploads_db = self
             .with_db(|db| sqlite::get_all_active_uploads(&db))
             .await?;
@@ -330,14 +304,10 @@ impl UserSession {
             self.abort_upload(&upload_id, &encoded_file_name).await;
         }
 
-        trace!("Exiting cleanup_orphaned_uploads successfully.");
-
         Ok(())
     }
 
     pub async fn cleanup_own_uploads(&self) -> Result<(), DbError> {
-        trace!("Entering cleanup_own_uploads for session");
-
         let active_uploads_db = self
             .with_db(|db| sqlite::get_all_active_uploads(&db))
             .await?;
@@ -350,8 +320,6 @@ impl UserSession {
             self.abort_upload(&upload_id, &encoded_file_name).await;
         }
 
-        trace!("Exiting cleanup_own_uploads successfully.");
-
         Ok(())
     }
 
@@ -363,12 +331,8 @@ impl UserSession {
         encoded_file_name: String,
         metadata: FileEncryptionMetadata,
     ) -> Result<Option<String>, DbError> {
-        trace!("Entering UserSession::add_file for path: {:?}", file_path);
-
         let replaced = self
             .with_db(move |mut db| {
-                trace!("Inside spawn_blocking for add_file");
-
                 sqlite::add_file(
                     &mut db,
                     file_path.to_str().ok_or(DbError::InvalidPath)?,
@@ -378,28 +342,17 @@ impl UserSession {
             })
             .await?;
 
-        trace!("Exiting UserSession::add_file successfully.");
-
         Ok(replaced)
     }
 
     /// Deletes a file and returns the encoded name of its blob, or `None` if
     /// there was no such file. The caller owns deleting that blob.
     pub async fn delete_file(&self, file_path: PathBuf) -> Result<Option<String>, DbError> {
-        trace!(
-            "Entering UserSession::delete_file for path: {:?}",
-            file_path
-        );
-
         let deleted = self
             .with_db(move |mut db| {
-                trace!("Inside spawn_blocking for delete_file");
-
                 sqlite::delete_file(&mut db, file_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
-
-        trace!("Exiting UserSession::delete_file successfully.");
 
         Ok(deleted)
     }
@@ -408,11 +361,6 @@ impl UserSession {
     /// of the blobs that belonged to the deleted files. The caller owns
     /// deleting those blobs.
     pub async fn delete_folder_tree(&self, folder_path: PathBuf) -> Result<Vec<String>, DbError> {
-        trace!(
-            "Entering UserSession::delete_folder_tree for path: {:?}",
-            folder_path
-        );
-
         self.with_db(move |mut db| {
             sqlite::delete_folder_tree(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
@@ -420,19 +368,10 @@ impl UserSession {
     }
 
     pub async fn add_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::add_folder for path: {:?}",
-            folder_path
-        );
-
         self.with_db(move |mut db| {
-            trace!("Inside spawn_blocking for add_folder");
-
             sqlite::add_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
         })
         .await?;
-
-        trace!("Exiting UserSession::add_folder successfully.");
 
         Ok(())
     }
@@ -444,11 +383,6 @@ impl UserSession {
         new_name: Option<String>,
         destination: Option<String>,
     ) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::update_folder for path: {:?}",
-            folder_path
-        );
-
         self.with_db(move |mut db| {
             sqlite::update_folder(
                 &mut db,
@@ -467,11 +401,6 @@ impl UserSession {
         new_name: Option<String>,
         destination: Option<String>,
     ) -> Result<(), DbError> {
-        trace!(
-            "Entering UserSession::update_file for path: {:?}",
-            file_path
-        );
-
         self.with_db(move |mut db| {
             sqlite::update_file(
                 &mut db,
@@ -484,39 +413,21 @@ impl UserSession {
     }
 
     pub async fn get_folder_id(&self, folder_path: PathBuf) -> Result<Option<i32>, DbError> {
-        trace!(
-            "Entering UserSession::get_folder_id for path: {:?}",
-            folder_path
-        );
-
         let result = self
             .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_folder_id");
-
                 sqlite::get_folder_id(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
-
-        trace!("Exiting UserSession::get_folder_id.");
 
         Ok(result)
     }
 
     pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<FolderContent>, DbError> {
-        trace!(
-            "Entering UserSession::get_folder for path: {:?}",
-            folder_path
-        );
-
         let result = self
             .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_folder");
-
                 sqlite::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
-
-        trace!("Exiting UserSession::get_folder.");
 
         Ok(result)
     }
@@ -525,20 +436,11 @@ impl UserSession {
         &self,
         file_path: PathBuf,
     ) -> Result<FileEncryptionMetadata, DbError> {
-        trace!(
-            "Entering UserSession::get_file_encryption_metadata for path: {:?}",
-            file_path
-        );
-
         let result = self
             .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_file_encryption_metadata");
-
                 sqlite::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
             })
             .await?;
-
-        trace!("Exiting UserSession::get_file_encryption_metadata.");
 
         Ok(result)
     }
@@ -547,23 +449,14 @@ impl UserSession {
         &self,
         file_path: PathBuf,
     ) -> Result<(String, FileEncryptionMetadata), DbError> {
-        trace!(
-            "Entering UserSession::get_file_decryption_data for path: {:?}",
-            file_path
-        );
-
         let result = self
             .with_db(move |db| {
-                trace!("Inside spawn_blocking for get_file_decryption_data");
-
                 sqlite::get_file_decryption_data(
                     &db,
                     file_path.to_str().ok_or(DbError::InvalidPath)?,
                 )
             })
             .await?;
-
-        trace!("Exiting UserSession::get_file_decryption_data.");
 
         Ok(result)
     }

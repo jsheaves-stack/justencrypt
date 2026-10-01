@@ -53,6 +53,7 @@ pub async fn remove_blob_and_thumbnail(user_path: &Path, encoded_name: &str) {
     }
 
     // Most files have no thumbnail, so a missing one is expected.
+
     if let Err(e) = remove_sharded_path(user_path, &thumb_path).await {
         if !is_not_found(e.as_ref()) {
             warn!("Failed to delete thumbnail for {}: {}", encoded_name, e);

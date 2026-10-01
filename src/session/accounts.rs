@@ -54,6 +54,7 @@ pub async fn create_account_storage(
 
         // Claims the database file atomically, so two concurrent requests for
         // the same username can't both set its password.
+
         match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -71,6 +72,7 @@ pub async fn create_account_storage(
         }
 
         // Keys the new database with the password and runs the migrations.
+
         if let Err(e) = sqlite::create_user_db_connection(db_path.clone(), password, &db_config) {
             error!("Failed to initialize database for {}: {}", username, e);
 

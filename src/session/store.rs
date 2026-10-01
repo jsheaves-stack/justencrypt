@@ -47,6 +47,7 @@ impl Drop for LoginGuard<'_> {
 
         // One reference is the map's and one is ours; any more belong to
         // logins still waiting for the lock.
+
         if Arc::strong_count(&self.lock) == 2 {
             locks.remove(&self.username);
         }

@@ -47,6 +47,7 @@ impl OrphanScanner {
                     "Orphan scan for {} removed {} file(s)",
                     session.username, removed
                 ),
+
                 Err(e) => error!("Orphan scan for {} failed: {}", session.username, e),
             }
         });
@@ -105,6 +106,7 @@ pub async fn remove_orphaned_files(session: &UserSession) -> Result<usize, DbErr
         match remove_sharded_path(&user_path, &path).await {
             Ok(()) => removed += 1,
             Err(e) if is_not_found(e.as_ref()) => {},
+
             Err(e) => warn!("Failed to remove orphaned file {:?}: {}", path, e),
         }
     }
@@ -116,6 +118,7 @@ pub async fn remove_orphaned_files(session: &UserSession) -> Result<usize, DbErr
 fn find_stored_files(user_path: &Path) -> Vec<(PathBuf, String, StoredKind)> {
     let cache_path = user_path.join(".cache");
     let mut found = Vec::new();
+
     let mut dirs: Vec<PathBuf> = match fs::read_dir(user_path) {
         Ok(entries) => entries
             .filter_map(Result::ok)
@@ -146,6 +149,7 @@ fn find_stored_files(user_path: &Path) -> Vec<(PathBuf, String, StoredKind)> {
             let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
+
             let (name, is_partial) = match file_name.strip_suffix(".part") {
                 Some(base) => (base, true),
                 None => (file_name, false),

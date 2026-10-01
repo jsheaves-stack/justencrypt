@@ -40,8 +40,6 @@ impl<'r> FromRequest<'r> for AdminGuard {
     async fn from_request(
         request: &'r Request<'_>,
     ) -> Outcome<Self, (Status, Self::Error), Status> {
-        trace!("Entering forwarding_guard::AdminGuard::from_request");
-
         let api_key = match request
             .rocket()
             .state::<AppState>()
@@ -67,8 +65,6 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
     async fn from_request(
         request: &'r Request<'_>,
     ) -> Outcome<Self, (Status, Self::Error), Status> {
-        trace!("Entering forwarding_guard::AuthenticatedSession::from_request");
-
         let cookies = request.cookies();
 
         let state: &State<AppState> = match request.guard::<&State<AppState>>().await {
@@ -119,6 +115,7 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
 
         // Enforced here on every request, so an expired session is rejected on
         // time whether or not the background reaper is running.
+
         if session.is_expired(unix_now_secs(), state.sessions.policy()) {
             trace!("Session has expired.");
 
@@ -130,8 +127,6 @@ impl<'r> FromRequest<'r> for AuthenticatedSession {
         }
 
         session.touch();
-
-        trace!("Exiting forwarding_guard::AuthenticatedSession::from_request successfully.");
 
         Outcome::Success(AuthenticatedSession { session })
     }

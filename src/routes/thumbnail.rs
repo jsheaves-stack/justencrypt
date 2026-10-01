@@ -21,8 +21,6 @@ pub async fn get_thumbnail(
     state: &State<AppState>,
     auth: AuthenticatedSession,
 ) -> Result<(ContentType, Vec<u8>), RequestError> {
-    trace!("Entering route [GET /thumbnail/{}]", file_path);
-
     let file_path_buf = file_path.to_path_buf();
     let format = image_format_for(&file_path_buf).ok_or(RequestError::UnsupportedFileType)?;
 

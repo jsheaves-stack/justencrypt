@@ -23,17 +23,12 @@ pub fn verify_user_db_password(
     password: &SecretString,
     config: &DbConfig,
 ) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::verify_user_db_password for db_path: {:?}",
-        db_path
-    );
-
     let conn = rusqlite::Connection::open(db_path)?;
     conn.busy_timeout(Duration::from_millis(config.busy_timeout_ms))?;
     conn.pragma_update(None, "key", password.expose_secret())?;
 
     if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())) {
-        error!("Failed to verify database password: {}", e);
+        debug!("Failed to verify database password: {}", e);
 
         return Err(DbError::Rusqlite(e));
     }
@@ -61,11 +56,6 @@ pub fn create_user_db_connection(
     password: SecretString,
     config: &DbConfig,
 ) -> Result<Pool<SqliteConnectionManager>, DbError> {
-    trace!(
-        "Entering sqlite::create_user_db_connection with db_path: {:?}",
-        db_path
-    );
-
     let busy_timeout = Duration::from_millis(config.busy_timeout_ms);
     let synchronous_mode = config.synchronous_mode.as_sql();
     let cache_size_kb = config.cache_size_kb;
@@ -84,7 +74,7 @@ pub fn create_user_db_connection(
         conn.pragma_update(None, "key", password.expose_secret())?;
 
         if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())) {
-            error!("Failed to verify database password: {}", e);
+            debug!("Failed to verify database password: {}", e);
 
             return Err(DbError::Rusqlite(e));
         }
@@ -95,6 +85,7 @@ pub fn create_user_db_connection(
             let summary = migration_error_summary(&e);
 
             error!("Database migration failed: {}", summary);
+
             debug!("Database migration error detail: {:?}", e);
 
             return Err(DbError::Migration(summary));
@@ -146,8 +137,6 @@ pub fn create_user_db_connection(
         .build(db_manager)
         .map_err(DbError::PoolError)?;
 
-    trace!("Exiting sqlite::create_user_db_connection successfully.");
-
     Ok(pool)
 }
 
@@ -155,11 +144,6 @@ pub fn create_user_db_connection(
 /// missing along the way. It does no transaction handling of its own, so call
 /// it inside one: if anything fails part-way through, nothing is left behind.
 fn get_or_create_folder(conn: &Connection, folder_path_str: &str) -> Result<i32, DbError> {
-    trace!(
-        "Entering sqlite::get_or_create_folder with folder_path_str: '{}'",
-        folder_path_str
-    );
-
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
 
@@ -168,11 +152,6 @@ fn get_or_create_folder(conn: &Connection, folder_path_str: &str) -> Result<i32,
             Component::Normal(name) => name.to_string_lossy().to_string(),
             _ => continue,
         };
-        trace!(
-            "Processing path component: '{}', current parent ID: {}",
-            name,
-            current_id
-        );
 
         let folder_id = match conn
             .query_row(
@@ -191,30 +170,19 @@ fn get_or_create_folder(conn: &Connection, folder_path_str: &str) -> Result<i32,
         };
 
         current_id = match folder_id {
-            Some(id) => {
-                trace!("Folder '{}' found with ID: {}", name, id);
-
-                id
-            },
+            Some(id) => id,
             None => {
-                trace!("Folder '{}' not found, creating it.", name);
-
                 conn.execute(
                     "INSERT OR IGNORE INTO folders (parent_folder_id, name, created_at) VALUES (?1, ?2, CURRENT_TIMESTAMP)",
                     params![current_id, name],
                 )?;
                 let new_id = conn.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
-                trace!("New folder '{}' created with ID: {}", name, new_id);
+                trace!("Created folder with ID {}", new_id);
 
                 new_id
             },
         };
     }
-
-    trace!(
-        "Exiting sqlite::get_or_create_folder with final folder ID: {}",
-        current_id
-    );
 
     Ok(current_id)
 }
@@ -223,17 +191,8 @@ fn get_folder_id_and_create_if_missing(
     db: &mut PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
 ) -> Result<i32, DbError> {
-    trace!(
-        "Entering sqlite::get_folder_id_and_create_if_missing with folder_path_str: '{}'",
-        folder_path_str
-    );
-
     if let Some(id) = get_folder_id(db, folder_path_str)? {
-        trace!(
-            "Folder '{}' already exists with ID: {}. Fast-path exit without transaction.",
-            folder_path_str,
-            id
-        );
+        trace!("Folder already exists with ID {}", id);
 
         return Ok(id);
     }
@@ -244,19 +203,12 @@ fn get_folder_id_and_create_if_missing(
     let folder_id = get_or_create_folder(&tx, folder_path_str)?;
 
     tx.commit()?;
-    trace!(
-        "Transaction committed. Exiting sqlite::get_folder_id_and_create_if_missing with final folder ID: {}",
-        folder_id
-    );
+    trace!("Created missing folders; final folder ID {}", folder_id);
 
     Ok(folder_id)
 }
 
 pub fn get_folder_id(db: &Connection, folder_path_str: &str) -> Result<Option<i32>, DbError> {
-    trace!(
-        "Entering sqlite::get_folder_id with folder_path_str: '{}'",
-        folder_path_str
-    );
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
 
@@ -265,11 +217,6 @@ pub fn get_folder_id(db: &Connection, folder_path_str: &str) -> Result<Option<i3
             Component::Normal(name) => name.to_string_lossy().to_string(),
             _ => continue,
         };
-        trace!(
-            "Processing path component: '{}', current parent ID: {}",
-            name,
-            current_id
-        );
 
         let folder_id = match db
             .query_row(
@@ -288,29 +235,12 @@ pub fn get_folder_id(db: &Connection, folder_path_str: &str) -> Result<Option<i3
         };
 
         match folder_id {
-            Some(id) => {
-                trace!(
-                    "Folder '{}' found with ID: {}. Updating current_id.",
-                    name,
-                    id
-                );
-                current_id = id
-            },
+            Some(id) => current_id = id,
             None => {
-                trace!(
-                    "Folder component '{}' not found. Exiting get_folder_id with None.",
-                    name
-                );
-
                 return Ok(None);
             },
         }
     }
-
-    trace!(
-        "Exiting sqlite::get_folder_id with final folder ID: {}",
-        current_id
-    );
 
     Ok(Some(current_id))
 }
@@ -323,14 +253,9 @@ pub fn get_encoded_file_name(
     db: &PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
 ) -> Result<String, DbError> {
-    trace!(
-        "Entering sqlite::get_encoded_file_name with full_file_path: '{}'",
-        full_file_path
-    );
     let path = Path::new(full_file_path.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
-    trace!("Getting parent folder ID for path: '{}'", parent_str);
 
     let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::MissingFileName)?;
     trace!("Parent folder ID found: {}", parent_folder_id);
@@ -339,7 +264,6 @@ pub fn get_encoded_file_name(
         .file_name()
         .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
-    trace!("Looking for file name: '{}'", file_name);
 
     let result: Option<String> = match db
         .query_row(
@@ -359,11 +283,6 @@ pub fn get_encoded_file_name(
 
     let result = result.ok_or(DbError::NotFound)?;
 
-    trace!(
-        "Exiting sqlite::get_encoded_file_name with result: '{}'",
-        result
-    );
-
     Ok(result)
 }
 
@@ -379,12 +298,6 @@ pub fn add_file(
     encoded_file_name: &str,
     metadata: FileEncryptionMetadata,
 ) -> Result<Option<String>, DbError> {
-    trace!(
-        "Entering sqlite::add_file with full_file_path: '{}', encoded_file_name: '{}'",
-        full_file_path,
-        encoded_file_name
-    );
-
     check_path_names(Some(full_file_path))?;
 
     let path = Path::new(full_file_path.trim_matches('/'));
@@ -398,12 +311,6 @@ pub fn add_file(
         .extension()
         .map(|ext| ext.to_string_lossy())
         .unwrap_or_default();
-    trace!(
-        "Parsed file parts: parent_path: '{:?}', file_name: '{}', file_extension: '{}'",
-        parent_path,
-        file_name,
-        file_extension
-    );
 
     let total_size = i64::try_from(metadata.total_size)
         .map_err(|_| DbError::InvalidInput("File is too large".to_string()))?;
@@ -465,21 +372,12 @@ pub fn delete_file(
     db: &mut PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
 ) -> Result<Option<String>, DbError> {
-    trace!(
-        "Entering sqlite::delete_file with file_path_str: '{}'",
-        file_path_str
-    );
     let path = Path::new(file_path_str.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let file_name = path
         .file_name()
         .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
-    trace!(
-        "Parsed file parts: parent_path: '{:?}', file_name: '{}'",
-        parent_path,
-        file_name
-    );
 
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     trace!("Transaction started for deleting file.");
@@ -487,11 +385,6 @@ pub fn delete_file(
     let parent_folder_id = match get_folder_id(&tx, &parent_path.to_string_lossy())? {
         Some(id) => id,
         None => {
-            trace!(
-                "Parent folder '{:?}' not found during delete. File cannot exist.",
-                parent_path
-            );
-
             return Ok(None);
         },
     };
@@ -521,14 +414,9 @@ pub fn get_file(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
 ) -> Result<FileEncryptionMetadata, DbError> {
-    trace!(
-        "Entering sqlite::get_file with file_path_str: '{}'",
-        file_path_str
-    );
     let path = Path::new(file_path_str.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
-    trace!("Getting parent folder ID for path: '{}'", parent_str);
 
     let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::MissingFileName)?;
     trace!("Parent folder ID found: {}", parent_folder_id);
@@ -537,7 +425,6 @@ pub fn get_file(
         .file_name()
         .ok_or(DbError::MissingFileName)?
         .to_string_lossy();
-    trace!("Looking for file name: '{}'", file_name);
 
     let result = match db
         .query_row(
@@ -567,8 +454,6 @@ pub fn get_file(
 
     let result = result.ok_or(DbError::NotFound)?;
 
-    trace!("Exiting sqlite::get_file successfully.");
-
     Ok(result)
 }
 
@@ -576,10 +461,6 @@ pub fn get_file_decryption_data(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
 ) -> Result<(String, FileEncryptionMetadata), DbError> {
-    trace!(
-        "Entering sqlite::get_file_decryption_data for path: {}",
-        file_path_str
-    );
     let path = Path::new(file_path_str.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
@@ -651,10 +532,6 @@ pub fn get_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
 ) -> Result<Vec<FolderContent>, DbError> {
-    trace!(
-        "Entering sqlite::get_folder with folder_path_str: '{}'",
-        folder_path_str
-    );
     let folder_id = get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)?;
     trace!("Found folder ID: {}", folder_id);
 
@@ -674,11 +551,6 @@ pub fn get_folder(
         let file_count: i64 = row.get(2)?;
         let folder_count: i64 = row.get(3)?;
         let created_at: Option<String> = row.get(4)?;
-        trace!(
-            "Found child folder: '{}' with size: {}",
-            file_name,
-            folder_size
-        );
         entries.push(FolderContent::Folder(Folder {
             file_name,
             file_size: Some(folder_size as u64),
@@ -701,7 +573,6 @@ pub fn get_folder(
         let total_size_i64: i64 = row.get(2)?;
         let created_at: Option<String> = row.get(3)?;
         let updated_at: Option<String> = row.get(4)?;
-        trace!("Found file: '{}'", file_name);
 
         entries.push(FolderContent::File(File {
             file_extension: row.get(1)?,
@@ -711,8 +582,6 @@ pub fn get_folder(
             last_modified_date: updated_at,
         }));
     }
-
-    trace!("Exiting sqlite::get_folder with {} entries.", entries.len());
 
     Ok(entries)
 }
@@ -727,11 +596,6 @@ pub fn delete_folder_tree(
     db: &mut PooledConnection<SqliteConnectionManager>,
     path_str: &str,
 ) -> Result<Vec<String>, DbError> {
-    trace!(
-        "Entering sqlite::delete_folder_tree with path_str: '{}'",
-        path_str
-    );
-
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     let folder_id = get_folder_id(&tx, path_str)?.ok_or(DbError::NotFound)?;
@@ -780,10 +644,7 @@ pub fn delete_folder_tree(
     }
 
     tx.commit()?;
-    trace!(
-        "Transaction committed. Exiting sqlite::delete_folder_tree with {} blob(s) to remove.",
-        blobs.len()
-    );
+    trace!("Deleted folder tree; {} blob(s) to remove", blobs.len());
 
     Ok(blobs)
 }
@@ -792,12 +653,9 @@ pub fn add_folder(
     db: &mut PooledConnection<SqliteConnectionManager>,
     path_str: &str,
 ) -> Result<(), DbError> {
-    trace!("Entering sqlite::add_folder with path_str: '{}'", path_str);
-
     check_path_names(Some(path_str))?;
 
     get_folder_id_and_create_if_missing(db, path_str)?;
-    trace!("Exiting sqlite::add_folder successfully.");
 
     Ok(())
 }
@@ -849,13 +707,6 @@ pub fn update_folder(
     new_name: Option<&str>,
     destination_folder_str: Option<&str>,
 ) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::update_folder with folder_path_str: '{}', new_name: {:?}, destination: {:?}",
-        folder_path_str,
-        new_name,
-        destination_folder_str
-    );
-
     check_new_name(new_name)?;
     check_path_names(destination_folder_str)?;
 
@@ -921,7 +772,6 @@ pub fn update_folder(
     .map_err(|e| update_error(e, "folder"))?;
 
     tx.commit()?;
-    trace!("Transaction committed. Exiting sqlite::update_folder successfully.");
 
     Ok(())
 }
@@ -937,13 +787,6 @@ pub fn update_file(
     new_name: Option<&str>,
     destination_folder_str: Option<&str>,
 ) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::update_file with file_path_str: '{}', new_name: {:?}, destination: {:?}",
-        file_path_str,
-        new_name,
-        destination_folder_str
-    );
-
     check_new_name(new_name)?;
     check_path_names(destination_folder_str)?;
 
@@ -998,32 +841,21 @@ pub fn add_active_upload(
     encoded_file_name: &str,
     file_path: &str,
 ) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::add_active_upload for upload_id: {}",
-        upload_id
-    );
     db.execute(
         "INSERT OR REPLACE INTO active_uploads (upload_id, session_id, encoded_file_name, file_path) VALUES (?1, ?2, ?3, ?4)",
         params![upload_id, session_id, encoded_file_name, file_path],
     )
     .map(|_| {
-        trace!("Exiting sqlite::add_active_upload successfully.");
     })
     .map_err(|e| DbError::FailedToAddFileToDb(e.to_string()))
 }
 
 pub fn remove_active_upload(db: &rusqlite::Connection, upload_id: &str) -> Result<(), DbError> {
-    trace!(
-        "Entering sqlite::remove_active_upload for upload_id: {}",
-        upload_id
-    );
     db.execute(
         "DELETE FROM active_uploads WHERE upload_id = ?1",
         params![upload_id],
     )
-    .map(|_| {
-        trace!("Exiting sqlite::remove_active_upload successfully.");
-    })
+    .map(|_| ())
     .map_err(|e| DbError::FailedToDeleteFileFromDb(e.to_string()))
 }
 
@@ -1044,8 +876,6 @@ pub fn get_all_encoded_names(db: &rusqlite::Connection) -> Result<Vec<String>, D
 pub fn get_all_active_uploads(
     db: &rusqlite::Connection,
 ) -> Result<Vec<(String, String, String)>, DbError> {
-    trace!("Entering sqlite::get_all_active_uploads");
-
     let mut stmt = db
         .prepare("SELECT upload_id, session_id, encoded_file_name FROM active_uploads")
         .map_err(|e| DbError::FailedToQueryDb(e.to_string()))?;
@@ -1058,8 +888,6 @@ pub fn get_all_active_uploads(
     for row in rows {
         uploads.push(row.map_err(|e| DbError::FailedToQueryDb(e.to_string()))?);
     }
-
-    trace!("Exiting sqlite::get_all_active_uploads successfully.");
 
     Ok(uploads)
 }

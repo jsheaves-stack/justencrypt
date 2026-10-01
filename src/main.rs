@@ -80,6 +80,7 @@ async fn rocket() -> _ {
     dotenv::dotenv().ok();
 
     // The logger isn't set up yet, and its level comes from this config.
+
     let config = match AppConfig::from_env() {
         Ok(config) => Arc::new(config),
         Err(e) => {
@@ -92,13 +93,16 @@ async fn rocket() -> _ {
     env_logger::Builder::new()
         .format(|buf, record| {
             let mut file = record.file().unwrap_or("unknown");
+
             if let Some(idx) = file.find("registry/src/") {
                 let rest = &file[idx + 13..];
+
                 if let Some(slash_idx) = rest.find('/') {
                     file = &rest[slash_idx + 1..];
                 }
             } else if let Some(idx) = file.find("/rustc/") {
                 let rest = &file[idx + 7..];
+
                 if let Some(slash_idx) = rest.find('/') {
                     file = &rest[slash_idx + 1..];
                 }
@@ -119,8 +123,6 @@ async fn rocket() -> _ {
         .init();
 
     trace!("Loaded .env file and initialized logger.");
-
-    trace!("Entering main::rocket launch function.");
 
     let semaphore_tickets = config.thumbnail_concurrency();
 

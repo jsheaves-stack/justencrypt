@@ -50,10 +50,9 @@ pub async fn init_upload(
     auth: AuthenticatedSession,
     state: &State<AppState>,
 ) -> Result<Json<InitUploadResponse>, RequestError> {
-    trace!("Entering route [POST /file/upload/initiate/{}]", file_path);
-
     // Checked again when the file is added, but a bad name should be reported
     // before the client uploads any chunks.
+
     if !is_valid_entry_path(&file_path.to_path_buf().to_string_lossy()) {
         return Err(RequestError::BadRequest(
             INVALID_ENTRY_NAME_MESSAGE.to_string(),
@@ -69,6 +68,7 @@ pub async fn init_upload(
     // Reject early so a client at the limit doesn't cost any I/O. The limit is
     // checked again under the same lock as the insert below, because the file
     // and DB work in between happens without holding it.
+
     if let Some(limit) = max_uploads {
         if session.active_uploads.lock().await.len() >= limit {
             return Err(RequestError::TooManyActiveUploads);
@@ -131,12 +131,6 @@ pub async fn upload_chunk(
     limits: &Limits,
     data: Data<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!(
-        "Entering route [PUT /file/upload/chunk/{}] at offset {}",
-        upload_id,
-        offset
-    );
-
     if !offset.is_multiple_of(CHUNK_SIZE as u64) {
         return Err(RequestError::BadRequest(format!(
             "Offset must be a multiple of {}",
@@ -181,12 +175,6 @@ pub async fn finalize_upload(
     auth: AuthenticatedSession,
     limits: &Limits,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!(
-        "Entering route [POST /file/upload/finalize/{}] with total_size {}",
-        upload_id,
-        total_size
-    );
-
     if total_size > max_file_size(limits) {
         return Err(RequestError::PayloadTooLarge);
     }
@@ -299,8 +287,6 @@ pub async fn put_file(
     limits: &Limits,
     data: Data<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PUT /file/{}]", file_path);
-
     let file_path_buf = file_path.to_path_buf();
     let user_path = {
         let session = auth.session.clone();
@@ -348,6 +334,7 @@ pub async fn put_file(
 
     // The data must be on disk before the file is renamed into place and
     // recorded, so a crash can't leave a record of a file that isn't there.
+
     let written = match encryptor.encrypt_stream(&mut stream, max_file_size).await {
         Ok(_) => encryptor.sync().await,
         Err(e) => Err(e),
@@ -424,8 +411,6 @@ pub async fn get_file(
     auth: AuthenticatedSession,
     range: RangeHeader,
 ) -> Result<RangeResponder, RequestError> {
-    trace!("Entering route [GET /file/{}]", file_path);
-
     let file_path_buf = file_path.to_path_buf();
     let session = auth.session.clone();
     let user_path = session.get_user_path();
@@ -434,16 +419,19 @@ pub async fn get_file(
     drop(session);
 
     let total_size = metadata.total_size;
+
     let requested_range = match range.0 {
         Some(range_str) => parse_range(&range_str, total_size)?,
         None => None,
     };
+
     let (start, end, status) = match requested_range {
         Some((start, end)) => (start, end, Status::PartialContent),
         None => (0, total_size.saturating_sub(1), Status::Ok),
     };
 
     // Nothing to decrypt. Dropping the sender ends the body immediately.
+
     if total_size == 0 {
         let (_, rx) = mpsc::channel::<Vec<u8>>(1);
 
@@ -487,14 +475,13 @@ pub async fn delete_file(
     file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [DELETE /file/{}]", file_path);
-
     let session = auth.session.clone();
     let user_path = session.get_user_path();
 
     // The blob to remove comes from the deleted row itself, not from an
     // earlier lookup, so a concurrent overwrite can't make us delete the wrong
     // one.
+
     match session.delete_file(file_path.to_path_buf()).await? {
         Some(encoded_file_name) => {
             remove_blob_and_thumbnail(&user_path, &encoded_file_name).await;
@@ -511,8 +498,6 @@ pub async fn patch_file(
     auth: AuthenticatedSession,
     patch_data: Json<PatchFileData>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PATCH /file/{}]", file_path);
-
     let PatchFileData {
         file_name,
         parent_folder_path,

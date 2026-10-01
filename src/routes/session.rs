@@ -26,8 +26,6 @@ pub struct CreateSession {
 
 #[options("/")]
 pub fn session_options() -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route::session::session_options");
-
     Ok(RequestSuccess::NoContent)
 }
 
@@ -37,8 +35,6 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [POST /session]");
-
     validate_credentials(&reqbody.username, &reqbody.password)?;
 
     let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
@@ -128,8 +124,6 @@ pub async fn create_session(
 
     state.orphan_scanner.scan_in_background(session.clone());
 
-    trace!("Exiting route [POST /session] successfully.");
-
     Ok(RequestSuccess::Created)
 }
 
@@ -138,8 +132,6 @@ pub async fn destroy_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [DELETE /session]");
-
     let cookie = match cookies.get_private("sid") {
         Some(c) => {
             trace!("Found sid cookie.");
@@ -173,8 +165,6 @@ pub async fn destroy_session(
             Err(RequestError::MissingActiveSession)
         },
     };
-
-    trace!("Exiting route [DELETE /session] successfully.");
 
     result
 }

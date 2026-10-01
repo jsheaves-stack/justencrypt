@@ -165,8 +165,10 @@ pub async fn create_test_session(
     // Tests use a weak password, so this skips the strength check that
     // `accounts::create_account` applies. The account may already exist when a
     // test logs in more than once.
+
     match create_account_storage(&temp_user, &passphrase, &state.config).await {
         Ok(()) | Err(RequestError::AccountAlreadyExists) => {},
+
         Err(e) => panic!("Failed to create test account: {}", e),
     }
 
