@@ -430,9 +430,8 @@ impl AppConfig {
     }
 
     /// Reads the configuration from `JUSTENCRYPT_*` name/value pairs; other
-    /// names are ignored. An empty value counts as unset, and a
-    /// `JUSTENCRYPT_*` name the server doesn't know is an error, so a typo
-    /// can't go unnoticed.
+    /// names, and `JUSTENCRYPT_*` names the server doesn't know, are ignored.
+    /// An empty value counts as unset.
     pub fn from_vars<I>(vars: I) -> Result<Self, ConfigError>
     where
         I: IntoIterator<Item = (String, String)>,
@@ -450,9 +449,7 @@ impl AppConfig {
             }
 
             let Some((_, key)) = ENV_KEYS.iter().find(|(n, _)| *n == short_name) else {
-                return Err(ConfigError::Invalid(format!(
-                    "{name} is not a recognized setting"
-                )));
+                continue;
             };
 
             figment = figment.merge(Serialized::default(key, value));

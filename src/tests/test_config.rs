@@ -175,10 +175,14 @@ fn test_config_errors_name_the_variable() {
 }
 
 #[test]
-fn test_config_rejects_unknown_justencrypt_variables() {
-    let error = load_err(&[("JUSTENCRYPT_MAX_UPLOADS", "5")]);
+fn test_config_ignores_unknown_justencrypt_variables() {
+    let config = load(&[
+        ("JUSTENCRYPT_MAX_UPLOADS", "5"),
+        ("JUSTENCRYPT_PORT", "9000"),
+    ])
+    .unwrap();
 
-    assert!(error.contains("JUSTENCRYPT_MAX_UPLOADS"), "{}", error);
+    assert_eq!(config.server.port, 9000);
 }
 
 #[test]
