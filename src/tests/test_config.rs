@@ -8,7 +8,24 @@ use secrecy::ExposeSecret;
 
 use crate::config::{AppConfig, LogLevel, SyncMode, TempStore};
 
+const SECRET_KEY_VAR: &str = "JUSTENCRYPT_ROCKET_SECRET_KEY";
+
+// Release builds require a secret key, so every test gets one unless it sets
+// its own; `load_exactly` passes the variables through unchanged.
 fn load(vars: &[(&str, &str)]) -> Result<AppConfig, String> {
+    let mut vars = vars.to_vec();
+
+    if !vars.iter().any(|(name, _)| *name == SECRET_KEY_VAR) {
+        vars.push((
+            SECRET_KEY_VAR,
+            "BlN4QMqM8+wmRLPNRn10X/ZwmM58tEcCOgeY8cuMsB8=",
+        ));
+    }
+
+    load_exactly(&vars)
+}
+
+fn load_exactly(vars: &[(&str, &str)]) -> Result<AppConfig, String> {
     AppConfig::from_vars(
         vars.iter()
             .map(|(name, value)| (name.to_string(), value.to_string())),
@@ -225,5 +242,18 @@ fn test_config_rejects_unusable_allow_origin() {
         let config = load(&[("JUSTENCRYPT_ALLOW_ORIGIN", value)]).unwrap();
 
         assert_eq!(config.allow_origin.as_deref(), Some(value));
+    }
+}
+
+// Debug builds may run without a secret key (Rocket generates one per
+// launch); release builds must be given one.
+#[test]
+fn test_config_secret_key_is_required_in_release_builds() {
+    let result = load_exactly(&[]);
+
+    if cfg!(debug_assertions) {
+        assert!(result.unwrap().server.secret_key.is_none());
+    } else {
+        assert!(result.unwrap_err().contains(SECRET_KEY_VAR));
     }
 }
