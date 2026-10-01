@@ -179,10 +179,7 @@ pub async fn create_test_session(
 
     let session_id = user_session.session_id.clone();
 
-    state
-        .sessions
-        .insert(user_token.clone(), user_session)
-        .await;
+    state.sessions.insert(&user_token, user_session).await;
 
     let cookie = Cookie::build(("sid", user_token)).build();
 

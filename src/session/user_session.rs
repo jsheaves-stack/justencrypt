@@ -66,7 +66,6 @@ pub struct UserSession {
     pub username: String,
     pub created_at: SystemTime,
     pub session_id: String,
-    pub user_token: SecretString,
     pub active_uploads: Mutex<HashMap<String, UploadState>>,
     /// Unix seconds of the last authenticated request. Atomic so every request
     /// can refresh it without taking a lock.
@@ -159,7 +158,6 @@ impl UserSession {
                 username: user_name_clone,
                 created_at: SystemTime::now(),
                 session_id: Uuid::new_v4().hyphenated().to_string(),
-                user_token: new_session_token(),
                 active_uploads: Mutex::new(HashMap::new()),
                 last_seen: AtomicU64::new(unix_now_secs()),
             })

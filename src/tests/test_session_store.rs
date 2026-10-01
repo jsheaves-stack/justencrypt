@@ -14,14 +14,14 @@ use rocket::{
     async_test,
     tokio::{self, runtime::Builder, sync::Mutex, time::timeout},
 };
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::{
     session::{
         policy::SessionPolicy,
         reaper::{reap_once, SessionReaper},
-        store::SessionStore,
+        store::{token_digest, SessionStore},
         user_session::{new_session_token, UserSession},
     },
     util::time::unix_now_secs,
@@ -48,7 +48,6 @@ fn aged_session(username: &str, age_secs: u64, idle_secs: u64) -> Arc<UserSessio
         username: username.to_string(),
         created_at: UNIX_EPOCH + Duration::from_secs(now - age_secs),
         session_id: session_id.clone(),
-        user_token: SecretString::from(format!("token-{session_id}")),
         active_uploads: Mutex::new(HashMap::new()),
         last_seen: AtomicU64::new(now - idle_secs),
     })
@@ -67,7 +66,7 @@ async fn test_insert_then_lookup_by_token_and_id() {
     let store = SessionStore::default();
     let session = detached_session("alice");
 
-    store.insert("tok-a".into(), session.clone()).await;
+    store.insert("tok-a", session.clone()).await;
 
     assert!(Arc::ptr_eq(&store.get("tok-a").await.unwrap(), &session));
     assert!(Arc::ptr_eq(
@@ -82,7 +81,7 @@ async fn test_insert_then_lookup_by_token_and_id() {
 async fn test_remove_by_token_clears_both_lookups() {
     let store = SessionStore::default();
     let session = detached_session("alice");
-    store.insert("tok-a".into(), session.clone()).await;
+    store.insert("tok-a", session.clone()).await;
 
     let removed = store.remove_by_token("tok-a").await.unwrap();
 
@@ -96,7 +95,7 @@ async fn test_remove_by_token_clears_both_lookups() {
 async fn test_remove_by_id_clears_both_lookups() {
     let store = SessionStore::default();
     let session = detached_session("alice");
-    store.insert("tok-a".into(), session.clone()).await;
+    store.insert("tok-a", session.clone()).await;
 
     let removed = store.remove_by_id(&session.session_id).await.unwrap();
 
@@ -111,9 +110,9 @@ async fn test_reinserting_a_token_replaces_the_old_session_completely() {
     let store = SessionStore::default();
     let old = detached_session("alice");
     let new = detached_session("alice");
-    store.insert("tok-a".into(), old.clone()).await;
+    store.insert("tok-a", old.clone()).await;
 
-    store.insert("tok-a".into(), new.clone()).await;
+    store.insert("tok-a", new.clone()).await;
 
     assert!(Arc::ptr_eq(&store.get("tok-a").await.unwrap(), &new));
     assert!(store.get_by_id(&old.session_id).await.is_none());
@@ -125,9 +124,9 @@ async fn test_reinserting_a_token_replaces_the_old_session_completely() {
 async fn test_reinserting_a_session_under_a_new_token_drops_the_old_token() {
     let store = SessionStore::default();
     let session = detached_session("alice");
-    store.insert("tok-old".into(), session.clone()).await;
+    store.insert("tok-old", session.clone()).await;
 
-    store.insert("tok-new".into(), session.clone()).await;
+    store.insert("tok-new", session.clone()).await;
 
     assert!(store.get("tok-old").await.is_none());
     assert!(Arc::ptr_eq(&store.get("tok-new").await.unwrap(), &session));
@@ -137,10 +136,8 @@ async fn test_reinserting_a_session_under_a_new_token_drops_the_old_token() {
 #[async_test]
 async fn test_snapshot_and_pool_for_user() {
     let store = SessionStore::default();
-    store
-        .insert("tok-a".into(), detached_session("alice"))
-        .await;
-    store.insert("tok-b".into(), detached_session("bob")).await;
+    store.insert("tok-a", detached_session("alice")).await;
+    store.insert("tok-b", detached_session("bob")).await;
 
     let mut names: Vec<_> = store
         .snapshot()
@@ -169,9 +166,7 @@ fn test_concurrent_reads_and_removals_do_not_deadlock() {
 
     runtime.block_on(async {
         let store = Arc::new(SessionStore::default());
-        store
-            .insert("stable".into(), detached_session("reader"))
-            .await;
+        store.insert("stable", detached_session("reader")).await;
 
         let stop = Arc::new(AtomicBool::new(false));
 
@@ -196,9 +191,9 @@ fn test_concurrent_reads_and_removals_do_not_deadlock() {
                     let session = detached_session("churn");
                     let id = session.session_id.clone();
 
-                    store.insert("churn-a".into(), session.clone()).await;
+                    store.insert("churn-a", session.clone()).await;
                     store.remove_by_token("churn-a").await;
-                    store.insert("churn-b".into(), session).await;
+                    store.insert("churn-b", session).await;
                     store.remove_by_id(&id).await;
                     store.snapshot().await;
                     tokio::task::yield_now().await;
@@ -233,11 +228,11 @@ async fn test_insert_over_the_per_user_limit_evicts_the_oldest_sessions() {
     let newest = aged_session("alice", 100, 0);
     let bob = aged_session("bob", 400, 0);
 
-    assert!(store.insert("bob".into(), bob.clone()).await.is_empty());
-    assert!(store.insert("a1".into(), oldest.clone()).await.is_empty());
-    assert!(store.insert("a2".into(), middle.clone()).await.is_empty());
+    assert!(store.insert("bob", bob.clone()).await.is_empty());
+    assert!(store.insert("a1", oldest.clone()).await.is_empty());
+    assert!(store.insert("a2", middle.clone()).await.is_empty());
 
-    let evicted = store.insert("a3".into(), newest.clone()).await;
+    let evicted = store.insert("a3", newest.clone()).await;
 
     assert_eq!(evicted.len(), 1);
     assert!(Arc::ptr_eq(&evicted[0], &oldest));
@@ -263,7 +258,7 @@ async fn test_remove_expired_removes_idle_and_too_old_sessions_only() {
         ("too-old", &too_old),
         ("at-the-limit", &at_the_limit),
     ] {
-        store.insert(token.into(), session.clone()).await;
+        store.insert(token, session.clone()).await;
     }
 
     let expired = store.remove_expired(unix_now_secs()).await;
@@ -296,8 +291,8 @@ async fn test_reap_once_removes_expired_sessions() {
     let store = SessionStore::new(policy(60, 3600, 10));
     let live = aged_session("alice", 10, 10);
     let expired = aged_session("alice", 100, 100);
-    store.insert("live".into(), live).await;
-    store.insert("expired".into(), expired).await;
+    store.insert("live", live).await;
+    store.insert("expired", expired).await;
 
     reap_once(&store, Duration::from_secs(24 * 60 * 60)).await;
 
@@ -351,4 +346,25 @@ async fn test_login_lock_serialises_logins_per_user() {
             .is_ok(),
         "the lock must be free once the first login finishes"
     );
+}
+
+// A7: the store used raw session tokens as its keys, so anything that exposed
+// its memory exposed working session cookies. It keeps only their digests.
+#[async_test]
+async fn test_store_keeps_token_digests_not_tokens() {
+    let store = SessionStore::default();
+    let session = detached_session("alice");
+    let token = new_session_token();
+
+    store.insert(token.expose_secret(), session.clone()).await;
+
+    let keys = store.stored_keys().await;
+
+    assert_eq!(keys, vec![token_digest(token.expose_secret())]);
+    assert_ne!(keys[0], *token.expose_secret());
+    // Lookups still take the token itself, and the digest is no substitute.
+    assert!(store.get(token.expose_secret()).await.is_some());
+    assert!(store.get(&keys[0]).await.is_none());
+    assert!(store.remove_by_token(token.expose_secret()).await.is_some());
+    assert!(store.stored_keys().await.is_empty());
 }

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, str::FromStr, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
@@ -12,7 +12,9 @@ use serde::Deserialize;
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     session::{
-        credentials::validate_credentials, reaper::discard_sessions, user_session::UserSession,
+        credentials::validate_credentials,
+        reaper::discard_sessions,
+        user_session::{new_session_token, UserSession},
     },
     util::time::unix_now_secs,
     AppState,
@@ -21,7 +23,7 @@ use crate::{
 #[derive(Deserialize)]
 pub struct CreateSession {
     username: String,
-    password: String,
+    password: SecretString,
 }
 
 #[options("/")]
@@ -35,10 +37,12 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    validate_credentials(&reqbody.username, &reqbody.password)?;
+    let CreateSession {
+        username: user_name,
+        password: passphrase,
+    } = reqbody.into_inner();
 
-    let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
-    let user_name = reqbody.username.clone();
+    validate_credentials(&user_name, passphrase.expose_secret())?;
 
     trace!("Attempting to open user session for user: {}", user_name);
 
@@ -68,19 +72,14 @@ pub async fn create_session(
         },
     );
 
-    let (user_token, session_id) = {
-        let session_read = session.clone();
-        (
-            session_read.user_token.expose_secret().clone(),
-            session_read.session_id.clone(),
-        )
-    };
+    // The token only lives in the cookie; the store keeps its digest.
+    let user_token = new_session_token();
 
-    trace!("Generated new session ID: {}", session_id);
+    trace!("Generated new session ID: {}", session.session_id);
 
     let max_lifetime_secs = state.sessions.policy().max_lifetime.as_secs();
 
-    let mut cookie = Cookie::new("sid", user_token.clone());
+    let mut cookie = Cookie::new("sid", user_token.expose_secret().clone());
     cookie.set_same_site(Some(SameSite::Strict));
     cookie.set_secure(state.config.secure_cookies);
     cookie.set_path("/");
@@ -91,7 +90,10 @@ pub async fn create_session(
 
     trace!("Session cookie added to jar.");
 
-    let evicted = state.sessions.insert(user_token, session.clone()).await;
+    let evicted = state
+        .sessions
+        .insert(user_token.expose_secret(), session.clone())
+        .await;
 
     drop(login_guard);
 

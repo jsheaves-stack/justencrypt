@@ -11,10 +11,10 @@ use crate::{
     AppState,
 };
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 pub struct CreateUser {
     pub username: String,
-    pub password: String,
+    pub password: SecretString,
 }
 
 #[derive(Serialize)]
@@ -99,7 +99,7 @@ pub async fn create_user(
 ) -> Result<RequestSuccess, RequestError> {
     let CreateUser { username, password } = reqbody.into_inner();
 
-    create_account(&username, &SecretString::from(password), &state.config).await?;
+    create_account(&username, &password, &state.config).await?;
 
     Ok(RequestSuccess::Created)
 }

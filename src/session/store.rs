@@ -11,6 +11,10 @@ use crate::session::{policy::SessionPolicy, user_session::UserSession};
 
 /// The set of live user sessions.
 ///
+/// Sessions are found by their session token, but the store only keeps each
+/// token's [`token_digest`], so its memory never holds a usable session
+/// cookie. Methods take the token itself and hash it.
+///
 /// Both lookup maps live behind a single lock so they can never be observed
 /// out of sync, and so there is no lock ordering to get wrong. Every method
 /// takes the lock exactly once, returns owned data, and never awaits anything
@@ -61,14 +65,30 @@ impl Default for SessionStore {
 }
 
 /// Invariant: `token_of` is the exact inverse of `by_token`, so every session
-/// is reachable from both its token key and its session id.
+/// is reachable from both its token digest and its session id.
 #[derive(Default)]
 struct Inner {
     by_token: HashMap<String, Arc<UserSession>>,
     token_of: HashMap<String, String>,
 }
 
+/// The key a session token is stored under: its BLAKE2b-256 digest as hex.
+pub fn token_digest(token: &str) -> String {
+    let digest = orion::hash::digest(token.as_bytes()).expect("hashing a token cannot fail");
+
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 impl SessionStore {
+    #[cfg(test)]
+    pub async fn stored_keys(&self) -> Vec<String> {
+        self.inner.read().await.by_token.keys().cloned().collect()
+    }
+
     pub fn new(policy: SessionPolicy) -> Self {
         Self {
             inner: RwLock::default(),
@@ -103,17 +123,14 @@ impl SessionStore {
         &self.policy
     }
 
-    /// Registers `session` under `token_key`. Any earlier registration of the
+    /// Registers `session` under `token`. Any earlier registration of the
     /// same token or of the same session is replaced, so the two lookups can
     /// never disagree.
     ///
     /// If the user now has more sessions than the policy allows, their oldest
     /// other sessions are removed and returned.
-    pub async fn insert(
-        &self,
-        token_key: String,
-        session: Arc<UserSession>,
-    ) -> Vec<Arc<UserSession>> {
+    pub async fn insert(&self, token: &str, session: Arc<UserSession>) -> Vec<Arc<UserSession>> {
+        let token_key = token_digest(token);
         let session_id = session.session_id.clone();
         let username = session.username.clone();
         let mut inner = self.inner.write().await;
@@ -177,8 +194,10 @@ impl SessionStore {
         expired
     }
 
-    pub async fn get(&self, token_key: &str) -> Option<Arc<UserSession>> {
-        self.inner.read().await.by_token.get(token_key).cloned()
+    pub async fn get(&self, token: &str) -> Option<Arc<UserSession>> {
+        let token_key = token_digest(token);
+
+        self.inner.read().await.by_token.get(&token_key).cloned()
     }
 
     pub async fn get_by_id(&self, session_id: &str) -> Option<Arc<UserSession>> {
@@ -188,9 +207,10 @@ impl SessionStore {
         inner.by_token.get(token_key).cloned()
     }
 
-    pub async fn remove_by_token(&self, token_key: &str) -> Option<Arc<UserSession>> {
+    pub async fn remove_by_token(&self, token: &str) -> Option<Arc<UserSession>> {
+        let token_key = token_digest(token);
         let mut inner = self.inner.write().await;
-        let session = inner.by_token.remove(token_key)?;
+        let session = inner.by_token.remove(&token_key)?;
 
         inner.token_of.remove(&session.session_id);
 

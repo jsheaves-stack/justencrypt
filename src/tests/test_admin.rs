@@ -9,7 +9,7 @@ use super::*;
 use crate::routes::{
     admin::{
         admin_options, create_user, create_user_options, delete_session, delete_session_options,
-        get_session, CreateUser,
+        get_session,
     },
     session::create_session,
 };
@@ -148,10 +148,11 @@ fn fresh_user() -> TestUser {
 }
 
 async fn post_user(client: &Client, username: &str, password: &str, key: Option<&str>) -> Status {
-    let mut request = client.post("/admin/users").json(&CreateUser {
-        username: username.to_string(),
-        password: password.to_string(),
-    });
+    let body = serde_json::json!({ "username": username, "password": password });
+    let mut request = client
+        .post("/admin/users")
+        .header(ContentType::JSON)
+        .body(body.to_string());
 
     if let Some(key) = key {
         request = request.header(Header::new("X-Admin-Api-Key", key.to_string()));
