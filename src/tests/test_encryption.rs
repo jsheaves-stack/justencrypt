@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, io::Cursor};
 
-use rocket::{async_test, tokio::fs};
+use rocket::{
+    async_test,
+    tokio::{fs, sync::Mutex},
+};
 use tempfile::tempdir;
 
 use crate::{
@@ -16,25 +19,31 @@ use crate::{
 async fn test_encrypt_stream_at_offset() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("test_encrypt_offset.enc");
-    let mut encryptor = ChunkEncryptor::new(file_path.clone()).await.unwrap();
+    let encryptor = ChunkEncryptor::new(file_path.clone()).await.unwrap();
 
-    let mut written_chunks = BTreeMap::new();
+    let written_chunks = Mutex::new(BTreeMap::new());
     let mut data = Cursor::new(vec![b'A'; CHUNK_SIZE]);
 
     // Encrypt at offset 0
     encryptor
-        .encrypt_stream_at_offset(&mut data, 0, u64::MAX, &mut written_chunks)
+        .encrypt_stream_at_offset(&mut data, 0, u64::MAX, &written_chunks)
         .await
         .unwrap();
-    assert_eq!(written_chunks.get(&0), Some(&(CHUNK_SIZE as u32)));
+    assert_eq!(
+        written_chunks.lock().await.get(&0),
+        Some(&(CHUNK_SIZE as u32))
+    );
 
     // Encrypt at offset CHUNK_SIZE
     let mut data2 = Cursor::new(vec![b'B'; CHUNK_SIZE]);
     encryptor
-        .encrypt_stream_at_offset(&mut data2, CHUNK_SIZE as u64, u64::MAX, &mut written_chunks)
+        .encrypt_stream_at_offset(&mut data2, CHUNK_SIZE as u64, u64::MAX, &written_chunks)
         .await
         .unwrap();
-    assert_eq!(written_chunks.get(&1), Some(&(CHUNK_SIZE as u32)));
+    assert_eq!(
+        written_chunks.lock().await.get(&1),
+        Some(&(CHUNK_SIZE as u32))
+    );
 
     drop(encryptor);
 
@@ -47,14 +56,14 @@ async fn test_encrypt_stream_at_offset() {
 async fn test_encrypt_stream_at_invalid_offset() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("test_invalid_offset.enc");
-    let mut encryptor = ChunkEncryptor::new(file_path).await.unwrap();
+    let encryptor = ChunkEncryptor::new(file_path).await.unwrap();
 
-    let mut written_chunks = BTreeMap::new();
+    let written_chunks = Mutex::new(BTreeMap::new());
     let mut data = Cursor::new(vec![b'A'; 100]);
 
     // Offset not a multiple of CHUNK_SIZE
     let result = encryptor
-        .encrypt_stream_at_offset(&mut data, 100, u64::MAX, &mut written_chunks)
+        .encrypt_stream_at_offset(&mut data, 100, u64::MAX, &written_chunks)
         .await;
     assert!(result.is_err());
 }
@@ -78,58 +87,56 @@ fn test_encrypted_len() {
 #[async_test]
 async fn test_encrypt_stream_at_offset_records_the_length_of_each_chunk() {
     let dir = tempdir().unwrap();
-    let mut encryptor = ChunkEncryptor::new(dir.path().join("lengths.enc"))
+    let encryptor = ChunkEncryptor::new(dir.path().join("lengths.enc"))
         .await
         .unwrap();
-    let mut written_chunks = BTreeMap::new();
+    let written_chunks = Mutex::new(BTreeMap::new());
     let mut data = Cursor::new(vec![b'A'; CHUNK_SIZE + 10]);
 
     let read = encryptor
-        .encrypt_stream_at_offset(&mut data, 0, u64::MAX, &mut written_chunks)
+        .encrypt_stream_at_offset(&mut data, 0, u64::MAX, &written_chunks)
         .await
         .unwrap();
 
     assert_eq!(read, CHUNK_SIZE as u64 + 10);
     assert_eq!(
-        written_chunks,
+        *written_chunks.lock().await,
         BTreeMap::from([(0, CHUNK_SIZE as u32), (1, 10)])
     );
 
     // Re-writing a chunk replaces its recorded length.
     let mut shorter = Cursor::new(vec![b'B'; 3]);
     encryptor
-        .encrypt_stream_at_offset(
-            &mut shorter,
-            CHUNK_SIZE as u64,
-            u64::MAX,
-            &mut written_chunks,
-        )
+        .encrypt_stream_at_offset(&mut shorter, CHUNK_SIZE as u64, u64::MAX, &written_chunks)
         .await
         .unwrap();
 
-    assert_eq!(written_chunks.get(&1), Some(&3));
+    assert_eq!(written_chunks.lock().await.get(&1), Some(&3));
 }
 
 #[async_test]
 async fn test_encrypt_stream_at_offset_stops_before_exceeding_the_limit() {
     let dir = tempdir().unwrap();
-    let mut encryptor = ChunkEncryptor::new(dir.path().join("limit.enc"))
+    let encryptor = ChunkEncryptor::new(dir.path().join("limit.enc"))
         .await
         .unwrap();
-    let mut written_chunks = BTreeMap::new();
+    let written_chunks = Mutex::new(BTreeMap::new());
     let mut data = Cursor::new(vec![b'A'; CHUNK_SIZE + 1]);
 
     let result = encryptor
-        .encrypt_stream_at_offset(&mut data, 0, CHUNK_SIZE as u64, &mut written_chunks)
+        .encrypt_stream_at_offset(&mut data, 0, CHUNK_SIZE as u64, &written_chunks)
         .await;
 
     assert!(matches!(result, Err(EncryptionError::TooLarge)));
     // The chunk that fit was written; the one that crossed the limit was not.
-    assert_eq!(written_chunks, BTreeMap::from([(0, CHUNK_SIZE as u32)]));
+    assert_eq!(
+        *written_chunks.lock().await,
+        BTreeMap::from([(0, CHUNK_SIZE as u32)])
+    );
 
     let mut exact = Cursor::new(vec![b'A'; CHUNK_SIZE]);
     let result = encryptor
-        .encrypt_stream_at_offset(&mut exact, 0, CHUNK_SIZE as u64, &mut written_chunks)
+        .encrypt_stream_at_offset(&mut exact, 0, CHUNK_SIZE as u64, &written_chunks)
         .await;
 
     assert_eq!(result.unwrap(), CHUNK_SIZE as u64);
@@ -161,14 +168,14 @@ async fn test_seal_truncates_the_file_to_the_exact_encrypted_length() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("seal.enc");
     let mut encryptor = ChunkEncryptor::new(file_path.clone()).await.unwrap();
-    let mut written_chunks = BTreeMap::new();
+    let written_chunks = Mutex::new(BTreeMap::new());
 
     encryptor
         .encrypt_stream_at_offset(
             &mut Cursor::new(vec![b'A'; 2 * CHUNK_SIZE]),
             0,
             u64::MAX,
-            &mut written_chunks,
+            &written_chunks,
         )
         .await
         .unwrap();
@@ -178,7 +185,7 @@ async fn test_seal_truncates_the_file_to_the_exact_encrypted_length() {
             &mut Cursor::new(vec![b'B'; 10]),
             CHUNK_SIZE as u64,
             u64::MAX,
-            &mut written_chunks,
+            &written_chunks,
         )
         .await
         .unwrap();

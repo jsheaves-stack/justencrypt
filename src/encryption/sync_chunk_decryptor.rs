@@ -7,7 +7,7 @@ use std::{
 
 use orion::aead;
 
-use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE};
+use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE, INDEX_LEN};
 
 pub struct SyncChunkDecryptReader {
     file: File,
@@ -20,6 +20,10 @@ pub struct SyncChunkDecryptReader {
 
 impl SyncChunkDecryptReader {
     pub fn new(file_path: PathBuf, metadata: FileEncryptionMetadata) -> io::Result<Self> {
+        metadata
+            .check_version()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
         let file = File::open(file_path)?;
         let total_size = metadata.total_size;
 
@@ -57,23 +61,23 @@ impl SyncChunkDecryptReader {
             return Ok(());
         }
 
-        let decrypted_payload = aead::open(&self.metadata.key, &encrypted_buffer[..bytes_read])
-            .map_err(|e| {
+        let mut payload =
+            aead::open(&self.metadata.key, &encrypted_buffer[..bytes_read]).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("Decryption error: {:?}", e),
                 )
             })?;
 
-        if decrypted_payload.len() < 8 {
+        if payload.len() < INDEX_LEN {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Chunk too short",
             ));
         }
 
-        let mut index_bytes = [0u8; 8];
-        index_bytes.copy_from_slice(&decrypted_payload[..8]);
+        let mut index_bytes = [0u8; INDEX_LEN];
+        index_bytes.copy_from_slice(&payload[..INDEX_LEN]);
         let stored_index = u64::from_le_bytes(index_bytes);
 
         if stored_index != chunk_index {
@@ -83,7 +87,9 @@ impl SyncChunkDecryptReader {
             ));
         }
 
-        self.current_chunk_buffer = decrypted_payload[8..].to_vec();
+        // Strip the index in place rather than copying the plaintext out.
+        payload.drain(..INDEX_LEN);
+        self.current_chunk_buffer = payload;
         self.current_chunk_index = chunk_index;
 
         Ok(())

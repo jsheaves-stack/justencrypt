@@ -1,9 +1,9 @@
 use std::{
     path::{Component, Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
-use orion::kex::SecretKey;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::DbConfig,
     db::migrations,
-    encryption::FileEncryptionMetadata,
+    encryption::{FileEncryptionMetadata, SecretKey, KEY_LENGTH},
     enums::db_error::DbError,
     util::names::{is_valid_entry_name, is_valid_entry_path, INVALID_ENTRY_NAME_MESSAGE},
 };
@@ -118,6 +118,10 @@ pub fn create_user_db_connection(
         trace!("Setting PRAGMA foreign_keys = ON.");
 
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
+        // Deleted rows hold file keys, so overwrite them instead of leaving them
+        // in free pages, where an old copy of the password could still reach them.
+        conn.execute_batch("PRAGMA secure_delete = ON;")?;
 
         trace!("Applying performance PRAGMAs: synchronous={}, cache_size=-{}, temp_store={}, journal_size_limit={}", synchronous_mode, cache_size_kb, temp_store_mode, journal_size_limit_bytes);
 
@@ -430,10 +434,27 @@ pub fn get_file_decryption_data(
             let encoded_name: String = row.get(0)?;
             let key_blob: Vec<u8> = row.get(1)?;
             let total_size_i64: i64 = row.get(3)?;
+            // Every file key is KEY_LENGTH bytes; anything else is corrupt.
+            let key = (key_blob.len() == KEY_LENGTH)
+                .then(|| SecretKey::from_slice(&key_blob).ok())
+                .flatten()
+                .ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Blob,
+                        format!(
+                            "file key has {} bytes, expected {}",
+                            key_blob.len(),
+                            KEY_LENGTH
+                        )
+                        .into(),
+                    )
+                })?;
+
             Ok((
                 encoded_name,
                 FileEncryptionMetadata {
-                    key: SecretKey::from_slice(&key_blob).unwrap(),
+                    key: Arc::new(key),
                     encryption_version: row.get(2)?,
                     total_size: total_size_i64 as u64,
                 },

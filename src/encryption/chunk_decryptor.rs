@@ -8,7 +8,7 @@ use rocket::tokio::{
 };
 
 use crate::{
-    encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE},
+    encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE, INDEX_LEN},
     enums::encryption_error::EncryptionError,
 };
 
@@ -22,12 +22,16 @@ impl ChunkDecryptor {
         file_path: PathBuf,
         metadata: FileEncryptionMetadata,
     ) -> Result<Self, EncryptionError> {
+        metadata.check_version()?;
+
         Ok(ChunkDecryptor {
             file_path,
             metadata,
         })
     }
 
+    /// Reads and decrypts the next chunk, which must be chunk `chunk_index`,
+    /// and returns its plaintext; empty at the end of the file.
     async fn decrypt_chunk(
         &self,
         file: &mut File,
@@ -49,20 +53,20 @@ impl ChunkDecryptor {
             return Ok(Vec::new());
         }
 
-        let decrypted_payload = aead::open(&self.metadata.key, &encrypted_buffer[..bytes_read])
-            .map_err(|e| {
+        let mut payload =
+            aead::open(&self.metadata.key, &encrypted_buffer[..bytes_read]).map_err(|e| {
                 error!("Decryption mismatch at chunk {}: {:?}", chunk_index, e);
 
                 EncryptionError::Crypto(e)
             })?;
 
-        if decrypted_payload.len() < 8 {
+        if payload.len() < INDEX_LEN {
             return Err(EncryptionError::MalformedChunk(chunk_index));
         }
 
-        let mut index_bytes = [0u8; 8];
+        let mut index_bytes = [0u8; INDEX_LEN];
 
-        index_bytes.copy_from_slice(&decrypted_payload[..8]);
+        index_bytes.copy_from_slice(&payload[..INDEX_LEN]);
 
         let stored_index = u64::from_le_bytes(index_bytes);
 
@@ -73,9 +77,15 @@ impl ChunkDecryptor {
             });
         }
 
-        Ok(decrypted_payload[8..].to_vec())
+        // Strip the index in place rather than copying the plaintext out.
+        payload.drain(..INDEX_LEN);
+
+        Ok(payload)
     }
 
+    /// Sends the plaintext bytes `start..=end` to `tx`, one chunk's worth at a
+    /// time. Fails with `Truncated` if the file ends before `end`; a receiver
+    /// that goes away just ends the stream.
     pub async fn decrypt_range(
         &mut self,
         start: u64,
@@ -102,45 +112,49 @@ impl ChunkDecryptor {
         }
 
         let mut encrypted_buffer = vec![0u8; ENCRYPTED_CHUNK_SIZE];
+        let mut sent = 0;
 
         for chunk_index in first_chunk_index..=last_chunk_index {
-            let decrypted_chunk = match self
+            let mut chunk = self
                 .decrypt_chunk(&mut file, chunk_index, &mut encrypted_buffer)
                 .await
-            {
-                Ok(data) if data.is_empty() => break,
-                Ok(data) => data,
-                Err(e) => {
-                    error!("{}", e);
+                .inspect_err(|e| error!("{}", e))?;
 
-                    return Err(e);
-                },
-            };
+            if chunk.is_empty() {
+                break;
+            }
 
-            let chunk_start_plaintext = chunk_index * CHUNK_SIZE as u64;
-            let chunk_end_plaintext = chunk_start_plaintext + decrypted_chunk.len() as u64 - 1;
+            // Keep only the part of this chunk inside `start..=end`.
+            let chunk_start = chunk_index * CHUNK_SIZE as u64;
+            let keep_until = (end + 1 - chunk_start).min(chunk.len() as u64) as usize;
+            let keep_from = start.saturating_sub(chunk_start) as usize;
 
-            let slice_start = if start > chunk_start_plaintext {
-                (start - chunk_start_plaintext) as usize
-            } else {
-                0
-            };
+            if keep_from >= keep_until {
+                break;
+            }
 
-            let slice_end = if end < chunk_end_plaintext {
-                (end - chunk_start_plaintext) as usize
-            } else {
-                decrypted_chunk.len() - 1
-            };
+            chunk.truncate(keep_until);
+            chunk.drain(..keep_from);
+            sent += chunk.len() as u64;
 
-            if slice_start <= slice_end && slice_start < decrypted_chunk.len() {
-                let final_slice =
-                    &decrypted_chunk[slice_start..=slice_end.min(decrypted_chunk.len() - 1)];
-
-                if tx.send(final_slice.to_vec()).await.is_err() {
-                    break;
-                }
+            if tx.send(chunk).await.is_err() {
+                return Ok(());
             }
         }
+
+        let expected = end - start + 1;
+
+        if sent < expected {
+            let error = EncryptionError::Truncated {
+                expected,
+                got: sent,
+            };
+
+            error!("{} ({:?})", error, self.file_path);
+
+            return Err(error);
+        }
+
         Ok(())
     }
 

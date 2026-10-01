@@ -11,7 +11,10 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::tokio::{sync::Mutex, task};
+use rocket::tokio::{
+    sync::{Mutex, RwLock},
+    task,
+};
 use secrecy::SecretString;
 use uuid::Uuid;
 
@@ -30,7 +33,10 @@ pub struct UploadState {
     pub encoded_file_name: String,
     /// Plaintext length of every chunk written so far, by chunk index.
     pub written_chunks: Arc<Mutex<BTreeMap<u64, u32>>>,
-    pub encryptor: Arc<Mutex<ChunkEncryptor>>,
+    /// Chunk uploads share it (read lock) and run at the same time; finalize
+    /// takes it exclusively (write lock), which waits for writes in progress
+    /// and keeps new ones out until the file is sealed.
+    pub encryptor: Arc<RwLock<ChunkEncryptor>>,
     /// Unix seconds of the last activity. Atomic so it can be read and
     /// refreshed without taking a lock.
     pub last_updated: Arc<AtomicU64>,
@@ -42,7 +48,7 @@ impl UploadState {
             file_path,
             encoded_file_name,
             written_chunks: Arc::new(Mutex::new(BTreeMap::new())),
-            encryptor: Arc::new(Mutex::new(encryptor)),
+            encryptor: Arc::new(RwLock::new(encryptor)),
             last_updated: Arc::new(AtomicU64::new(unix_now_secs())),
         }
     }

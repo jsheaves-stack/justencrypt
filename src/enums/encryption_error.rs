@@ -19,4 +19,8 @@ pub enum EncryptionError {
     InvalidOffset(String),
     #[error("Data exceeds the maximum allowed size")]
     TooLarge,
+    #[error("Encrypted file is truncated: expected {expected} plaintext bytes, got {got}")]
+    Truncated { expected: u64, got: u64 },
+    #[error("Unsupported encryption format version {0}")]
+    UnsupportedVersion(i32),
 }

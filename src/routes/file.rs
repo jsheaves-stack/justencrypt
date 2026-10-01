@@ -152,12 +152,11 @@ pub async fn upload_chunk(
 
     upload_state.touch();
 
-    let mut encryptor = upload_state.encryptor.lock().await;
-    let mut written_chunks = upload_state.written_chunks.lock().await;
-
+    let encryptor = upload_state.encryptor.read().await;
     let mut stream = open_with_limit(data, max_bytes);
+
     encryptor
-        .encrypt_stream_at_offset(&mut stream, offset, max_bytes, &mut written_chunks)
+        .encrypt_stream_at_offset(&mut stream, offset, max_bytes, &upload_state.written_chunks)
         .await?;
 
     Ok(RequestSuccess::NoContent)
@@ -182,9 +181,10 @@ pub async fn finalize_upload(
         .remove(upload_id)
         .ok_or(RequestError::NotFound)?;
 
-    // Same lock order as `upload_chunk`: encryptor, then chunks. Both are held
-    // until the file is sealed so no chunk write can slip in after the check.
-    let mut encryptor = upload_state.encryptor.lock().await;
+    // Exclusive access waits for chunk writes still in progress. It is held,
+    // with the chunk record, until the file is sealed, so no chunk write can
+    // slip in after the check.
+    let mut encryptor = upload_state.encryptor.write().await;
     let written_chunks = upload_state.written_chunks.lock().await;
 
     if let Err(e) = check_uploaded_chunks(&written_chunks, total_size) {
