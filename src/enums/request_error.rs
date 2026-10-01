@@ -40,9 +40,6 @@ pub enum RequestError {
     #[error("Failed to add file")]
     FailedToAddFile,
 
-    #[error("Failed to create folder")]
-    FailedToCreateFolder,
-
     #[error("Failed to read folder contents")]
     FailedToReadFolderContents,
 

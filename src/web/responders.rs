@@ -63,7 +63,6 @@ impl<'r> Responder<'r, 'static> for RequestError {
             | RequestError::FailedToWriteData
             | RequestError::FailedToRemoveFile
             | RequestError::FailedToAddFile
-            | RequestError::FailedToCreateFolder
             | RequestError::FailedToReadFolderContents
             | RequestError::FailedToMoveFile
             | RequestError::FailedToRenameFile

@@ -7,6 +7,7 @@ mod test_db_files;
 mod test_db_folder_delete;
 mod test_db_folder_move;
 mod test_encryption;
+mod test_entry_names;
 mod test_file;
 mod test_file_delete_patch;
 mod test_folder;

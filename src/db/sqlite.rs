@@ -11,8 +11,11 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::DbConfig, db::migrations, encryption::FileEncryptionMetadata, enums::db_error::DbError,
-    util::names::is_valid_entry_name,
+    config::DbConfig,
+    db::migrations,
+    encryption::FileEncryptionMetadata,
+    enums::db_error::DbError,
+    util::names::{is_valid_entry_name, is_valid_entry_path, INVALID_ENTRY_NAME_MESSAGE},
 };
 
 pub fn verify_user_db_password(
@@ -381,6 +384,9 @@ pub fn add_file(
         full_file_path,
         encoded_file_name
     );
+
+    check_path_names(Some(full_file_path))?;
+
     let path = Path::new(full_file_path.trim_matches('/'));
     let parent_path = path.parent().unwrap_or(Path::new(""));
     let file_name = path
@@ -788,6 +794,8 @@ pub fn add_folder(
 ) -> Result<(), DbError> {
     trace!("Entering sqlite::add_folder with path_str: '{}'", path_str);
 
+    check_path_names(Some(path_str))?;
+
     get_folder_id_and_create_if_missing(db, path_str)?;
     trace!("Exiting sqlite::add_folder successfully.");
 
@@ -814,26 +822,20 @@ fn update_error(e: rusqlite::Error, what: &str) -> DbError {
 fn check_new_name(new_name: Option<&str>) -> Result<(), DbError> {
     match new_name {
         Some(name) if !is_valid_entry_name(name) => Err(DbError::InvalidInput(
-            "Names must be 1-255 bytes, not '.' or '..', and must not contain '/', '\\' or control characters".to_string(),
+            INVALID_ENTRY_NAME_MESSAGE.to_string(),
         )),
         _ => Ok(()),
     }
 }
 
-// Every folder name a destination path would create must be a valid name.
-// `.`, `..` and empty segments are skipped by path resolution, as elsewhere.
-fn check_destination(destination: Option<&str>) -> Result<(), DbError> {
-    let Some(destination) = destination else {
-        return Ok(());
-    };
-
-    for component in Path::new(destination.trim_matches('/')).components() {
-        if let Component::Normal(name) = component {
-            check_new_name(Some(&name.to_string_lossy()))?;
-        }
+// Every file and folder name a path would create must be a valid name.
+fn check_path_names(path: Option<&str>) -> Result<(), DbError> {
+    match path {
+        Some(path) if !is_valid_entry_path(path) => Err(DbError::InvalidInput(
+            INVALID_ENTRY_NAME_MESSAGE.to_string(),
+        )),
+        _ => Ok(()),
     }
-
-    Ok(())
 }
 
 /// Renames and/or moves the folder at `folder_path_str`, in one transaction:
@@ -855,7 +857,7 @@ pub fn update_folder(
     );
 
     check_new_name(new_name)?;
-    check_destination(destination_folder_str)?;
+    check_path_names(destination_folder_str)?;
 
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -943,7 +945,7 @@ pub fn update_file(
     );
 
     check_new_name(new_name)?;
-    check_destination(destination_folder_str)?;
+    check_path_names(destination_folder_str)?;
 
     let path = Path::new(file_path_str.trim_matches('/'));
     let file_name = path

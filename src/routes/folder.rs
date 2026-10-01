@@ -40,11 +40,7 @@ pub async fn create_folder(
     let folder_path_buf = folder_path.to_path_buf();
     {
         let session = auth.session.clone();
-        session.add_folder(folder_path_buf).await.map_err(|e| {
-            error!("Failed to add folder: {}", e);
-
-            RequestError::FailedToCreateFolder
-        })?;
+        session.add_folder(folder_path_buf).await?;
     }
 
     Ok(RequestSuccess::Created)

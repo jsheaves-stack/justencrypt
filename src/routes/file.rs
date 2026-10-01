@@ -19,6 +19,7 @@ use crate::{
     session::user_session::UploadState,
     util::{
         chunked_upload::check_uploaded_chunks,
+        names::{is_valid_entry_path, INVALID_ENTRY_NAME_MESSAGE},
         range::parse_range,
         sharded_path::{
             get_sharded_path, remove_blob_and_thumbnail, remove_sharded_path, sync_parent_dir,
@@ -50,6 +51,14 @@ pub async fn init_upload(
     state: &State<AppState>,
 ) -> Result<Json<InitUploadResponse>, RequestError> {
     trace!("Entering route [POST /file/upload/initiate/{}]", file_path);
+
+    // Checked again when the file is added, but a bad name should be reported
+    // before the client uploads any chunks.
+    if !is_valid_entry_path(&file_path.to_path_buf().to_string_lossy()) {
+        return Err(RequestError::BadRequest(
+            INVALID_ENTRY_NAME_MESSAGE.to_string(),
+        ));
+    }
 
     let session = auth.session.clone();
 

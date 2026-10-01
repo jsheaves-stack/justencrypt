@@ -261,7 +261,7 @@ paths:
         '201':
           description: File uploaded and encrypted successfully (also when it replaced an existing file).
         '400':
-          description: The path has no file name (`Missing file name`).
+          description: 'The path has no file name (`Missing file name`), or a file or folder name in it is invalid: names must be 1-255 bytes, not `.` or `..`, and contain no `/`, `\`, or control characters. Nothing is stored.'
         '401':
           description: Unauthorized.
         '413':
@@ -396,7 +396,7 @@ paths:
   /file/upload/initiate/{file_path}:
     post:
       summary: Initialize a chunked upload
-      description: Starts a new chunked upload session for a file. Returns an upload_id to be used in subsequent chunk uploads and finalization. The path isn't checked until finalization. An upload idle for `JUSTENCRYPT_UPLOAD_TTL_SECONDS` (default 86400) is removed.
+      description: Starts a new chunked upload session for a file. Returns an upload_id to be used in subsequent chunk uploads and finalization. File and folder names in the path are checked here and again at finalization. An upload idle for `JUSTENCRYPT_UPLOAD_TTL_SECONDS` (default 86400) is removed.
       parameters:
         - in: path
           name: file_path
@@ -411,6 +411,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InitUploadResponse'
+        '400':
+          description: 'A file or folder name in the path is invalid: names must be 1-255 bytes, not `.` or `..`, and contain no `/`, `\`, or control characters.'
         '401':
           description: Unauthorized.
         '429':
@@ -602,10 +604,12 @@ paths:
       responses:
         '201':
           description: The folder exists (created now or already there).
+        '400':
+          description: 'A folder name in the path is invalid: names must be 1-255 bytes, not `.` or `..`, and contain no `/`, `\`, or control characters. Nothing is created.'
         '401':
           description: Unauthorized.
         '500':
-          description: The folder couldn't be created. Every failure, including an invalid path, is reported as `500 Failed to create folder`.
+          description: Internal server error.
     get:
       summary: List folder contents
       description: Returns a list of files and folders contained within the specified folder path.
