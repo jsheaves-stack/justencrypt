@@ -430,19 +430,6 @@ impl UserSession {
         Ok(result)
     }
 
-    pub async fn get_file_encryption_metadata(
-        &self,
-        file_path: PathBuf,
-    ) -> Result<FileEncryptionMetadata, DbError> {
-        let result = self
-            .with_db(move |db| {
-                sqlite::get_file(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
-            })
-            .await?;
-
-        Ok(result)
-    }
-
     pub async fn get_file_decryption_data(
         &self,
         file_path: PathBuf,

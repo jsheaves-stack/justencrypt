@@ -28,10 +28,6 @@ impl ChunkDecryptor {
         })
     }
 
-    pub fn get_file_path(&self) -> PathBuf {
-        self.file_path.clone()
-    }
-
     async fn decrypt_chunk(
         &self,
         file: &mut File,

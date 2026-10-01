@@ -245,10 +245,6 @@ pub fn get_folder_id(db: &Connection, folder_path_str: &str) -> Result<Option<i3
     Ok(Some(current_id))
 }
 
-pub fn get_folder_id_strict(db: &Connection, folder_path_str: &str) -> Result<i32, DbError> {
-    get_folder_id(db, folder_path_str)?.ok_or(DbError::NotFound)
-}
-
 pub fn get_encoded_file_name(
     db: &PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
@@ -408,53 +404,6 @@ pub fn delete_file(
     trace!("Transaction committed. Exiting sqlite::delete_file successfully.");
 
     Ok(deleted_encoded_name)
-}
-
-pub fn get_file(
-    db: &PooledConnection<SqliteConnectionManager>,
-    file_path_str: &str,
-) -> Result<FileEncryptionMetadata, DbError> {
-    let path = Path::new(file_path_str.trim_matches('/'));
-    let parent_path = path.parent().unwrap_or(Path::new(""));
-    let parent_str = parent_path.to_str().ok_or(DbError::InvalidPath)?;
-
-    let parent_folder_id = get_folder_id(db, parent_str)?.ok_or(DbError::MissingFileName)?;
-    trace!("Parent folder ID found: {}", parent_folder_id);
-
-    let file_name = path
-        .file_name()
-        .ok_or(DbError::MissingFileName)?
-        .to_string_lossy();
-
-    let result = match db
-        .query_row(
-            "SELECT key, encryption_version, total_size
-        FROM files
-        WHERE parent_folder_id = ?1 AND name = ?2",
-            params![parent_folder_id, file_name],
-            |row| {
-                let key_blob: Vec<u8> = row.get(0)?;
-                let total_size_i64: i64 = row.get(2)?;
-                Ok(FileEncryptionMetadata {
-                    key: SecretKey::from_slice(&key_blob).unwrap(),
-                    encryption_version: row.get(1)?,
-                    total_size: total_size_i64 as u64,
-                })
-            },
-        )
-        .optional()
-    {
-        Ok(f) => f,
-        Err(e) => {
-            error!("Database error in get_file: {}", e);
-
-            return Err(DbError::FailedToGetFileFromDb(e.to_string()));
-        },
-    };
-
-    let result = result.ok_or(DbError::NotFound)?;
-
-    Ok(result)
 }
 
 pub fn get_file_decryption_data(

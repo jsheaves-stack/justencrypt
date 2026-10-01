@@ -14,7 +14,6 @@ pub const ENCRYPTED_CHUNK_SIZE: usize = CHUNK_SIZE + INDEX_LEN + NONCE_LEN + TAG
 pub const ENCRYPTION_VERSION: i32 = 1;
 
 pub const KEY_LENGTH: usize = 32;
-pub const STREAM_LIMIT: usize = 50 * (1000 * (1000 * 1000));
 pub const MPSC_CHANNEL_CAPACITY: usize = 2;
 
 /// Size on disk of an encrypted file holding `plaintext_len` bytes: every

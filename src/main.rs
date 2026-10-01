@@ -39,7 +39,6 @@ pub mod web;
 
 #[macro_use]
 extern crate rocket;
-extern crate serde;
 
 pub struct AppState {
     pub config: Arc<AppConfig>,

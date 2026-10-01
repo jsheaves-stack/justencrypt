@@ -39,11 +39,6 @@ pub struct InitUploadResponse {
     pub upload_id: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct FinalizeErrorResponse {
-    pub missing_chunks: Vec<u64>,
-}
-
 #[post("/upload/initiate/<file_path..>")]
 pub async fn init_upload(
     file_path: UnrestrictedPath,

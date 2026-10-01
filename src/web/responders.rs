@@ -55,18 +55,12 @@ impl<'r> Responder<'r, 'static> for RequestError {
         let status = match self {
             RequestError::MissingSessionId
             | RequestError::MissingActiveSession
-            | RequestError::FailedToCreateUserSession
             | RequestError::InvalidApiKey
             | RequestError::Unauthorized => Status::Unauthorized,
 
-            RequestError::FailedToProcessData
-            | RequestError::FailedToWriteData
-            | RequestError::FailedToRemoveFile
-            | RequestError::FailedToAddFile
-            | RequestError::FailedToReadFolderContents
-            | RequestError::FailedToMoveFile
-            | RequestError::FailedToRenameFile
-            | RequestError::InternalServerError => Status::InternalServerError,
+            RequestError::FailedToProcessData | RequestError::InternalServerError => {
+                Status::InternalServerError
+            },
 
             RequestError::UnsupportedFileType => Status::UnsupportedMediaType,
             RequestError::ImageTooLarge => Status::UnprocessableEntity,
