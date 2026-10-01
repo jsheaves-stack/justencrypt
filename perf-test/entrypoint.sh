@@ -9,13 +9,14 @@ FILES_COUNT=${FILES_COUNT:-10}
 MIN_SIZE=${MIN_SIZE:-1}
 MAX_SIZE=${MAX_SIZE:-100}
 
-# Dynamically create user data folders
 echo "Setting up workspace for $VUS Virtual Users..."
 mkdir -p user_data /results
-for i in $(seq 1 $VUS); do
-  mkdir -p "user_data/user_$i"
-done
-sync
+
+# Release builds require a secret key, and accounts are created through the
+# admin API, which needs an admin key. Generate throwaway ones unless the
+# caller provided them.
+export JUSTENCRYPT_ROCKET_SECRET_KEY="${JUSTENCRYPT_ROCKET_SECRET_KEY:-$(head -c 32 /dev/urandom | base64)}"
+export JUSTENCRYPT_ADMIN_API_KEY="${JUSTENCRYPT_ADMIN_API_KEY:-$(head -c 32 /dev/urandom | base64)}"
 
 # Generate random data based on user-requested max size
 echo "Generating ${MAX_SIZE}MB test data source..."
@@ -33,15 +34,17 @@ until curl -s -f http://localhost:8000/ > /dev/null; do
 done
 
 # Warm-up Phase
-echo "Pre-initializing databases for $VUS users (Warm-up)..."
+echo "Creating accounts for $VUS users (Warm-up)..."
 for i in $(seq 1 $VUS); do
   SUCCESS=false
   for attempt in {1..3}; do
-    RESPONSE=$(curl -s -w "%{http_code}" -o /dev/null -X POST http://localhost:8000/session \
+    RESPONSE=$(curl -s -w "%{http_code}" -o /dev/null -X POST http://localhost:8000/admin/users \
       -H "Content-Type: application/json" \
+      -H "X-Admin-Api-Key: $JUSTENCRYPT_ADMIN_API_KEY" \
       -d "{\"username\": \"user_$i\", \"password\": \"TestPassword123!@#Stronger\"}")
 
-    if [ "$RESPONSE" == "201" ]; then
+    # 409 means an earlier attempt already created the account.
+    if [ "$RESPONSE" == "201" ] || [ "$RESPONSE" == "409" ]; then
       if [ -f "user_data/user_$i/user_$i.db" ]; then
         SUCCESS=true
         break

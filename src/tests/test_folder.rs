@@ -1,3 +1,5 @@
+use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
+
 use super::*;
 use crate::{
     db::sqlite::FolderContent,
@@ -7,9 +9,8 @@ use crate::{
     },
     AppState,
 };
-use rocket::{http::Status, local::asynchronous::Client, routes};
 
-#[rocket::async_test]
+#[async_test]
 async fn test_create_folder() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -34,9 +35,7 @@ async fn test_create_folder() {
     assert_eq!(response.status(), Status::Created);
 
     let state = client.rocket().state::<AppState>().unwrap();
-    let session_guard = state.sessions_by_id.read().await;
-    let session_lock = session_guard.get(&session_id).unwrap().clone();
-    let session = session_lock.clone();
+    let session = state.sessions.get_by_id(&session_id).await.unwrap();
 
     let folder_id = session
         .get_folder_id(folder_path.into())
@@ -47,7 +46,7 @@ async fn test_create_folder() {
     assert_eq!(2, folder_id);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_folder() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -80,7 +79,7 @@ async fn test_get_folder() {
     assert_eq!(response.status(), Status::Ok);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_create_folder_no_auth() {
     let (rocket, _test_user) = setup_rocket().await;
     let rocket = rocket.mount(
@@ -101,7 +100,7 @@ async fn test_create_folder_no_auth() {
     assert_eq!(response.status(), Status::Unauthorized);
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_folder_file_metadata() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
@@ -151,6 +150,7 @@ async fn test_get_folder_file_metadata() {
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];
+
     if let FolderContent::File(file) = entry {
         assert_eq!(file.file_name, file_name);
         assert_eq!(file.file_size, Some(file_content.len() as u64));
@@ -161,7 +161,7 @@ async fn test_get_folder_file_metadata() {
     }
 }
 
-#[rocket::async_test]
+#[async_test]
 async fn test_get_folder_with_subfolder_size() {
     let (rocket, test_user) = setup_rocket().await;
     let rocket = rocket
@@ -223,6 +223,7 @@ async fn test_get_folder_with_subfolder_size() {
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];
+
     if let FolderContent::Folder(folder) = entry {
         assert_eq!(folder.file_name, sub_folder);
         assert_eq!(folder.file_size, Some(file_content.len() as u64));

@@ -1,3 +1,15 @@
+use rocket::{
+    data::{Data, Limits},
+    delete, get,
+    http::Status,
+    options, patch, post, put,
+    serde::json::Json,
+    tokio::{self, fs, sync::mpsc},
+    State,
+};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
 use crate::{
     encryption::{
         chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor, CHUNK_SIZE,
@@ -6,117 +18,100 @@ use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
     session::user_session::UploadState,
     util::{
+        chunked_upload::check_uploaded_chunks,
+        names::{is_valid_entry_path, INVALID_ENTRY_NAME_MESSAGE},
         range::parse_range,
-        sharded_path::{get_sharded_path, remove_sharded_path},
+        sharded_path::{
+            get_sharded_path, remove_blob_and_thumbnail, remove_sharded_path, sync_parent_dir,
+        },
         unrestricted_path::UnrestrictedPath,
+        upload_limits::{max_chunk_request_size, max_file_size, open_with_limit},
     },
     web::{
         forwarding_guards::{AuthenticatedSession, RangeHeader},
         responders::RangeResponder,
     },
+    AppState,
 };
-use rocket::{
-    data::{Data, ToByteUnit},
-    delete, get,
-    http::Status,
-    options, patch, post, put,
-    serde::json::Json,
-    tokio::{
-        self, fs,
-        sync::{mpsc, Mutex},
-    },
-};
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashSet,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
-use uuid::Uuid;
 
 #[derive(Serialize, Deserialize)]
 pub struct InitUploadResponse {
     pub upload_id: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct FinalizeErrorResponse {
-    pub missing_chunks: Vec<u64>,
-}
 #[post("/upload/initiate/<file_path..>")]
 pub async fn init_upload(
     file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
+    state: &State<AppState>,
 ) -> Result<Json<InitUploadResponse>, RequestError> {
-    trace!("Entering route [POST /file/upload/initiate/{}]", file_path);
+    // Checked again when the file is added, but a bad name should be reported
+    // before the client uploads any chunks.
+
+    if !is_valid_entry_path(&file_path.to_path_buf().to_string_lossy()) {
+        return Err(RequestError::BadRequest(
+            INVALID_ENTRY_NAME_MESSAGE.to_string(),
+        ));
+    }
 
     let session = auth.session.clone();
-    let user_path = session.get_user_path();
 
-    let now = SystemTime::now();
-    let stale_threshold = Duration::from_secs(24 * 60 * 60); // 24 hours
-    let mut stale_ids = Vec::new();
+    session.sweep_stale_uploads(state.config.upload_ttl()).await;
 
-    let mut active_uploads = session.active_uploads.lock().await;
+    let max_uploads = state.config.max_active_uploads.map(|limit| limit.get());
 
-    let max_uploads = std::env::var("JUSTENCRYPT_MAX_ACTIVE_UPLOADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok());
+    // Reject early so a client at the limit doesn't cost any I/O. The limit is
+    // checked again under the same lock as the insert below, because the file
+    // and DB work in between happens without holding it.
 
     if let Some(limit) = max_uploads {
-        if active_uploads.len() >= limit {
+        if session.active_uploads.lock().await.len() >= limit {
             return Err(RequestError::TooManyActiveUploads);
-        }
-    }
-
-    for (id, state) in active_uploads.iter() {
-        if let Ok(last_updated) = state
-            .last_updated
-            .lock()
-            .await
-            .duration_since(SystemTime::UNIX_EPOCH)
-        {
-            if let Ok(current_time) = now.duration_since(SystemTime::UNIX_EPOCH) {
-                if current_time.saturating_sub(last_updated) > stale_threshold {
-                    stale_ids.push(id.clone());
-                }
-            }
-        }
-    }
-
-    for id in stale_ids {
-        if let Some(state) = session.active_uploads.lock().await.remove(&id) {
-            let encoded_file_path =
-                get_sharded_path(user_path.clone(), &state.encoded_file_name).await;
-
-            fs::remove_file(encoded_file_path.clone())
-                .await
-                .unwrap_or_else(|e| {
-                    error!(
-                        "Failed to remove stale upload file {}: {}",
-                        encoded_file_path.display(),
-                        e
-                    )
-                });
         }
     }
 
     let upload_id = Uuid::new_v4().to_string();
     let encoded_file_name = Uuid::new_v4().to_string();
-    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
+    let encoded_file_path = get_sharded_path(session.get_user_path(), &encoded_file_name).await;
+    let encoded_file_path_part = encoded_file_path.with_extension("part");
 
-    let encryptor = ChunkEncryptor::new(encoded_file_path).await.map_err(|e| {
-        error!("Failed to create ChunkEncryptor: {}", e);
-        RequestError::FailedToProcessData
-    })?;
+    if let Err(e) = session
+        .add_active_upload_db(
+            upload_id.clone(),
+            encoded_file_name.clone(),
+            file_path.to_path_buf().to_string_lossy().to_string(),
+        )
+        .await
+    {
+        error!("Failed to add active upload to db: {}", e);
+    }
 
-    let upload_state = UploadState {
-        file_path: file_path.to_path_buf(),
-        encoded_file_name,
-        written_chunks: Arc::new(Mutex::new(HashSet::new())),
-        encryptor: Arc::new(Mutex::new(encryptor)),
-        last_updated: Arc::new(Mutex::new(SystemTime::now())),
+    let encryptor = match ChunkEncryptor::new(encoded_file_path_part).await {
+        Ok(encryptor) => encryptor,
+        Err(e) => {
+            error!("Failed to create ChunkEncryptor: {}", e);
+
+            session.abort_upload(&upload_id, &encoded_file_name).await;
+
+            return Err(RequestError::FailedToProcessData);
+        },
     };
+
+    let upload_state = UploadState::new(
+        file_path.to_path_buf(),
+        encoded_file_name.clone(),
+        encryptor,
+    );
+
+    let mut active_uploads = session.active_uploads.lock().await;
+
+    if max_uploads.is_some_and(|limit| active_uploads.len() >= limit) {
+        drop(active_uploads);
+
+        session.abort_upload(&upload_id, &encoded_file_name).await;
+
+        return Err(RequestError::TooManyActiveUploads);
+    }
 
     active_uploads.insert(upload_id.clone(), upload_state);
 
@@ -125,119 +120,151 @@ pub async fn init_upload(
 
 #[put("/upload/chunk/<upload_id>?<offset>", data = "<data>")]
 pub async fn upload_chunk(
-    upload_id: String,
+    upload_id: &str,
     offset: u64,
     auth: AuthenticatedSession,
+    limits: &Limits,
     data: Data<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!(
-        "Entering route [PUT /file/upload/chunk/{}] at offset {}",
-        upload_id,
-        offset
-    );
+    if !offset.is_multiple_of(CHUNK_SIZE as u64) {
+        return Err(RequestError::BadRequest(format!(
+            "Offset must be a multiple of {}",
+            CHUNK_SIZE
+        )));
+    }
+
+    let max_file_size = max_file_size(limits);
+
+    if offset > max_file_size {
+        return Err(RequestError::PayloadTooLarge);
+    }
+
+    let max_bytes = max_chunk_request_size(limits).min(max_file_size - offset);
 
     let upload_state = auth
         .session
         .active_uploads
         .lock()
         .await
-        .get(&upload_id)
+        .get(&upload_id.to_string())
         .cloned()
         .ok_or(RequestError::NotFound)?;
 
-    {
-        let mut last_updated = upload_state.last_updated.lock().await;
-        *last_updated = SystemTime::now();
-    }
+    upload_state.touch();
 
-    let mut encryptor = upload_state.encryptor.lock().await;
-    let mut written_chunks = upload_state.written_chunks.lock().await;
+    let encryptor = upload_state.encryptor.read().await;
+    let mut stream = open_with_limit(data, max_bytes);
 
-    let mut stream = data.open(5.gibibytes());
     encryptor
-        .encrypt_stream_at_offset(&mut stream, offset, &mut written_chunks)
-        .await
-        .map_err(|e| {
-            error!("Encryption error: {}", e);
-            RequestError::FailedToProcessData
-        })?;
+        .encrypt_stream_at_offset(&mut stream, offset, max_bytes, &upload_state.written_chunks)
+        .await?;
 
     Ok(RequestSuccess::NoContent)
 }
 
 #[post("/upload/finalize/<upload_id>?<total_size>")]
 pub async fn finalize_upload(
-    upload_id: String,
+    upload_id: &str,
     total_size: u64,
     auth: AuthenticatedSession,
+    limits: &Limits,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!(
-        "Entering route [POST /file/upload/finalize/{}] with total_size {}",
-        upload_id,
-        total_size
-    );
+    if total_size > max_file_size(limits) {
+        return Err(RequestError::PayloadTooLarge);
+    }
 
     let session = auth.session.clone();
     let upload_state = session
         .active_uploads
         .lock()
         .await
-        .remove(&upload_id)
+        .remove(upload_id)
         .ok_or(RequestError::NotFound)?;
 
+    // Exclusive access waits for chunk writes still in progress. It is held,
+    // with the chunk record, until the file is sealed, so no chunk write can
+    // slip in after the check.
+    let mut encryptor = upload_state.encryptor.write().await;
     let written_chunks = upload_state.written_chunks.lock().await;
-    let expected_chunks = total_size.div_ceil(CHUNK_SIZE as u64);
 
-    let mut missing_chunks = Vec::new();
-    for i in 0..expected_chunks {
-        if !written_chunks.contains(&i) {
-            missing_chunks.push(i);
-        }
-    }
-
-    if !missing_chunks.is_empty() {
+    if let Err(e) = check_uploaded_chunks(&written_chunks, total_size) {
         drop(written_chunks);
+        drop(encryptor);
 
         // Re-insert the upload state so the client can retry
         session
             .active_uploads
             .lock()
             .await
-            .insert(upload_id, upload_state);
+            .insert(upload_id.to_string(), upload_state);
 
-        return Err(RequestError::BadRequest(format!(
-            "Missing chunks: {:?}",
-            missing_chunks
-        )));
+        return Err(e);
     }
+
+    let sealed = encryptor.seal(total_size).await;
 
     drop(written_chunks);
 
-    let mut encryptor = upload_state.encryptor.lock().await;
+    if let Err(e) = sealed {
+        error!("Failed to seal uploaded file: {}", e);
 
-    encryptor.finalize_metadata(total_size);
+        drop(encryptor);
+        session
+            .abort_upload(upload_id, &upload_state.encoded_file_name)
+            .await;
+
+        return Err(RequestError::FailedToProcessData);
+    }
 
     let metadata = encryptor.get_metadata();
 
-    let user_path = session.get_user_path();
-    let old_encoded_name = session
-        .get_encoded_file_name(upload_state.file_path.clone())
-        .await
-        .ok();
+    drop(encryptor);
 
-    session
+    let user_path = session.get_user_path();
+    let encoded_file_path =
+        get_sharded_path(user_path.clone(), &upload_state.encoded_file_name).await;
+    let encoded_file_path_part = encoded_file_path.with_extension("part");
+
+    if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {
+        error!("Failed to rename part file to final file: {}", e);
+
+        session
+            .abort_upload(upload_id, &upload_state.encoded_file_name)
+            .await;
+
+        return Err(RequestError::FailedToProcessData);
+    }
+
+    if let Err(e) = sync_parent_dir(&encoded_file_path).await {
+        error!("Failed to sync the renamed file's directory: {}", e);
+
+        let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+        let _ = session.remove_active_upload_db(upload_id.to_string()).await;
+
+        return Err(RequestError::FailedToProcessData);
+    }
+
+    let replaced = match session
         .add_file(
             upload_state.file_path,
             upload_state.encoded_file_name,
             metadata,
         )
-        .await?;
+        .await
+    {
+        Ok(replaced) => replaced,
+        Err(e) => {
+            let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+            let _ = session.remove_active_upload_db(upload_id.to_string()).await;
 
-    if let Some(old_name) = old_encoded_name {
-        let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
-        let old_thumb_path = get_sharded_path(user_path.join(".cache"), &old_name).await;
-        let _ = remove_sharded_path(&user_path, &old_file_path).await;
-        let _ = remove_sharded_path(&user_path, &old_thumb_path).await;
+            return Err(e.into());
+        },
+    };
+
+    let _ = session.remove_active_upload_db(upload_id.to_string()).await;
+
+    if let Some(old_name) = replaced {
+        remove_blob_and_thumbnail(&user_path, &old_name).await;
     }
 
     Ok(RequestSuccess::Created)
@@ -252,52 +279,122 @@ pub fn file_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, Requ
 pub async fn put_file(
     file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
+    limits: &Limits,
     data: Data<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PUT /file/{}]", file_path);
-
     let file_path_buf = file_path.to_path_buf();
     let user_path = {
         let session = auth.session.clone();
         session.get_user_path()
     };
 
-    let old_encoded_name = {
-        let session = auth.session.clone();
-        session
-            .get_encoded_file_name(file_path_buf.clone())
-            .await
-            .ok()
+    let encoded_file_name = Uuid::new_v4().to_string();
+    let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
+    let encoded_file_path_part = encoded_file_path.with_extension("part");
+
+    let upload_id = Uuid::new_v4().to_string();
+
+    if let Err(e) = auth
+        .session
+        .add_active_upload_db(
+            upload_id.clone(),
+            encoded_file_name.clone(),
+            file_path_buf.to_string_lossy().to_string(),
+        )
+        .await
+    {
+        error!("Failed to add active upload to db for put_file: {}", e);
+    }
+
+    let encryptor = ChunkEncryptor::new(encoded_file_path_part.clone())
+        .await
+        .map_err(|e| e.to_string());
+
+    let mut encryptor = match encryptor {
+        Ok(enc) => enc,
+        Err(e) => {
+            error!("Failed to create ChunkEncryptor: {}", e);
+
+            let _ = auth
+                .session
+                .remove_active_upload_db(upload_id.clone())
+                .await;
+
+            return Err(RequestError::FailedToProcessData);
+        },
     };
 
-    let encoded_file_name = uuid::Uuid::new_v4().to_string();
-    let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
+    let max_file_size = max_file_size(limits);
+    let mut stream = open_with_limit(data, max_file_size);
 
-    let mut encryptor = ChunkEncryptor::new(encoded_file_path).await.map_err(|e| {
-        error!("Failed to create ChunkEncryptor: {}", e);
-        RequestError::FailedToProcessData
-    })?;
+    // The data must be on disk before the file is renamed into place and
+    // recorded, so a crash can't leave a record of a file that isn't there.
 
-    let mut stream = data.open(5.gibibytes());
-    encryptor.encrypt_stream(&mut stream).await.map_err(|e| {
-        error!("Encryption error: {}", e);
-        RequestError::FailedToProcessData
-    })?;
+    let written = match encryptor.encrypt_stream(&mut stream, max_file_size).await {
+        Ok(_) => encryptor.sync().await,
+        Err(e) => Err(e),
+    };
+
+    if let Err(e) = written {
+        let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
+        let _ = auth
+            .session
+            .remove_active_upload_db(upload_id.clone())
+            .await;
+
+        return Err(e.into());
+    }
+
+    if let Err(e) = fs::rename(&encoded_file_path_part, &encoded_file_path).await {
+        error!("Failed to rename part file to final file: {}", e);
+
+        let _ = remove_sharded_path(&user_path, &encoded_file_path_part).await;
+        let _ = auth
+            .session
+            .remove_active_upload_db(upload_id.clone())
+            .await;
+
+        return Err(RequestError::FailedToProcessData);
+    }
+
+    if let Err(e) = sync_parent_dir(&encoded_file_path).await {
+        error!("Failed to sync the renamed file's directory: {}", e);
+
+        let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+        let _ = auth
+            .session
+            .remove_active_upload_db(upload_id.clone())
+            .await;
+
+        return Err(RequestError::FailedToProcessData);
+    }
 
     let metadata = encryptor.get_metadata();
 
+    let replaced = match auth
+        .session
+        .add_file(file_path_buf, encoded_file_name, metadata)
+        .await
     {
-        let session = auth.session.clone();
-        session
-            .add_file(file_path_buf, encoded_file_name, metadata)
-            .await?;
-    }
+        Ok(replaced) => replaced,
+        Err(e) => {
+            let _ = remove_sharded_path(&user_path, &encoded_file_path).await;
+            let _ = auth
+                .session
+                .remove_active_upload_db(upload_id.clone())
+                .await;
 
-    if let Some(old_name) = old_encoded_name {
-        let old_file_path = get_sharded_path(user_path.clone(), &old_name).await;
-        let old_thumb_path = get_sharded_path(user_path.join(".cache"), &old_name).await;
-        let _ = remove_sharded_path(&user_path, &old_file_path).await;
-        let _ = remove_sharded_path(&user_path, &old_thumb_path).await;
+            return Err(e.into());
+        },
+    };
+
+    let _ = auth
+        .session
+        .remove_active_upload_db(upload_id.clone())
+        .await;
+
+    if let Some(old_name) = replaced {
+        remove_blob_and_thumbnail(&user_path, &old_name).await;
     }
 
     Ok(RequestSuccess::Created)
@@ -309,8 +406,6 @@ pub async fn get_file(
     auth: AuthenticatedSession,
     range: RangeHeader,
 ) -> Result<RangeResponder, RequestError> {
-    trace!("Entering route [GET /file/{}]", file_path);
-
     let file_path_buf = file_path.to_path_buf();
     let session = auth.session.clone();
     let user_path = session.get_user_path();
@@ -319,24 +414,46 @@ pub async fn get_file(
     drop(session);
 
     let total_size = metadata.total_size;
-    let (start, end, status) = if let Some(range_str) = range.0 {
-        parse_range(&range_str, total_size)?
-    } else {
-        (0, total_size.saturating_sub(1), Status::Ok)
+
+    let requested_range = match range.0 {
+        Some(range_str) => parse_range(&range_str, total_size)?,
+        None => None,
     };
+
+    let (start, end, status) = match requested_range {
+        Some((start, end)) => (start, end, Status::PartialContent),
+        None => (0, total_size.saturating_sub(1), Status::Ok),
+    };
+
+    // Nothing to decrypt. Dropping the sender ends the body immediately.
+
+    if total_size == 0 {
+        let (_, rx) = mpsc::channel::<Vec<u8>>(1);
+
+        return Ok(RangeResponder {
+            rx,
+            status,
+            start,
+            end,
+            total_size,
+        });
+    }
 
     let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
     let mut decryptor = ChunkDecryptor::new(encoded_file_path, metadata)
         .await
         .map_err(|e| {
             error!("Failed to create ChunkDecryptor: {}", e);
+
             RequestError::FailedToProcessData
         })?;
 
     let (tx, rx) = mpsc::channel::<Vec<u8>>(MPSC_CHANNEL_CAPACITY);
 
     tokio::spawn(async move {
-        decryptor.decrypt_range(start, end, tx).await;
+        if let Err(e) = decryptor.decrypt_range(start, end, tx).await {
+            error!("Decryption error during stream: {:?}", e);
+        }
     });
 
     Ok(RangeResponder {
@@ -353,39 +470,21 @@ pub async fn delete_file(
     file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [DELETE /file/{}]", file_path);
+    let session = auth.session.clone();
+    let user_path = session.get_user_path();
 
-    let file_path_buf = file_path.to_path_buf();
-    let (user_path, encoded_file_name) = {
-        let session = auth.session.clone();
-        let user_path = session.get_user_path();
-        let encoded_file_name = session.get_encoded_file_name(file_path_buf.clone()).await?;
-        (user_path, encoded_file_name)
-    };
+    // The blob to remove comes from the deleted row itself, not from an
+    // earlier lookup, so a concurrent overwrite can't make us delete the wrong
+    // one.
 
-    let encoded_file_path = get_sharded_path(user_path.clone(), &encoded_file_name).await;
-    let cache_path = user_path.join(".cache");
-    let encoded_thumb_path = get_sharded_path(cache_path.clone(), &encoded_file_name).await;
+    match session.delete_file(file_path.to_path_buf()).await? {
+        Some(encoded_file_name) => {
+            remove_blob_and_thumbnail(&user_path, &encoded_file_name).await;
 
-    {
-        let session = auth.session.clone();
-        session.delete_file(file_path_buf).await?;
+            Ok(RequestSuccess::NoContent)
+        },
+        None => Err(RequestError::NotFound),
     }
-
-    if encoded_thumb_path.exists() {
-        if let Err(e) = remove_sharded_path(&user_path, &encoded_thumb_path).await {
-            warn!("Failed to delete thumbnail file: {}", e);
-        }
-    }
-
-    remove_sharded_path(&user_path, &encoded_file_path)
-        .await
-        .map_err(|e| {
-            error!("Failed to delete physical file: {}", e);
-            RequestError::FailedToRemoveFile
-        })?;
-
-    Ok(RequestSuccess::NoContent)
 }
 
 #[patch("/<file_path..>", data = "<patch_data>")]
@@ -394,30 +493,24 @@ pub async fn patch_file(
     auth: AuthenticatedSession,
     patch_data: Json<PatchFileData>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PATCH /file/{}]", file_path);
+    let PatchFileData {
+        file_name,
+        parent_folder_path,
+    } = patch_data.into_inner();
 
-    let mut current_path_buf = file_path.to_path_buf();
-
-    if let Some(new_name) = &patch_data.file_name {
-        let session = auth.session.clone();
-        session
-            .rename_file(current_path_buf.clone(), new_name.clone())
-            .await?;
-            
-        current_path_buf.set_file_name(new_name);
+    if file_name.is_none() && parent_folder_path.is_none() {
+        return Err(RequestError::BadRequest("Nothing to change".into()));
     }
 
-    if let Some(destination_folder) = &patch_data.parent_folder_path {
-        let session = auth.session.clone();
-        session
-            .move_file(current_path_buf, destination_folder.clone())
-            .await?;
-    }
+    auth.session
+        .update_file(file_path.to_path_buf(), file_name, parent_folder_path)
+        .await?;
 
     Ok(RequestSuccess::NoContent)
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchFileData {
     pub file_name: Option<String>,
     pub parent_folder_path: Option<String>,

@@ -1,14 +1,21 @@
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use rocket::{delete, get, options, serde::json::Json, State};
-use secrecy::ExposeSecret;
-use serde::Serialize;
+use rocket::{delete, get, options, post, serde::json::Json, State};
+use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
+    session::accounts::create_account,
     web::forwarding_guards::AdminGuard,
     AppState,
 };
+
+#[derive(Deserialize)]
+pub struct CreateUser {
+    pub username: String,
+    pub password: SecretString,
+}
 
 #[derive(Serialize)]
 pub struct ActiveSessionInfo {
@@ -31,11 +38,10 @@ pub async fn get_session(
     _admin_guard: AdminGuard,
     state: &State<AppState>,
 ) -> Json<Vec<ActiveSessionInfo>> {
-    let sessions_by_id = state.sessions_by_id.read().await;
+    let sessions = state.sessions.snapshot().await;
     let mut session_list = Vec::new();
 
-    for (session_id, session_lock) in sessions_by_id.iter() {
-        let session = session_lock.clone();
+    for session in sessions {
         let mut active_uploads = Vec::<ActiveFileUpload>::new();
 
         let session_uploads = session.active_uploads.lock().await;
@@ -44,16 +50,16 @@ pub async fn get_session(
                 upload_id: id.clone(),
                 file_path: state.file_path.display().to_string(),
                 encoded_file_name: state.encoded_file_name.clone(),
-                last_updated: *state.last_updated.lock().await,
+                last_updated: state.last_updated(),
             });
         }
 
         session_list.push(ActiveSessionInfo {
-            session_id: session_id.clone(),
+            session_id: session.session_id.clone(),
             username: session.username.clone(),
             created_at: session
                 .created_at
-                .duration_since(std::time::UNIX_EPOCH)
+                .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
             active_uploads,
@@ -69,21 +75,36 @@ pub async fn delete_session(
     session_id: String,
     state: &State<AppState>,
 ) -> Result<RequestSuccess, RequestError> {
-    let mut sessions_by_id = state.sessions_by_id.write().await;
-    let mut token_to_id = state.token_to_id.write().await;
-
-    if let Some(session_lock) = sessions_by_id.remove(&session_id) {
-        let session = session_lock.clone();
-        let user_token = session.user_token.expose_secret();
-        token_to_id.remove(user_token);
-        Ok(RequestSuccess::NoContent)
-    } else {
-        Err(RequestError::MissingActiveSession)
+    match state.sessions.remove_by_id(&session_id).await {
+        Some(_) => Ok(RequestSuccess::NoContent),
+        None => Err(RequestError::MissingActiveSession),
     }
 }
 
 #[options("/session")]
-pub async fn admin_options() {}
+pub fn admin_options() -> RequestSuccess {
+    RequestSuccess::NoContent
+}
 
 #[options("/session/<_session_id>")]
-pub async fn delete_session_options(_session_id: String) {}
+pub fn delete_session_options(_session_id: String) -> RequestSuccess {
+    RequestSuccess::NoContent
+}
+
+#[post("/users", format = "json", data = "<reqbody>")]
+pub async fn create_user(
+    _admin_guard: AdminGuard,
+    reqbody: Json<CreateUser>,
+    state: &State<AppState>,
+) -> Result<RequestSuccess, RequestError> {
+    let CreateUser { username, password } = reqbody.into_inner();
+
+    create_account(&username, &password, &state.config).await?;
+
+    Ok(RequestSuccess::Created)
+}
+
+#[options("/users")]
+pub fn create_user_options() -> RequestSuccess {
+    RequestSuccess::NoContent
+}

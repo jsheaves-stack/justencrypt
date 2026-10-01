@@ -1,6 +1,10 @@
 use core::fmt;
-use rocket::{http::uri::Segments, request::FromSegments};
 use std::path::PathBuf;
+
+use rocket::{
+    http::uri::{fmt::Path, Error, Segments},
+    request::FromSegments,
+};
 
 #[derive(Debug)]
 pub struct UnrestrictedPath(Vec<String>);
@@ -16,11 +20,9 @@ impl UnrestrictedPath {
 }
 
 impl<'r> FromSegments<'r> for UnrestrictedPath {
-    type Error = rocket::http::uri::Error<'r>;
+    type Error = Error<'r>;
 
-    fn from_segments(
-        segments: Segments<'r, rocket::http::uri::fmt::Path>,
-    ) -> Result<Self, Self::Error> {
+    fn from_segments(segments: Segments<'r, Path>) -> Result<Self, Self::Error> {
         Ok(UnrestrictedPath(
             segments.into_iter().map(|s| s.to_string()).collect(),
         ))

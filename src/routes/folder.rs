@@ -1,17 +1,14 @@
+use rocket::{delete, get, options, patch, put, serde::json::Json};
+
 use crate::{
     db::sqlite::FolderContent,
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    util::{
-        sharded_path::{get_sharded_path, remove_sharded_path},
-        unrestricted_path::UnrestrictedPath,
-    },
+    util::{sharded_path::remove_blob_and_thumbnail, unrestricted_path::UnrestrictedPath},
     web::forwarding_guards::AuthenticatedSession,
 };
-use rocket::{delete, get, options, patch, put, serde::json::Json};
 
-#[options("/<folder_path..>")]
-pub fn folder_options(folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [OPTIONS /folder/{}]", folder_path);
+#[options("/<_folder_path..>")]
+pub fn folder_options(_folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
@@ -20,8 +17,6 @@ pub async fn get_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<Json<Vec<FolderContent>>, RequestError> {
-    trace!("Entering route [GET /folder/{}]", folder_path);
-
     let folder_path_buf = folder_path.to_path_buf();
     let folder_contents = {
         let session = auth.session.clone();
@@ -36,15 +31,10 @@ pub async fn create_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PUT /folder/{}]", folder_path);
-
     let folder_path_buf = folder_path.to_path_buf();
     {
         let session = auth.session.clone();
-        session.add_folder(folder_path_buf).await.map_err(|e| {
-            error!("Failed to add folder: {}", e);
-            RequestError::FailedToCreateFolder
-        })?;
+        session.add_folder(folder_path_buf).await?;
     }
 
     Ok(RequestSuccess::Created)
@@ -55,107 +45,17 @@ pub async fn delete_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [DELETE /folder/{}]", folder_path);
+    let session = auth.session.clone();
+    let user_path = session.get_user_path();
 
-    let folder_path_buf = folder_path.to_path_buf();
-    let user_path = {
-        let session = auth.session.clone();
-        session.get_user_path()
-    };
+    // All database rows go in one transaction; the blobs are removed only once
+    // it has committed, so a failure can never leave rows without their data.
+    let blobs = session
+        .delete_folder_tree(folder_path.to_path_buf())
+        .await?;
 
-    let folder_id = {
-        let session = auth.session.clone();
-        session
-            .get_folder_id(folder_path_buf.clone())
-            .await?
-            .ok_or(RequestError::NotFound)?
-    };
-
-    let mut folder_stack: Vec<i32> = vec![folder_id];
-    let mut folders_to_delete: Vec<i32> = Vec::new();
-
-    while let Some(current_folder_id) = folder_stack.pop() {
-        folders_to_delete.push(current_folder_id);
-
-        let files = {
-            let session = auth.session.clone();
-            session
-                .get_files_in_folder(current_folder_id)
-                .await
-                .map_err(|e| {
-                    error!("Failed to get files in folder {}: {}", current_folder_id, e);
-                    RequestError::FailedToReadFolderContents
-                })?
-        };
-
-        for file in files {
-            let encoded_file_path = get_sharded_path(user_path.clone(), &file.encoded_name).await;
-
-            let encoded_thumbnail_file_path =
-                get_sharded_path(user_path.join(".cache"), &file.encoded_name).await;
-
-            if encoded_thumbnail_file_path.exists() {
-                if let Err(e) = remove_sharded_path(&user_path, &encoded_thumbnail_file_path).await
-                {
-                    warn!(
-                        "Failed to remove thumbnail file {:?}: {}",
-                        encoded_thumbnail_file_path, e
-                    );
-                }
-            }
-
-            if let Err(e) = remove_sharded_path(&user_path, &encoded_file_path).await {
-                warn!(
-                    "Failed to remove physical file {:?}: {}",
-                    encoded_file_path, e
-                );
-            }
-
-            {
-                let session = auth.session.clone();
-                if let Err(e) = session.delete_file_by_id(file.id).await {
-                    warn!("Failed to delete file entry {} from db: {}", file.id, e);
-                }
-            }
-        }
-
-        let child_folder_ids = {
-            let session = auth.session.clone();
-            session
-                .get_child_folders(current_folder_id)
-                .await
-                .map_err(|e| {
-                    error!(
-                        "Failed to get child folders for {}: {}",
-                        current_folder_id, e
-                    );
-                    RequestError::FailedToReadFolderContents
-                })?
-        };
-
-        for child_folder_id in child_folder_ids {
-            folder_stack.push(child_folder_id);
-        }
-    }
-
-    for current_folder_id in folders_to_delete.into_iter().rev() {
-        if current_folder_id != folder_id {
-            let session = auth.session.clone();
-            if let Err(e) = session.delete_folder_by_id(current_folder_id).await {
-                warn!(
-                    "Failed to delete folder entry {} from db: {}",
-                    current_folder_id, e
-                );
-            }
-        }
-    }
-
-    {
-        let session = auth.session.clone();
-        session.delete_folder(folder_path_buf).await.map_err(|e| {
-            error!("Failed to delete root folder: {}", e);
-            RequestError::FailedToRemoveFile
-        })?;
+    for encoded_name in blobs {
+        remove_blob_and_thumbnail(&user_path, &encoded_name).await;
     }
 
     Ok(RequestSuccess::NoContent)
@@ -167,30 +67,24 @@ pub async fn patch_folder(
     auth: AuthenticatedSession,
     patch_data: Json<PatchFolderData>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [PATCH /folder/{}]", folder_path);
+    let PatchFolderData {
+        folder_name,
+        parent_folder_path,
+    } = patch_data.into_inner();
 
-    let mut current_path_buf = folder_path.to_path_buf();
-
-    if let Some(new_name) = &patch_data.folder_name {
-        let session = auth.session.clone();
-        session
-            .rename_folder(current_path_buf.clone(), new_name.clone())
-            .await?;
-            
-        current_path_buf.set_file_name(new_name);
+    if folder_name.is_none() && parent_folder_path.is_none() {
+        return Err(RequestError::BadRequest("Nothing to change".into()));
     }
 
-    if let Some(destination_folder) = &patch_data.parent_folder_path {
-        let session = auth.session.clone();
-        session
-            .move_folder(current_path_buf, destination_folder.clone())
-            .await?;
-    }
+    auth.session
+        .update_folder(folder_path.to_path_buf(), folder_name, parent_folder_path)
+        .await?;
 
     Ok(RequestSuccess::NoContent)
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchFolderData {
     pub folder_name: Option<String>,
     pub parent_folder_path: Option<String>,

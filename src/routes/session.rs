@@ -1,28 +1,33 @@
-use crate::{
-    enums::{request_error::RequestError, request_success::RequestSuccess},
-    AppState, UserSession,
-};
+use std::{collections::HashSet, sync::Arc};
+
 use rocket::{
     http::{Cookie, CookieJar, SameSite},
     options, post,
     serde::json::Json,
-    tokio::task,
-    State,
+    time, State,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use std::{env, path::PathBuf, str::FromStr, sync::Arc};
-use zxcvbn::{zxcvbn, Score};
+
+use crate::{
+    enums::{request_error::RequestError, request_success::RequestSuccess},
+    session::{
+        credentials::validate_credentials,
+        reaper::discard_sessions,
+        user_session::{new_session_token, UserSession},
+    },
+    util::time::unix_now_secs,
+    AppState,
+};
 
 #[derive(Deserialize)]
 pub struct CreateSession {
     username: String,
-    password: String,
+    password: SecretString,
 }
 
 #[options("/")]
 pub fn session_options() -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route::session::session_options");
     Ok(RequestSuccess::NoContent)
 }
 
@@ -32,101 +37,94 @@ pub async fn create_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [POST /session]");
+    let CreateSession {
+        username: user_name,
+        password: passphrase,
+    } = reqbody.into_inner();
 
-    let user_name = reqbody.username.clone();
-    let password = reqbody.password.clone();
-
-    task::spawn_blocking(move || {
-        let user_data_path =
-            env::var("JUSTENCRYPT_USER_DATA_PATH").unwrap_or_else(|_| String::from("./user_data"));
-        let user_db_path = PathBuf::from(&user_data_path)
-            .join(&user_name)
-            .join(format!("{}.db", user_name));
-
-        if !user_db_path.exists() {
-            trace!("User database does not exist, performing security score check.");
-            let score_str = env::var("JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE")
-                .unwrap_or_else(|_| "4".to_string());
-            let score_num = score_str.parse::<u8>().unwrap_or(4);
-            let minimum_password_security_score = match score_num {
-                0 => Score::Zero,
-                1 => Score::One,
-                2 => Score::Two,
-                3 => Score::Three,
-                4 => Score::Four,
-                _ => Score::Three,
-            };
-
-            let password_security_estimate = zxcvbn(password.as_str(), &[]).score();
-
-            if password_security_estimate < minimum_password_security_score {
-                trace!(
-                    "Password score {} does not meet minimum required score {}.",
-                    password_security_estimate,
-                    minimum_password_security_score
-                );
-                return Err(RequestError::PasswordDoesNotMeetRequirements);
-            }
-            trace!("Password security score check passed.");
-        } else {
-            trace!("User database exists, skipping security score check.");
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| {
-        error!("Blocking task failed: {}", e);
-        RequestError::FailedToCreateUserSession
-    })??;
-
-    let passphrase = SecretString::from_str(reqbody.password.as_str()).unwrap();
-    let user_name = reqbody.username.clone();
+    validate_credentials(&user_name, passphrase.expose_secret())?;
 
     trace!("Attempting to open user session for user: {}", user_name);
 
-    let session = Arc::new(match UserSession::open(&user_name, &passphrase).await {
-        Ok(a) => {
-            trace!("User session opened successfully.");
-            a
-        }
-        Err(e) => {
-            warn!("Failed to open user session: {}", e);
-            return Err(RequestError::Unauthorized);
-        }
-    });
+    // Clear out expired sessions first, so they don't count against this user's
+    // session limit and don't linger when the background reaper is disabled.
+    discard_sessions(state.sessions.remove_expired(unix_now_secs()).await).await;
 
-    let (user_token, session_id) = {
-        let session_read = session.clone();
-        (
-            session_read.user_token.expose_secret().clone(),
-            session_read.session_id.clone(),
-        )
-    };
+    // Held until the new session is in the store, so concurrent logins for
+    // this user don't each create a pool and migrate the database at once.
+    let login_guard = state.sessions.lock_login(&user_name).await;
+    let existing_pool = state.sessions.pool_for_user(&user_name).await;
 
-    trace!("Generated new session ID: {}", session_id);
+    let session = Arc::new(
+        match UserSession::open(&user_name, &passphrase, existing_pool, &state.config).await {
+            Ok(a) => {
+                trace!("User session opened successfully.");
 
-    let mut cookie = Cookie::new("sid", user_token.clone());
+                a
+            },
+            Err(e) => {
+                // Every failure is the same 401, so the response never reveals
+                // whether the account exists.
+                warn!("Failed to open user session: {}", e);
+
+                return Err(RequestError::Unauthorized);
+            },
+        },
+    );
+
+    // The token only lives in the cookie; the store keeps its digest.
+    let user_token = new_session_token();
+
+    trace!("Generated new session ID: {}", session.session_id);
+
+    let max_lifetime_secs = state.sessions.policy().max_lifetime.as_secs();
+
+    let mut cookie = Cookie::new("sid", user_token.expose_secret().clone());
     cookie.set_same_site(Some(SameSite::Strict));
-    cookie.set_secure(false);
+    cookie.set_secure(state.config.secure_cookies);
+    cookie.set_path("/");
+    cookie.set_max_age(time::Duration::seconds(
+        i64::try_from(max_lifetime_secs).unwrap_or(i64::MAX),
+    ));
     cookies.add_private(cookie);
 
     trace!("Session cookie added to jar.");
 
-    state
-        .sessions_by_id
-        .write()
-        .await
-        .insert(session_id.clone(), session);
-    state
-        .token_to_id
-        .write()
-        .await
-        .insert(user_token, session_id);
+    let evicted = state
+        .sessions
+        .insert(user_token.expose_secret(), session.clone())
+        .await;
+
+    drop(login_guard);
 
     trace!("Session added to active session map.");
 
-    trace!("Exiting route [POST /session] successfully.");
+    if !evicted.is_empty() {
+        info!(
+            "User {} is over the session limit; ending {} older session(s).",
+            user_name,
+            evicted.len()
+        );
+
+        discard_sessions(evicted).await;
+    }
+
+    let active_session_ids = state
+        .sessions
+        .snapshot()
+        .await
+        .iter()
+        .map(|s| s.session_id.clone())
+        .collect::<HashSet<_>>();
+
+    if let Err(e) = session.cleanup_orphaned_uploads(active_session_ids).await {
+        error!(
+            "Failed to clean up orphaned uploads on session creation: {}",
+            e
+        );
+    }
+
+    state.orphan_scanner.scan_in_background(session.clone());
 
     Ok(RequestSuccess::Created)
 }
@@ -136,37 +134,39 @@ pub async fn destroy_session(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
 ) -> Result<RequestSuccess, RequestError> {
-    trace!("Entering route [DELETE /session]");
-
     let cookie = match cookies.get_private("sid") {
         Some(c) => {
             trace!("Found sid cookie.");
+
             c
-        }
+        },
         None => {
             trace!("sid cookie not found.");
+
             return Err(RequestError::MissingSessionId);
-        }
+        },
     };
 
-    let user_token = cookie.value();
+    let user_token = cookie.value().to_string();
 
-    let mut sessions_by_id = state.sessions_by_id.write().await;
-    let mut token_to_id = state.token_to_id.write().await;
+    // The browser should forget the cookie whether or not the server still
+    // knew the session.
+    cookies.remove_private("sid");
 
-    let result = match token_to_id.remove(user_token) {
-        Some(session_id) => {
-            sessions_by_id.remove(&session_id);
-            trace!("Removed active session with ID: {}", session_id);
+    let result = match state.sessions.remove_by_token(&user_token).await {
+        Some(session) => {
+            trace!("Removed active session with ID: {}", session.session_id);
+
+            discard_sessions(vec![session]).await;
+
             Ok(RequestSuccess::NoContent)
-        }
+        },
         None => {
             trace!("User token not found in active session list.");
-            Err(RequestError::MissingActiveSession)
-        }
-    };
 
-    trace!("Exiting route [DELETE /session] successfully.");
+            Err(RequestError::MissingActiveSession)
+        },
+    };
 
     result
 }

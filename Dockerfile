@@ -1,5 +1,4 @@
 FROM rust:alpine3.20 AS prepare
-ARG BUILD_MODE=static
 ENV OPENSSL_STATIC=1
 RUN apk add --no-cache \
     build-base \
