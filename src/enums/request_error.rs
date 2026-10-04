@@ -43,6 +43,9 @@ pub enum RequestError {
     #[error("Too many active uploads")]
     TooManyActiveUploads,
 
+    #[error("Too many active downloads")]
+    TooManyActiveDownloads,
+
     #[error("Payload too large")]
     PayloadTooLarge,
 

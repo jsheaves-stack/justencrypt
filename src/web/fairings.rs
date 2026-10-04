@@ -9,8 +9,9 @@ use rocket::{
 /// `X-Admin-Api-Key` is left out on purpose, so browsers can't send it.
 const ALLOWED_METHODS: &str = "GET, HEAD, POST, PUT, PATCH, DELETE";
 const ALLOWED_HEADERS: &str = "Content-Type, Range";
-/// Response headers a cross-origin page may read, for ranged downloads.
-const EXPOSED_HEADERS: &str = "Content-Range, Content-Length, Accept-Ranges";
+/// Response headers a cross-origin page may read, for ranged downloads and
+/// the file name of a folder download.
+const EXPOSED_HEADERS: &str = "Content-Range, Content-Length, Accept-Ranges, Content-Disposition";
 /// How long, in seconds, a browser may reuse a preflight answer.
 const PREFLIGHT_MAX_AGE: &str = "600";
 

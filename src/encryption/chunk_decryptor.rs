@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use orion::aead;
 use rocket::tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
     sync::mpsc::Sender,
+    time,
 };
 
 use crate::{
@@ -84,13 +85,15 @@ impl ChunkDecryptor {
     }
 
     /// Sends the plaintext bytes `start..=end` to `tx`, one chunk's worth at a
-    /// time. Fails with `Truncated` if the file ends before `end`; a receiver
-    /// that goes away just ends the stream.
+    /// time. Fails with `Truncated` if the file ends before `end`, and with
+    /// `Stalled` if a chunk waits longer than `stall_timeout` for the receiver
+    /// to make room; a receiver that goes away just ends the stream.
     pub async fn decrypt_range(
         &mut self,
         start: u64,
         end: u64,
         tx: Sender<Vec<u8>>,
+        stall_timeout: Duration,
     ) -> Result<(), EncryptionError> {
         let first_chunk_index = start / CHUNK_SIZE as u64;
         let last_chunk_index = end / CHUNK_SIZE as u64;
@@ -137,8 +140,10 @@ impl ChunkDecryptor {
             chunk.drain(..keep_from);
             sent += chunk.len() as u64;
 
-            if tx.send(chunk).await.is_err() {
-                return Ok(());
+            match time::timeout(stall_timeout, tx.send(chunk)).await {
+                Ok(Ok(())) => {},
+                Ok(Err(_)) => return Ok(()),
+                Err(_) => return Err(EncryptionError::Stalled(stall_timeout)),
             }
         }
 

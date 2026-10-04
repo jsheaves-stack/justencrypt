@@ -1,13 +1,23 @@
 use std::io::Cursor;
 
 use rocket::{
-    http::{Header, Status},
+    http::{ContentType, Header, Status},
     response::{self, stream::ByteStream, Responder, Response, Result},
     tokio::sync::mpsc,
     Request,
 };
 
-use crate::enums::{request_error::RequestError, request_success::RequestSuccess};
+use crate::{
+    encryption::CHUNK_SIZE,
+    enums::{request_error::RequestError, request_success::RequestSuccess},
+    util::folder_archive::FolderArchive,
+};
+
+/// How much of a streamed body Rocket hands to the connection at once. Its
+/// default of 4 KiB splits every chunk into 16 pieces, which halves download
+/// speed over HTTP/2 and costs a third or more of the server's CPU time on a
+/// download; a whole chunk at a time avoids both.
+const MAX_BODY_CHUNK: usize = CHUNK_SIZE;
 
 pub struct RangeResponder {
     pub rx: mpsc::Receiver<Vec<u8>>,
@@ -35,6 +45,7 @@ impl<'r> Responder<'r, 'r> for RangeResponder {
         };
 
         let mut response = Response::build_from(stream.respond_to(req)?);
+        response.max_chunk_size(MAX_BODY_CHUNK);
         response.status(self.status);
         response.header(Header::new("Accept-Ranges", "bytes"));
         response.header(Header::new("Content-Length", content_length.to_string()));
@@ -48,6 +59,62 @@ impl<'r> Responder<'r, 'r> for RangeResponder {
 
         response.ok()
     }
+}
+
+/// A folder download: a TAR archive, offered to the browser as a file to save.
+pub struct ArchiveResponder(pub FolderArchive);
+
+impl<'r> Responder<'r, 'r> for ArchiveResponder {
+    fn respond_to(self, req: &'r Request<'_>) -> response::Result<'r> {
+        let FolderArchive {
+            mut rx,
+            len,
+            file_name,
+        } = self.0;
+        let stream = ByteStream! {
+            while let Some(chunk) = rx.recv().await {
+                yield chunk;
+            }
+        };
+
+        Response::build_from(stream.respond_to(req)?)
+            .max_chunk_size(MAX_BODY_CHUNK)
+            .header(ContentType::new("application", "x-tar"))
+            .header(Header::new("Content-Length", len.to_string()))
+            .header(Header::new(
+                "Content-Disposition",
+                attachment_disposition(&file_name),
+            ))
+            .ok()
+    }
+}
+
+/// A `Content-Disposition` value naming the file to save. Clients that read
+/// `filename*` get the exact UTF-8 name; others get `filename`, with every
+/// character a quoted string can't safely hold replaced by `_`.
+fn attachment_disposition(file_name: &str) -> String {
+    let fallback: String = file_name
+        .chars()
+        .map(|c| {
+            if (c.is_ascii_graphic() || c == ' ') && c != '"' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    let mut encoded = String::new();
+
+    for byte in file_name.bytes() {
+        if byte.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+
+    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 impl<'r> Responder<'r, 'static> for RequestError {
@@ -69,7 +136,9 @@ impl<'r> Responder<'r, 'static> for RequestError {
             },
             RequestError::NotFound => Status::NotFound,
             RequestError::RangeNotSatisfiable { .. } => Status::RangeNotSatisfiable,
-            RequestError::TooManyActiveUploads => Status::TooManyRequests,
+            RequestError::TooManyActiveUploads | RequestError::TooManyActiveDownloads => {
+                Status::TooManyRequests
+            },
             RequestError::PayloadTooLarge => Status::PayloadTooLarge,
             RequestError::AccountAlreadyExists | RequestError::Conflict(_) => Status::Conflict,
         };

@@ -18,7 +18,9 @@ use routes::{
         delete_file, file_options, finalize_upload, get_file, init_upload, patch_file, put_file,
         upload_chunk,
     },
-    folder::{create_folder, delete_folder, folder_options, get_folder, patch_folder},
+    folder::{
+        create_folder, delete_folder, download_folder, folder_options, get_folder, patch_folder,
+    },
     info::get_server_info,
     session::{create_session, destroy_session, session_options},
     thumbnail::{get_thumbnail, thumbnail_options},
@@ -45,6 +47,9 @@ pub struct AppState {
     pub sessions: Arc<SessionStore>,
     pub orphan_scanner: OrphanScanner,
     pub thumbnail_semaphore: Arc<Semaphore>,
+    /// One permit for each folder download in progress; none when folder
+    /// downloads are unlimited.
+    pub download_semaphore: Option<Arc<Semaphore>>,
 }
 
 pub struct CleanupOnShutdown;
@@ -130,6 +135,11 @@ async fn rocket() -> _ {
         semaphore_tickets, config.thumbnail.max_decode_memory
     );
 
+    match config.max_active_downloads {
+        Some(limit) => info!("Folder downloads: at most {} at once.", limit),
+        None => info!("Folder downloads: no limit (JUSTENCRYPT_MAX_ACTIVE_DOWNLOADS)."),
+    }
+
     let session_policy = SessionPolicy::from(&config.session);
 
     info!(
@@ -155,6 +165,9 @@ async fn rocket() -> _ {
         sessions: Arc::new(SessionStore::new(session_policy)),
         orphan_scanner,
         thumbnail_semaphore: Arc::new(Semaphore::new(semaphore_tickets)),
+        download_semaphore: config
+            .max_active_downloads
+            .map(|limit| Arc::new(Semaphore::new(limit.get()))),
     };
 
     trace!("AppState initialized.");
@@ -190,6 +203,7 @@ async fn rocket() -> _ {
             "/folder",
             routes![
                 get_folder,
+                download_folder,
                 create_folder,
                 folder_options,
                 delete_folder,

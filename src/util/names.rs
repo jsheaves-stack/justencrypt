@@ -27,3 +27,12 @@ pub fn is_valid_entry_path(path: &str) -> bool {
             _ => true,
         })
 }
+
+/// Whether every `/`-separated segment of `path` is a valid entry name, with
+/// no empty, `.` or `..` segments, so the path stays inside the directory it
+/// is extracted to. One trailing `/` (a directory) is allowed.
+pub fn is_valid_relative_path(path: &str) -> bool {
+    let path = path.strip_suffix('/').unwrap_or(path);
+
+    path.split('/').all(is_valid_entry_name)
+}

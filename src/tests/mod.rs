@@ -13,12 +13,14 @@ mod test_file;
 mod test_file_delete_patch;
 mod test_folder;
 mod test_folder_delete;
+mod test_folder_download;
 mod test_folder_patch;
 mod test_orphans;
 mod test_range;
 mod test_response_headers;
 mod test_session;
 mod test_session_store;
+mod test_tar;
 mod test_thumbnail;
 
 use std::{env, fs, path::PathBuf, str::FromStr, sync::Arc};
@@ -136,6 +138,9 @@ fn build_test_rocket(
         sessions: Arc::new(SessionStore::new(session_policy)),
         orphan_scanner: OrphanScanner::new(orphan_scan_enabled),
         thumbnail_semaphore: Arc::new(Semaphore::new(thumbnail_permits)),
+        download_semaphore: config
+            .max_active_downloads
+            .map(|limit| Arc::new(Semaphore::new(limit.get()))),
     };
 
     let rocket = custom(config.rocket_figment()).manage(state);

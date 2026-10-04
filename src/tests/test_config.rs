@@ -50,6 +50,8 @@ fn test_config_defaults_with_no_variables() {
     assert!(config.secure_cookies);
     assert!(config.admin_api_key.is_none());
     assert!(config.max_active_uploads.is_none());
+    assert!(config.max_active_downloads.is_none());
+    assert_eq!(config.download_stall_timeout_seconds.get(), 60);
     assert!(!config.orphan_scan_enabled);
     assert_eq!(config.upload_ttl_seconds.get(), 86400);
     assert_eq!(config.session.reaper_interval_seconds, 0);
@@ -75,6 +77,8 @@ fn test_config_reads_every_group() {
         ("JUSTENCRYPT_DB_SYNCHRONOUS_MODE", "full"),
         ("JUSTENCRYPT_USER_DATA_PATH", "/srv/data"),
         ("JUSTENCRYPT_MAX_ACTIVE_UPLOADS", "100"),
+        ("JUSTENCRYPT_MAX_ACTIVE_DOWNLOADS", "3"),
+        ("JUSTENCRYPT_DOWNLOAD_STALL_TIMEOUT_SECONDS", "15"),
         ("JUSTENCRYPT_ADMIN_API_KEY", "12345"),
         ("JUSTENCRYPT_SECURE_COOKIES", "false"),
     ])
@@ -90,6 +94,8 @@ fn test_config_reads_every_group() {
     assert_eq!(config.db.synchronous_mode, SyncMode::Full);
     assert_eq!(config.user_data_path, PathBuf::from("/srv/data"));
     assert_eq!(config.max_active_uploads.unwrap().get(), 100);
+    assert_eq!(config.max_active_downloads.unwrap().get(), 3);
+    assert_eq!(config.download_stall_timeout_seconds.get(), 15);
     // A numeric key must stay a string.
     assert_eq!(
         config.admin_api_key.as_ref().unwrap().expose_secret(),
@@ -157,6 +163,8 @@ fn test_config_errors_name_the_variable() {
         ("JUSTENCRYPT_UPLOAD_TTL_SECONDS", "0"),
         ("JUSTENCRYPT_SESSION_IDLE_TIMEOUT_SECONDS", "-5"),
         ("JUSTENCRYPT_MAX_ACTIVE_UPLOADS", "0"),
+        ("JUSTENCRYPT_MAX_ACTIVE_DOWNLOADS", "0"),
+        ("JUSTENCRYPT_DOWNLOAD_STALL_TIMEOUT_SECONDS", "0"),
         ("JUSTENCRYPT_DB_CACHE_SIZE_KB", "-1"),
         (
             "JUSTENCRYPT_DB_SYNCHRONOUS_MODE",

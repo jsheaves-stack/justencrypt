@@ -29,7 +29,7 @@ fn stored_file(path: &Path) -> PathBuf {
 }
 
 async fn sharded(base: PathBuf, name: &str) -> PathBuf {
-    get_sharded_path(base, &name.to_string()).await
+    get_sharded_path(base, name).await
 }
 
 #[async_test]

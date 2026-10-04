@@ -25,7 +25,13 @@ pub async fn remove_sharded_path(base_path: &Path, file_path: &Path) -> Result<(
     Ok(())
 }
 
-pub async fn get_sharded_path(mut user_path: PathBuf, file_name: &String) -> PathBuf {
+pub async fn get_sharded_path(user_path: PathBuf, file_name: &str) -> PathBuf {
+    sharded_path(user_path, file_name)
+}
+
+/// Where the blob `file_name` is stored under `user_path`. A synchronous
+/// version of [`get_sharded_path`], for blocking threads.
+pub fn sharded_path(mut user_path: PathBuf, file_name: &str) -> PathBuf {
     if file_name.len() >= 4 {
         user_path.push(&file_name[0..2]);
         user_path.push(&file_name[2..4]);

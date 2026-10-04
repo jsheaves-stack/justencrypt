@@ -430,36 +430,7 @@ pub fn get_file_decryption_data(
         FROM files
         WHERE parent_folder_id = ?1 AND name = ?2",
         params![parent_folder_id, file_name],
-        |row| {
-            let encoded_name: String = row.get(0)?;
-            let key_blob: Vec<u8> = row.get(1)?;
-            let total_size_i64: i64 = row.get(3)?;
-            // Every file key is KEY_LENGTH bytes; anything else is corrupt.
-            let key = (key_blob.len() == KEY_LENGTH)
-                .then(|| SecretKey::from_slice(&key_blob).ok())
-                .flatten()
-                .ok_or_else(|| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Blob,
-                        format!(
-                            "file key has {} bytes, expected {}",
-                            key_blob.len(),
-                            KEY_LENGTH
-                        )
-                        .into(),
-                    )
-                })?;
-
-            Ok((
-                encoded_name,
-                FileEncryptionMetadata {
-                    key: Arc::new(key),
-                    encryption_version: row.get(2)?,
-                    total_size: total_size_i64 as u64,
-                },
-            ))
-        },
+        |row| Ok((row.get(0)?, file_metadata(row, 1)?)),
     )
     .map_err(|e| {
         if let rusqlite::Error::QueryReturnedNoRows = e {
@@ -470,6 +441,125 @@ pub fn get_file_decryption_data(
             DbError::FailedToGetFileFromDb(e.to_string())
         }
     })
+}
+
+/// Reads a file's key, encryption version and size from the three columns
+/// starting at `first_column`.
+fn file_metadata(
+    row: &rusqlite::Row,
+    first_column: usize,
+) -> rusqlite::Result<FileEncryptionMetadata> {
+    let key_blob: Vec<u8> = row.get(first_column)?;
+    let total_size_i64: i64 = row.get(first_column + 2)?;
+    // Every file key is KEY_LENGTH bytes; anything else is corrupt.
+    let key = (key_blob.len() == KEY_LENGTH)
+        .then(|| SecretKey::from_slice(&key_blob).ok())
+        .flatten()
+        .ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                first_column,
+                rusqlite::types::Type::Blob,
+                format!(
+                    "file key has {} bytes, expected {}",
+                    key_blob.len(),
+                    KEY_LENGTH
+                )
+                .into(),
+            )
+        })?;
+
+    Ok(FileEncryptionMetadata {
+        key: Arc::new(key),
+        encryption_version: row.get(first_column + 1)?,
+        total_size: total_size_i64 as u64,
+    })
+}
+
+/// A folder or file in a folder being archived. `path` is relative to the
+/// archive, and a folder's path ends with `/`. `mtime` is in Unix seconds.
+pub enum ArchiveEntry {
+    Folder {
+        path: String,
+        mtime: u64,
+    },
+    File {
+        path: String,
+        encoded_name: String,
+        metadata: FileEncryptionMetadata,
+        mtime: u64,
+    },
+}
+
+/// Every folder in the subtree of folder `?1`, with its path below the
+/// archive root `?2`, parents before children.
+const ARCHIVE_TREE: &str = r#"WITH RECURSIVE tree(id, path, mtime) AS (
+        SELECT id, ?2, CAST(strftime('%s', updated_at) AS INTEGER)
+        FROM folders WHERE id = ?1
+        UNION ALL
+        SELECT f.id, t.path || f.name || '/', CAST(strftime('%s', f.updated_at) AS INTEGER)
+        FROM folders f INNER JOIN tree t ON f.parent_folder_id = t.id
+    )"#;
+
+/// Calls `f` with the folder `folder_id` and every folder below it, parents
+/// before children, then with every file in them. Paths start with `root`,
+/// which ends with `/`.
+///
+/// The rows are read one at a time and never sorted, so neither this code nor
+/// SQLite holds more than one file's row (and key) at once.
+pub fn for_each_archive_entry<E: From<DbError>>(
+    db: &Connection,
+    folder_id: i32,
+    root: &str,
+    mut f: impl FnMut(ArchiveEntry) -> Result<(), E>,
+) -> Result<(), E> {
+    let db_error = |e: rusqlite::Error| E::from(DbError::from(e));
+    let mtime = |row: &rusqlite::Row, column| -> rusqlite::Result<u64> {
+        Ok(row.get::<_, Option<i64>>(column)?.unwrap_or(0).max(0) as u64)
+    };
+
+    let mut folders = db
+        .prepare(&format!("{ARCHIVE_TREE} SELECT path, mtime FROM tree"))
+        .map_err(db_error)?;
+    let mut rows = folders.query(params![folder_id, root]).map_err(db_error)?;
+
+    while let Some(row) = rows.next().map_err(db_error)? {
+        f(ArchiveEntry::Folder {
+            path: row.get(0).map_err(db_error)?,
+            mtime: mtime(row, 1).map_err(db_error)?,
+        })?;
+    }
+
+    // CROSS JOIN keeps SQLite from reordering the join. Left to itself it
+    // scans every file in the account and filters them by folder; this way it
+    // walks the subtree and looks up each folder's files by index.
+    let mut files = db
+        .prepare(&format!(
+            "{ARCHIVE_TREE}
+            SELECT t.path || fl.name, fl.encoded_name, fl.key, fl.encryption_version,
+                   fl.total_size, CAST(strftime('%s', fl.updated_at) AS INTEGER)
+            FROM tree t CROSS JOIN files fl ON fl.parent_folder_id = t.id"
+        ))
+        .map_err(db_error)?;
+    let mut rows = files.query(params![folder_id, root]).map_err(db_error)?;
+
+    while let Some(row) = rows.next().map_err(db_error)? {
+        f(ArchiveEntry::File {
+            path: row.get(0).map_err(db_error)?,
+            encoded_name: row.get(1).map_err(db_error)?,
+            metadata: file_metadata(row, 2).map_err(db_error)?,
+            mtime: mtime(row, 5).map_err(db_error)?,
+        })?;
+    }
+
+    Ok(())
+}
+
+pub fn get_folder_name(db: &Connection, folder_id: i32) -> Result<String, DbError> {
+    Ok(db.query_row(
+        "SELECT name FROM folders WHERE id = ?1",
+        params![folder_id],
+        |row| row.get(0),
+    )?)
 }
 
 #[derive(Deserialize, Serialize)]

@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, time::Duration};
 
 use orion::errors::UnknownCryptoError;
 use thiserror::Error;
@@ -23,4 +23,6 @@ pub enum EncryptionError {
     Truncated { expected: u64, got: u64 },
     #[error("Unsupported encryption format version {0}")]
     UnsupportedVersion(i32),
+    #[error("The client read nothing for {0:?}")]
+    Stalled(Duration),
 }

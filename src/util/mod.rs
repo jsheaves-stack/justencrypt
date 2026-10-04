@@ -1,7 +1,9 @@
 pub mod chunked_upload;
+pub mod folder_archive;
 pub mod names;
 pub mod range;
 pub mod sharded_path;
+pub mod tar;
 pub mod thumbnails;
 pub mod time;
 pub mod unrestricted_path;

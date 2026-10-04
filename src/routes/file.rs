@@ -15,7 +15,10 @@ use crate::{
         chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor, CHUNK_SIZE,
         MPSC_CHANNEL_CAPACITY,
     },
-    enums::{request_error::RequestError, request_success::RequestSuccess},
+    enums::{
+        encryption_error::EncryptionError, request_error::RequestError,
+        request_success::RequestSuccess,
+    },
     session::user_session::UploadState,
     util::{
         chunked_upload::check_uploaded_chunks,
@@ -405,6 +408,7 @@ pub async fn get_file(
     file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
     range: RangeHeader,
+    state: &State<AppState>,
 ) -> Result<RangeResponder, RequestError> {
     let file_path_buf = file_path.to_path_buf();
     let session = auth.session.clone();
@@ -449,10 +453,13 @@ pub async fn get_file(
         })?;
 
     let (tx, rx) = mpsc::channel::<Vec<u8>>(MPSC_CHANNEL_CAPACITY);
+    let stall_timeout = state.config.download_stall_timeout();
 
     tokio::spawn(async move {
-        if let Err(e) = decryptor.decrypt_range(start, end, tx).await {
-            error!("Decryption error during stream: {:?}", e);
+        match decryptor.decrypt_range(start, end, tx, stall_timeout).await {
+            Ok(()) => {},
+            Err(e @ EncryptionError::Stalled(_)) => warn!("Abandoned a file download: {}", e),
+            Err(e) => error!("Decryption error during stream: {:?}", e),
         }
     });
 

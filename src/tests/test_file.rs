@@ -1,3 +1,5 @@
+use std::{num::NonZeroU64, time::Duration};
+
 use rocket::{
     async_test,
     http::{Cookie, Header, Status},
@@ -643,4 +645,38 @@ async fn test_get_file_multiple_ranges_sends_the_whole_file() {
     assert_eq!(response.status(), Status::Ok);
     assert_eq!(response.headers().get_one("Content-Range"), None);
     assert_eq!(response.into_string().await.unwrap(), "0123456789");
+}
+
+// A client that stops reading is cut off after the stall timeout, short of
+// the Content-Length, instead of holding the download open forever.
+#[async_test]
+async fn test_get_file_is_abandoned_when_the_client_stops_reading() {
+    let (rocket, test_user) = setup_rocket_with_config(|config| {
+        config.download_stall_timeout_seconds = NonZeroU64::new(1).unwrap();
+    })
+    .await;
+    let rocket = rocket.mount("/file", routes![put_file, get_file]);
+    let client = Client::tracked(rocket)
+        .await
+        .expect("Failed to create client");
+    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let data: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+
+    upload(&client, &cookie, "big.bin", data.clone()).await;
+
+    let response = client
+        .get("/file/big.bin")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::Ok);
+
+    // Nothing reads the body while the timeout runs out.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let body = response.into_bytes().await.unwrap();
+
+    assert!(body.len() < data.len(), "{}", body.len());
+    assert_eq!(body, &data[..body.len()]);
 }

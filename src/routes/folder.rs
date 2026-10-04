@@ -1,10 +1,11 @@
-use rocket::{delete, get, options, patch, put, serde::json::Json};
+use rocket::{delete, get, options, patch, put, serde::json::Json, State};
 
 use crate::{
     db::sqlite::FolderContent,
     enums::{request_error::RequestError, request_success::RequestSuccess},
     util::{sharded_path::remove_blob_and_thumbnail, unrestricted_path::UnrestrictedPath},
-    web::forwarding_guards::AuthenticatedSession,
+    web::{forwarding_guards::AuthenticatedSession, responders::ArchiveResponder},
+    AppState,
 };
 
 #[options("/<_folder_path..>")]
@@ -24,6 +25,33 @@ pub async fn get_folder(
     };
 
     Ok(Json(folder_contents))
+}
+
+// Ranks ahead of `get_folder`, so it handles every request whose query
+// string has `download` in it.
+#[get("/<folder_path..>?download")]
+pub async fn download_folder(
+    folder_path: UnrestrictedPath,
+    auth: AuthenticatedSession,
+    state: &State<AppState>,
+) -> Result<ArchiveResponder, RequestError> {
+    let permit = state
+        .download_semaphore
+        .as_ref()
+        .map(|semaphore| semaphore.clone().try_acquire_owned())
+        .transpose()
+        .map_err(|_| RequestError::TooManyActiveDownloads)?;
+
+    let archive = auth
+        .session
+        .stream_folder_archive(
+            folder_path.to_path_buf(),
+            permit,
+            state.config.download_stall_timeout(),
+        )
+        .await?;
+
+    Ok(ArchiveResponder(archive))
 }
 
 #[put("/<folder_path..>")]

@@ -81,6 +81,11 @@ const ENV_KEYS: &[(&str, &str)] = &[
     ("ALLOW_ORIGIN", "allow_origin"),
     ("ADMIN_API_KEY", "admin_api_key"),
     ("MAX_ACTIVE_UPLOADS", "max_active_uploads"),
+    ("MAX_ACTIVE_DOWNLOADS", "max_active_downloads"),
+    (
+        "DOWNLOAD_STALL_TIMEOUT_SECONDS",
+        "download_stall_timeout_seconds",
+    ),
     ("UPLOAD_TTL_SECONDS", "upload_ttl_seconds"),
     ("ORPHAN_SCAN_ENABLED", "orphan_scan_enabled"),
 ];
@@ -105,6 +110,13 @@ pub struct AppConfig {
     pub admin_api_key: Option<SecretString>,
     /// Most uploads a session may have in progress; no limit when unset.
     pub max_active_uploads: Option<NonZeroUsize>,
+    /// Most folder downloads that may run at once, across all users; no limit
+    /// when unset. Each one holds a blocking thread and a database connection
+    /// until it finishes.
+    pub max_active_downloads: Option<NonZeroUsize>,
+    /// How long a file or folder download may wait for the client to read
+    /// more before it is abandoned, freeing what it holds.
+    pub download_stall_timeout_seconds: NonZeroU64,
     /// How long an upload can sit idle before it is considered abandoned.
     pub upload_ttl_seconds: NonZeroU64,
     /// Whether every login starts a scan for the user's unreferenced files.
@@ -330,6 +342,8 @@ impl Default for AppConfig {
             allow_origin: None,
             admin_api_key: None,
             max_active_uploads: None,
+            max_active_downloads: None,
+            download_stall_timeout_seconds: NonZeroU64::new(60).unwrap(),
             upload_ttl_seconds: NonZeroU64::new(24 * 60 * 60).unwrap(),
             orphan_scan_enabled: false,
         }
@@ -546,6 +560,10 @@ impl AppConfig {
 
     pub fn upload_ttl(&self) -> Duration {
         Duration::from_secs(self.upload_ttl_seconds.get())
+    }
+
+    pub fn download_stall_timeout(&self) -> Duration {
+        Duration::from_secs(self.download_stall_timeout_seconds.get())
     }
 }
 

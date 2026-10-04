@@ -16,6 +16,7 @@ JustEncrypt is a self-hostable, high-performance file encryption service accessi
 
 - **Encryption at Rest:** Every file is encrypted on the server with its own key as it is uploaded, and decrypted as it is downloaded. Each user's file keys and metadata live in a database encrypted with that user's password (SQLCipher). The server handles plaintext while a request is in progress, so this is not end-to-end encryption.
 - **Chunked and Ranged Transfers:** Large files can be uploaded in chunks, in any order and in parallel, and downloads support single byte ranges.
+- **Folder Downloads:** A folder, with all its subfolders, downloads as one TAR archive. The archive is built as it streams, so its size doesn't affect the server's memory use.
 - **Thumbnails:** Generates and caches (encrypted) thumbnails for JPEG, PNG, GIF, WebP and AVIF images.
 - **Multi-User Sessions:** Cookie-based sessions with idle and absolute timeouts and a per-user session limit.
 - **Detailed Configuration:** Configured through environment variables, validated at startup.
@@ -104,6 +105,8 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 | `JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES`     | Max size in bytes for the WAL file. | `67108864` |
 | `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds to wait for an available DB connection. | `30` |
 | `JUSTENCRYPT_MAX_ACTIVE_UPLOADS`              | Maximum number of uploads a session may have in progress at once. | (no limit) |
+| `JUSTENCRYPT_MAX_ACTIVE_DOWNLOADS`            | Maximum number of folder downloads that may run at once, across all users. Each one holds a thread and one of its user's database connections until it finishes; further downloads get `429`. | (no limit) |
+| `JUSTENCRYPT_DOWNLOAD_STALL_TIMEOUT_SECONDS`  | Seconds a file or folder download waits for the client to read more before it is abandoned, freeing what it holds (for a folder download, its slot and database connection). | `60` |
 | `JUSTENCRYPT_UPLOAD_TTL_SECONDS`              | Seconds an upload can sit idle before it is considered abandoned and removed (checked when a new upload starts, and by the session reaper if enabled). | `86400` |
 | `JUSTENCRYPT_SESSION_IDLE_TIMEOUT_SECONDS`    | A session with no requests for this long expires. | `3600` |
 | `JUSTENCRYPT_SESSION_MAX_LIFETIME_SECONDS`    | A session expires this long after login, however active it is. Also the session cookie's `Max-Age`. | `604800` |
@@ -152,6 +155,7 @@ A chunked upload starts with `initiate`, which returns an `upload_id`. The file 
 
 ### Folder (`/folder`)
 - `GET /<folder_path..>`: List the contents of a folder.
+- `GET /<folder_path..>?download`: Download a folder and everything in it as an uncompressed TAR archive, streamed as it is built.
 - `PUT /<folder_path..>`: Create a new folder.
 - `DELETE /<folder_path..>`: Delete a folder.
 - `PATCH /<folder_path..>`: Rename or move a folder.

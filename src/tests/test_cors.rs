@@ -56,7 +56,7 @@ async fn test_cors_allows_the_configured_origin() {
     );
     assert_eq!(
         header(&response, "Access-Control-Expose-Headers"),
-        Some("Content-Range, Content-Length, Accept-Ranges")
+        Some("Content-Range, Content-Length, Accept-Ranges, Content-Disposition")
     );
     assert_eq!(header(&response, "Vary"), Some("Origin"));
     // A request header, meaningless in a response.

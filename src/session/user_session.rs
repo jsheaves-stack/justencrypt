@@ -12,7 +12,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio::{
-    sync::{Mutex, RwLock},
+    sync::{mpsc, oneshot, Mutex, OwnedSemaphorePermit, RwLock},
     task,
 };
 use secrecy::SecretString;
@@ -21,10 +21,14 @@ use uuid::Uuid;
 use crate::{
     config::AppConfig,
     db::sqlite::{self, FolderContent},
-    encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata},
+    encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata, MPSC_CHANNEL_CAPACITY},
     enums::db_error::DbError,
     session::{credentials::is_valid_username, policy::SessionPolicy},
-    util::{sharded_path, time::unix_now_secs},
+    util::{
+        folder_archive::{self, ChannelWriter, FolderArchive},
+        sharded_path,
+        time::unix_now_secs,
+    },
 };
 
 #[derive(Clone)]
@@ -225,10 +229,9 @@ impl UserSession {
     /// Deletes an upload's partial file and its tracking row. A partial file
     /// that is already gone is not an error.
     pub async fn abort_upload(&self, upload_id: &str, encoded_file_name: &str) {
-        let part_path =
-            sharded_path::get_sharded_path(self.user_path.clone(), &encoded_file_name.to_owned())
-                .await
-                .with_extension("part");
+        let part_path = sharded_path::get_sharded_path(self.user_path.clone(), encoded_file_name)
+            .await
+            .with_extension("part");
 
         if let Err(e) = sharded_path::remove_sharded_path(&self.user_path, &part_path).await {
             if !sharded_path::is_not_found(e.as_ref()) {
@@ -434,6 +437,38 @@ impl UserSession {
             .await?;
 
         Ok(result)
+    }
+
+    /// Starts streaming a folder, with everything below it, as a TAR archive.
+    /// Returns once the archive's length is known; its bytes then arrive on
+    /// the returned channel as fast as the client reads them. `permit`, if
+    /// any, is held until the archive is finished, the client goes away, or
+    /// the client reads nothing for `stall_timeout`.
+    pub async fn stream_folder_archive(
+        &self,
+        folder_path: PathBuf,
+        permit: Option<OwnedSemaphorePermit>,
+        stall_timeout: Duration,
+    ) -> Result<FolderArchive, DbError> {
+        let folder_path = folder_path.to_str().ok_or(DbError::InvalidPath)?.to_owned();
+        let pool = self.db_pool.clone();
+        let username = self.username.clone();
+        let user_path = self.user_path.clone();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel(MPSC_CHANNEL_CAPACITY);
+        let out = ChannelWriter::new(tx, stall_timeout);
+
+        task::spawn_blocking(move || {
+            let _permit = permit;
+
+            folder_archive::produce(pool, &folder_path, &username, &user_path, ready_tx, out);
+        });
+
+        let (len, file_name) = ready_rx
+            .await
+            .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
+
+        Ok(FolderArchive { rx, len, file_name })
     }
 
     pub async fn get_file_decryption_data(

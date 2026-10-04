@@ -72,7 +72,10 @@ async fn decrypt_range(
         received
     };
 
-    tokio::join!(decryptor.decrypt_range(start, end, tx), receive)
+    tokio::join!(
+        decryptor.decrypt_range(start, end, tx, Duration::from_secs(60)),
+        receive
+    )
 }
 
 #[async_test]
@@ -144,9 +147,39 @@ async fn test_decrypt_range_stops_quietly_when_the_receiver_is_gone() {
     drop(rx);
 
     decryptor
-        .decrypt_range(0, data.len() as u64 - 1, tx)
+        .decrypt_range(0, data.len() as u64 - 1, tx, Duration::from_secs(60))
         .await
         .unwrap();
+}
+
+// A client that stays connected but stops reading would otherwise keep the
+// download, its open file and its key around forever.
+#[async_test]
+async fn test_decrypt_range_gives_up_when_the_receiver_stops_reading() {
+    let dir = tempdir().unwrap();
+    let data = plaintext(4 * CHUNK_SIZE);
+    let (path, metadata) = encrypted_file(dir.path(), &data).await;
+    let mut decryptor = ChunkDecryptor::new(path, metadata).await.unwrap();
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(2);
+    let stall_timeout = Duration::from_millis(50);
+
+    let result = decryptor
+        .decrypt_range(0, data.len() as u64 - 1, tx, stall_timeout)
+        .await;
+
+    assert!(
+        matches!(result, Err(EncryptionError::Stalled(d)) if d == stall_timeout),
+        "{result:?}"
+    );
+
+    // The channel filled up, then nothing more was sent.
+    let mut received = Vec::new();
+
+    while let Some(chunk) = rx.recv().await {
+        received.extend_from_slice(&chunk);
+    }
+
+    assert_eq!(received, &data[..2 * CHUNK_SIZE]);
 }
 
 #[test]
