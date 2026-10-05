@@ -2,13 +2,14 @@ use std::{
     cmp,
     fs::File,
     io::{self, Read, Seek, SeekFrom},
-    path::PathBuf,
 };
 
 use orion::aead;
 
 use crate::encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE, INDEX_LEN};
 
+/// Decrypts a file of encrypted chunks as a plain `Read`, for code running on
+/// a blocking thread, such as image decoding.
 pub struct SyncChunkDecryptReader {
     file: File,
     metadata: FileEncryptionMetadata,
@@ -19,12 +20,13 @@ pub struct SyncChunkDecryptReader {
 }
 
 impl SyncChunkDecryptReader {
-    pub fn new(file_path: PathBuf, metadata: FileEncryptionMetadata) -> io::Result<Self> {
+    /// Decrypts `file` as it is read. Reading blocks, so it must only happen
+    /// on a blocking thread.
+    pub fn new(file: File, metadata: FileEncryptionMetadata) -> io::Result<Self> {
         metadata
             .check_version()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        let file = File::open(file_path)?;
         let total_size = metadata.total_size;
 
         Ok(SyncChunkDecryptReader {
@@ -37,6 +39,8 @@ impl SyncChunkDecryptReader {
         })
     }
 
+    /// Reads and decrypts chunk `chunk_index` into the buffer. An empty buffer
+    /// means the chunk is past the end of the file.
     fn load_chunk(&mut self, chunk_index: u64) -> io::Result<()> {
         let disk_offset = chunk_index * (ENCRYPTED_CHUNK_SIZE as u64);
         self.file.seek(SeekFrom::Start(disk_offset))?;

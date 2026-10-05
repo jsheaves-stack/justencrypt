@@ -3,11 +3,13 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
-use crate::session::{policy::SessionPolicy, user_session::UserSession};
+use crate::session::{
+    policy::SessionPolicy,
+    user_context::{UserContext, WeakUserContext},
+    user_session::UserSession,
+};
 
 /// The set of live user sessions.
 ///
@@ -70,6 +72,9 @@ impl Default for SessionStore {
 struct Inner {
     by_token: HashMap<String, Arc<UserSession>>,
     token_of: HashMap<String, String>,
+    /// Each user's context, by username, for as long as anything uses it: a
+    /// session, or work a session started that outlives it.
+    contexts: HashMap<String, WeakUserContext>,
 }
 
 /// The key a session token is stored under: its BLAKE2b-256 digest as hex.
@@ -84,11 +89,13 @@ pub fn token_digest(token: &str) -> String {
 }
 
 impl SessionStore {
+    /// The keys every session is stored under, for tests to inspect.
     #[cfg(test)]
     pub async fn stored_keys(&self) -> Vec<String> {
         self.inner.read().await.by_token.keys().cloned().collect()
     }
 
+    /// An empty store whose sessions follow `policy`.
     pub fn new(policy: SessionPolicy) -> Self {
         Self {
             inner: RwLock::default(),
@@ -98,9 +105,10 @@ impl SessionStore {
     }
 
     /// Waits until no other login for `username` is in progress. Holding the
-    /// guard from the pool lookup until the new session is inserted means
+    /// guard from the context lookup until the new session is inserted means
     /// concurrent logins open (and migrate) the user's database one at a
-    /// time, and later ones reuse the pool the first one created.
+    /// time, and later ones reuse the context, and its pool, the first one
+    /// created.
     pub async fn lock_login(&self, username: &str) -> LoginGuard<'_> {
         let lock = self
             .login_locks
@@ -119,6 +127,7 @@ impl SessionStore {
         }
     }
 
+    /// The rules that decide when sessions expire and how many a user may have.
     pub fn policy(&self) -> &SessionPolicy {
         &self.policy
     }
@@ -134,6 +143,13 @@ impl SessionStore {
         let session_id = session.session_id.clone();
         let username = session.username.clone();
         let mut inner = self.inner.write().await;
+
+        inner
+            .contexts
+            .retain(|_, context| context.upgrade().is_some());
+        inner
+            .contexts
+            .insert(username.clone(), session.context.downgrade());
 
         if let Some(old_token) = inner.token_of.insert(session_id.clone(), token_key.clone()) {
             if old_token != token_key {
@@ -194,12 +210,15 @@ impl SessionStore {
         expired
     }
 
+    /// The session the token `token` belongs to.
     pub async fn get(&self, token: &str) -> Option<Arc<UserSession>> {
         let token_key = token_digest(token);
 
         self.inner.read().await.by_token.get(&token_key).cloned()
     }
 
+    /// The session with the id `session_id`.
+    #[cfg(test)]
     pub async fn get_by_id(&self, session_id: &str) -> Option<Arc<UserSession>> {
         let inner = self.inner.read().await;
         let token_key = inner.token_of.get(session_id)?;
@@ -207,6 +226,7 @@ impl SessionStore {
         inner.by_token.get(token_key).cloned()
     }
 
+    /// Removes and returns the session the token `token` belongs to.
     pub async fn remove_by_token(&self, token: &str) -> Option<Arc<UserSession>> {
         let token_key = token_digest(token);
         let mut inner = self.inner.write().await;
@@ -217,6 +237,7 @@ impl SessionStore {
         Some(session)
     }
 
+    /// Removes and returns the session with the id `session_id`.
     pub async fn remove_by_id(&self, session_id: &str) -> Option<Arc<UserSession>> {
         let mut inner = self.inner.write().await;
         let token_key = inner.token_of.remove(session_id)?;
@@ -230,14 +251,16 @@ impl SessionStore {
         self.inner.read().await.by_token.values().cloned().collect()
     }
 
-    /// Returns the shared DB pool of any live session belonging to `username`.
-    pub async fn pool_for_user(&self, username: &str) -> Option<Pool<SqliteConnectionManager>> {
+    /// The user's context while anything still uses it. That includes work
+    /// that outlives the user's sessions, such as a download still running
+    /// after they log out, so logging in again can't give a user a second
+    /// set of limits next to the first.
+    pub async fn context_for_user(&self, username: &str) -> Option<UserContext> {
         self.inner
             .read()
             .await
-            .by_token
-            .values()
-            .find(|s| s.username == username)
-            .map(|s| s.db_pool.clone())
+            .contexts
+            .get(username)
+            .and_then(WeakUserContext::upgrade)
     }
 }

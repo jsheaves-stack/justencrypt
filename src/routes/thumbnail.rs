@@ -10,11 +10,14 @@ use crate::{
     AppState,
 };
 
+/// Answers the CORS preflight for `/thumbnail/<file_path..>`.
 #[options("/<_file_path..>")]
 pub fn thumbnail_options(_file_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
+/// A small preview of the image at `file_path`: from the user's encrypted
+/// cache if it is there, otherwise generated and cached.
 #[get("/<file_path..>")]
 pub async fn get_thumbnail(
     file_path: UnrestrictedPath,
@@ -24,17 +27,12 @@ pub async fn get_thumbnail(
     let file_path_buf = file_path.to_path_buf();
     let format = image_format_for(&file_path_buf).ok_or(RequestError::UnsupportedFileType)?;
 
-    let _permit = state
-        .thumbnail_semaphore
-        .acquire()
-        .await
-        .map_err(|_| RequestError::FailedToProcessData)?;
-
     get_or_create_thumbnail(
         &auth.session,
         file_path_buf,
         format,
         &state.config.thumbnail,
+        &state.thumbnail_semaphore,
     )
     .await
 }

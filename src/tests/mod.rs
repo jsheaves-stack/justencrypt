@@ -22,6 +22,9 @@ mod test_session;
 mod test_session_store;
 mod test_tar;
 mod test_thumbnail;
+mod test_user_context;
+mod test_user_isolation;
+mod test_user_storage;
 
 use std::{env, fs, path::PathBuf, str::FromStr, sync::Arc};
 
@@ -32,12 +35,12 @@ use secrecy::SecretString;
 use uuid::Uuid;
 
 use crate::{
-    config::AppConfig,
+    config::{AppConfig, DbConfig},
     db::migrations::get_migrations,
     enums::request_error::RequestError,
     session::{
         accounts::create_account_storage, orphans::OrphanScanner, policy::SessionPolicy,
-        store::SessionStore, user_session::UserSession,
+        store::SessionStore, user_context::UserContext, user_session::UserSession,
     },
     AppState,
 };
@@ -57,6 +60,16 @@ pub fn migrated_db() -> Db {
     get_migrations().to_latest(&mut db).unwrap();
 
     db
+}
+
+// A user context whose files live in `dir`, for tests of file storage and
+// encryption. Its database pool is never used.
+pub fn storage_context(dir: &std::path::Path) -> UserContext {
+    let pool = Pool::builder()
+        .max_size(1)
+        .build_unchecked(SqliteConnectionManager::memory());
+
+    UserContext::new(pool, dir.to_path_buf(), &DbConfig::default(), None)
 }
 
 pub struct TestUser {

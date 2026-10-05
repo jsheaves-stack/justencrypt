@@ -1,20 +1,14 @@
-use std::{
-    collections::BTreeMap,
-    fs::{File, OpenOptions},
-    io,
-    os::unix::fs::FileExt,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, io};
 
 use orion::aead;
-use rocket::tokio::{fs, io::AsyncReadExt, sync::Mutex, task};
+use rocket::tokio::{io::AsyncReadExt, sync::Mutex};
 
 use crate::{
     encryption::{
         encrypted_len, FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE, INDEX_LEN,
     },
     enums::encryption_error::EncryptionError,
+    session::user_storage::BlobFile,
 };
 
 /// Encrypts plaintext into a file of fixed-size encrypted chunks.
@@ -23,41 +17,30 @@ use crate::{
 /// no exclusive access: several chunk uploads of one file can be encrypted and
 /// written at the same time.
 pub struct ChunkEncryptor {
-    file: Arc<File>,
+    file: BlobFile,
     metadata: FileEncryptionMetadata,
 }
 
 impl ChunkEncryptor {
-    pub async fn new(file_path: PathBuf) -> Result<Self, EncryptionError> {
-        Self::new_with_metadata(file_path, FileEncryptionMetadata::new()).await
+    /// Encrypts into `file`, which should be empty, with a new key.
+    pub fn new(file: BlobFile) -> Self {
+        ChunkEncryptor {
+            file,
+            metadata: FileEncryptionMetadata::new(),
+        }
     }
 
-    pub async fn new_with_metadata(
-        file_path: PathBuf,
+    /// Encrypts into `file`, which should be empty, with the key in `metadata`.
+    pub fn new_with_metadata(
+        file: BlobFile,
         metadata: FileEncryptionMetadata,
     ) -> Result<Self, EncryptionError> {
         metadata.check_version()?;
 
-        if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-
-        let file = blocking(move || {
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(file_path)
-        })
-        .await?;
-
-        Ok(ChunkEncryptor {
-            file: Arc::new(file),
-            metadata,
-        })
+        Ok(ChunkEncryptor { file, metadata })
     }
 
+    /// The key and format of the file, with its size once known.
     pub fn get_metadata(&self) -> FileEncryptionMetadata {
         self.metadata.clone()
     }
@@ -66,9 +49,7 @@ impl ChunkEncryptor {
     /// cut to exactly the encrypted length of that size, which drops anything
     /// left past the end by an earlier, longer write of the last chunk.
     pub async fn seal(&mut self, total_size: u64) -> Result<(), EncryptionError> {
-        let file = self.file.clone();
-
-        blocking(move || file.set_len(encrypted_len(total_size))).await?;
+        self.file.set_len(encrypted_len(total_size)).await?;
         self.sync().await?;
         self.metadata.total_size = total_size;
 
@@ -78,9 +59,7 @@ impl ChunkEncryptor {
     /// Waits until everything written is on disk, so the file survives a
     /// crash or power loss from here on.
     pub async fn sync(&self) -> Result<(), EncryptionError> {
-        let file = self.file.clone();
-
-        blocking(move || file.sync_all()).await?;
+        self.file.sync().await?;
 
         Ok(())
     }
@@ -129,6 +108,11 @@ impl ChunkEncryptor {
         Ok(total_size)
     }
 
+    /// Encrypts `source` chunk by chunk, starting at chunk `first_chunk_index`,
+    /// writes each chunk at its place in the file, and returns the plaintext
+    /// bytes read. Records each chunk's length in `written_chunks` when
+    /// given. Fails with `TooLarge` before writing a chunk that would go
+    /// past `max_bytes`.
     async fn encrypt_chunks<R: AsyncReadExt + Unpin>(
         &self,
         source: &mut R,
@@ -186,10 +170,9 @@ impl ChunkEncryptor {
         Ok(total_bytes_read)
     }
 
+    /// Writes an encrypted chunk at `position` in the file.
     async fn write_at(&self, bytes: Vec<u8>, position: u64) -> io::Result<()> {
-        let file = self.file.clone();
-
-        blocking(move || file.write_all_at(&bytes, position)).await
+        self.file.write_at(bytes, position).await
     }
 }
 
@@ -208,13 +191,4 @@ async fn read_full<R: AsyncReadExt + Unpin>(source: &mut R, buf: &mut [u8]) -> i
     }
 
     Ok(filled)
-}
-
-// Runs blocking file I/O off the async runtime.
-async fn blocking<T, F>(f: F) -> io::Result<T>
-where
-    F: FnOnce() -> io::Result<T> + Send + 'static,
-    T: Send + 'static,
-{
-    task::spawn_blocking(f).await.map_err(io::Error::other)?
 }

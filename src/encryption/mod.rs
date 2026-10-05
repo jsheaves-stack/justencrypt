@@ -8,14 +8,24 @@ pub use orion::{aead::SecretKey, auth};
 
 use crate::enums::encryption_error::EncryptionError;
 
+/// Plaintext bytes in each chunk; only a file's last chunk may hold fewer.
 pub const CHUNK_SIZE: usize = 64 * 1024;
+/// Bytes of the random nonce stored with each chunk.
 pub const NONCE_LEN: usize = 24;
+/// Bytes of the authentication tag stored with each chunk.
 pub const TAG_LEN: usize = 16;
+/// Bytes of the chunk's own index, encrypted with its plaintext, so a chunk
+/// moved to another place in the file fails to decrypt.
 pub const INDEX_LEN: usize = 8;
+/// Bytes a full chunk takes on disk.
 pub const ENCRYPTED_CHUNK_SIZE: usize = CHUNK_SIZE + INDEX_LEN + NONCE_LEN + TAG_LEN;
+/// The format version recorded for every file this code writes.
 pub const ENCRYPTION_VERSION: i32 = 1;
 
+/// Bytes in a file's key.
 pub const KEY_LENGTH: usize = 32;
+/// Chunks a download may have decrypted ahead of the client. Kept small, so a
+/// download holds little in memory however large the file.
 pub const MPSC_CHANNEL_CAPACITY: usize = 2;
 
 /// Size on disk of an encrypted file holding `plaintext_len` bytes: every
@@ -37,6 +47,7 @@ pub struct FileEncryptionMetadata {
 }
 
 impl FileEncryptionMetadata {
+    /// Metadata for a new, empty file, with a new random key.
     pub fn new() -> FileEncryptionMetadata {
         FileEncryptionMetadata {
             key: Arc::new(
@@ -57,6 +68,9 @@ impl FileEncryptionMetadata {
         Ok(())
     }
 
+    /// Metadata for the file's cached thumbnail: a key derived from the file's
+    /// own key and `salt`, so the thumbnail needs no key of its own stored
+    /// anywhere.
     pub fn derive_thumbnail_metadata(
         &self,
         salt: &[u8],

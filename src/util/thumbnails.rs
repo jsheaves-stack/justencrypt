@@ -1,14 +1,13 @@
 use std::{
-    io::{BufReader, Cursor},
+    io::{self, BufReader, Cursor},
     path::{Path, PathBuf},
 };
 
 use image::{ImageError, ImageFormat, ImageReader, Limits};
 use rocket::{
     http::ContentType,
-    tokio::{fs, io::AsyncReadExt, task},
+    tokio::{io::AsyncReadExt, sync::Semaphore},
 };
-use uuid::Uuid;
 
 use crate::{
     config::ThumbnailConfig,
@@ -17,8 +16,7 @@ use crate::{
         sync_chunk_decryptor::SyncChunkDecryptReader, FileEncryptionMetadata,
     },
     enums::{encryption_error::EncryptionError, request_error::RequestError},
-    session::user_session::UserSession,
-    util::sharded_path::{get_sharded_path, is_not_found, remove_sharded_path, sync_parent_dir},
+    session::{user_context::UserContext, user_session::UserSession, user_storage::BlobFile},
 };
 
 const THUMBNAIL_SIZE: u32 = 150;
@@ -58,10 +56,10 @@ pub async fn get_or_create_thumbnail(
     file_path: PathBuf,
     format: ImageFormat,
     config: &ThumbnailConfig,
+    server_permits: &Semaphore,
 ) -> Result<(ContentType, Vec<u8>), RequestError> {
     let content_type =
         ContentType::parse_flexible(format.to_mime_type()).unwrap_or(ContentType::Binary);
-    let user_path = session.get_user_path();
     let (encoded_file_name, file_metadata) = session.get_file_decryption_data(file_path).await?;
     let thumbnail_metadata = file_metadata
         .derive_thumbnail_metadata(encoded_file_name.as_bytes())
@@ -70,10 +68,10 @@ pub async fn get_or_create_thumbnail(
 
             RequestError::FailedToProcessData
         })?;
-    let cache_path = get_sharded_path(user_path.join(".cache"), &encoded_file_name).await;
+    let context = &session.context;
 
-    if fs::try_exists(&cache_path).await.unwrap_or(false) {
-        match read_cached(&cache_path, thumbnail_metadata.clone()).await {
+    match context.open_thumbnail(&encoded_file_name).await {
+        Ok(file) => match read_cached(file, thumbnail_metadata.clone()).await {
             Ok(thumbnail) => return Ok((content_type, thumbnail)),
             Err(e) => {
                 warn!(
@@ -81,18 +79,24 @@ pub async fn get_or_create_thumbnail(
                     encoded_file_name, e
                 );
 
-                if let Err(e) = remove_sharded_path(&user_path, &cache_path).await {
-                    if !is_not_found(e.as_ref()) {
+                if let Err(e) = context.remove_thumbnail(&encoded_file_name).await {
+                    if e.kind() != io::ErrorKind::NotFound {
                         warn!("Failed to remove unreadable thumbnail: {}", e);
                     }
                 }
             },
-        }
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+        Err(e) => warn!(
+            "Failed to open the cached thumbnail for {}: {}",
+            encoded_file_name, e
+        ),
     }
 
-    let encoded_file_path = get_sharded_path(user_path, &encoded_file_name).await;
     let thumbnail = generate(
-        encoded_file_path,
+        context,
+        server_permits,
+        encoded_file_name.clone(),
         file_metadata,
         format,
         decode_limits(config),
@@ -100,7 +104,8 @@ pub async fn get_or_create_thumbnail(
     .await?;
 
     if let Err(e) = write_encrypted_atomically(
-        &cache_path,
+        context,
+        &encoded_file_name,
         thumbnail_metadata,
         &mut Cursor::new(&thumbnail),
     )
@@ -115,6 +120,7 @@ pub async fn get_or_create_thumbnail(
     Ok((content_type, thumbnail))
 }
 
+/// The image decoder's limits: the largest dimensions, and memory per `config`.
 fn decode_limits(config: &ThumbnailConfig) -> Limits {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
@@ -124,60 +130,72 @@ fn decode_limits(config: &ThumbnailConfig) -> Limits {
     limits
 }
 
-/// Encrypts `source` into a temporary file next to `final_path`, makes sure it
-/// is on disk, then renames it into place. A rename on the same filesystem is
-/// atomic, so `final_path` only ever holds a complete file, even with several
-/// writers at once (the last one wins). On error the temporary file is removed
-/// and `final_path` is left as it was.
+/// Encrypts `source` as the cached thumbnail of the encrypted file `name`: into
+/// a temporary file, made sure to be on disk, then renamed into place. A
+/// rename on the same filesystem is atomic, so the cache only ever holds a
+/// complete thumbnail, even with several writers at once (the last one wins).
+/// On error the temporary file is removed and the cache is left as it was.
 pub async fn write_encrypted_atomically<R: AsyncReadExt + Unpin>(
-    final_path: &Path,
+    context: &UserContext,
+    name: &str,
     metadata: FileEncryptionMetadata,
     source: &mut R,
 ) -> Result<(), EncryptionError> {
-    let temp_path = final_path.with_file_name(format!("{}.part", Uuid::new_v4()));
+    let temp = context.create_thumbnail_temp(name).await?;
 
     let result = async {
-        let mut encryptor = ChunkEncryptor::new_with_metadata(temp_path.clone(), metadata).await?;
+        let mut encryptor = ChunkEncryptor::new_with_metadata(temp.file().clone(), metadata)?;
 
         encryptor.encrypt_stream(source, u64::MAX).await?;
         encryptor.sync().await?;
-        fs::rename(&temp_path, final_path).await?;
-        sync_parent_dir(final_path).await?;
+        temp.commit().await?;
 
         Ok(())
     }
     .await;
 
     if result.is_err() {
-        let _ = fs::remove_file(&temp_path).await;
+        temp.discard().await;
     }
 
     result
 }
 
+/// Decrypts a cached thumbnail.
 async fn read_cached(
-    cache_path: &Path,
+    file: BlobFile,
     metadata: FileEncryptionMetadata,
 ) -> Result<Vec<u8>, EncryptionError> {
-    ChunkDecryptor::new(cache_path.to_path_buf(), metadata)
-        .await?
-        .decrypt_all()
-        .await
+    ChunkDecryptor::new(file, metadata)?.decrypt_all().await
 }
 
-// Decrypts the image and scales it down, off the async runtime. The content
-// must be in the format its extension names, and decoding it must fit within
-// `limits`.
+// Decrypts the image and scales it down, on one of the user's blocking
+// threads, and while holding one of the server-wide `server_permits` that cap
+// how many images are decoded at once. The content must be in the format its
+// extension names, and decoding it must fit within `limits`.
 async fn generate(
-    encoded_file_path: PathBuf,
+    context: &UserContext,
+    server_permits: &Semaphore,
+    encoded_file_name: String,
     metadata: FileEncryptionMetadata,
     format: ImageFormat,
     limits: Limits,
 ) -> Result<Vec<u8>, RequestError> {
-    task::spawn_blocking(move || {
-        let decrypt_reader =
-            SyncChunkDecryptReader::new(encoded_file_path, metadata).map_err(|e| {
-                error!("Failed to create SyncChunkDecryptReader: {}", e);
+    // The user's turn comes first, so a request waiting on its own user never
+    // holds one of the server-wide permits other users need.
+    let slot = context.reserve_blocking().await?;
+    let _server_permit = server_permits
+        .acquire()
+        .await
+        .map_err(|_| RequestError::FailedToProcessData)?;
+    let context = context.clone();
+
+    slot.run(move || {
+        let decrypt_reader = context
+            .open_blob_on_this_thread(&encoded_file_name)
+            .and_then(|file| SyncChunkDecryptReader::new(file, metadata))
+            .map_err(|e| {
+                error!("Failed to open the image for its thumbnail: {}", e);
 
                 RequestError::FailedToProcessData
             })?;
@@ -226,10 +244,5 @@ async fn generate(
 
         Ok(buf.into_inner())
     })
-    .await
-    .map_err(|e| {
-        error!("Blocking task error: {}", e);
-
-        RequestError::FailedToProcessData
-    })?
+    .await?
 }

@@ -6,17 +6,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    session::accounts::create_account,
+    session::{accounts::create_account, reaper::discard_sessions},
     web::forwarding_guards::AdminGuard,
     AppState,
 };
 
+/// The body of `POST /admin/users`.
 #[derive(Deserialize)]
 pub struct CreateUser {
     pub username: String,
     pub password: SecretString,
 }
 
+/// A live session, as `GET /admin/session` lists it.
 #[derive(Serialize)]
 pub struct ActiveSessionInfo {
     pub session_id: String,
@@ -25,6 +27,7 @@ pub struct ActiveSessionInfo {
     pub active_uploads: Vec<ActiveFileUpload>,
 }
 
+/// An upload in progress, as `GET /admin/session` lists it.
 #[derive(Serialize)]
 pub struct ActiveFileUpload {
     upload_id: String,
@@ -33,6 +36,8 @@ pub struct ActiveFileUpload {
     last_updated: SystemTime,
 }
 
+/// Lists every live session, with its user and the uploads it has in
+/// progress.
 #[get("/session")]
 pub async fn get_session(
     _admin_guard: AdminGuard,
@@ -69,6 +74,9 @@ pub async fn get_session(
     Json(session_list)
 }
 
+/// Ends the session `session_id` and cleans up its uploads in progress, as
+/// logging out would. Fails with `MissingActiveSession` if there is no such
+/// session.
 #[delete("/session/<session_id>")]
 pub async fn delete_session(
     _admin_guard: AdminGuard,
@@ -76,21 +84,29 @@ pub async fn delete_session(
     state: &State<AppState>,
 ) -> Result<RequestSuccess, RequestError> {
     match state.sessions.remove_by_id(&session_id).await {
-        Some(_) => Ok(RequestSuccess::NoContent),
+        Some(session) => {
+            discard_sessions(vec![session]).await;
+
+            Ok(RequestSuccess::NoContent)
+        },
         None => Err(RequestError::MissingActiveSession),
     }
 }
 
+/// Answers the CORS preflight for `/admin/session`.
 #[options("/session")]
 pub fn admin_options() -> RequestSuccess {
     RequestSuccess::NoContent
 }
 
+/// Answers the CORS preflight for `/admin/session/<session_id>`.
 #[options("/session/<_session_id>")]
 pub fn delete_session_options(_session_id: String) -> RequestSuccess {
     RequestSuccess::NoContent
 }
 
+/// Creates an account, with its encrypted database and storage directory.
+/// Fails if the password is too weak or the account already exists.
 #[post("/users", format = "json", data = "<reqbody>")]
 pub async fn create_user(
     _admin_guard: AdminGuard,
@@ -104,6 +120,7 @@ pub async fn create_user(
     Ok(RequestSuccess::Created)
 }
 
+/// Answers the CORS preflight for `/admin/users`.
 #[options("/users")]
 pub fn create_user_options() -> RequestSuccess {
     RequestSuccess::NoContent

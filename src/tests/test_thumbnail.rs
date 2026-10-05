@@ -15,7 +15,7 @@ use crate::{
         thumbnail::{get_thumbnail, thumbnail_options},
     },
     session::policy::SessionPolicy,
-    util::sharded_path::get_sharded_path,
+    util::sharded_path::sharded_path,
 };
 
 #[async_test]
@@ -167,7 +167,7 @@ async fn test_thumbnail_deletion_cleanup() {
         .unwrap();
 
     let cache_dir = test_user.path.join(".cache");
-    let sharded_thumb = get_sharded_path(cache_dir, &encoded_name).await;
+    let sharded_thumb = sharded_path(cache_dir, &encoded_name);
     assert!(sharded_thumb.exists());
 
     // Delete the file

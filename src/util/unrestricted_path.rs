@@ -6,6 +6,9 @@ use rocket::{
     request::FromSegments,
 };
 
+/// A file or folder path from the URL, segment by segment, without Rocket's
+/// own path checks, which reject names such as `.hidden`. Names are checked
+/// when an entry is created instead.
 #[derive(Debug)]
 pub struct UnrestrictedPath(Vec<String>);
 

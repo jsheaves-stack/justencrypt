@@ -1,5 +1,7 @@
 use rusqlite_migration::{Migrations, M};
 
+/// Every schema change, in order. A user's database is brought up to date
+/// each time it is opened.
 pub fn get_migrations() -> Migrations<'static> {
     Migrations::new(vec![M::up(
         r#"

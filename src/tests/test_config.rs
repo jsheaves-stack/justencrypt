@@ -51,6 +51,8 @@ fn test_config_defaults_with_no_variables() {
     assert!(config.admin_api_key.is_none());
     assert!(config.max_active_uploads.is_none());
     assert!(config.max_active_downloads.is_none());
+    assert!(config.max_blocking_threads_per_user.is_none());
+    assert_eq!(config.server.max_blocking_threads.get(), 512);
     assert_eq!(config.download_stall_timeout_seconds.get(), 60);
     assert!(!config.orphan_scan_enabled);
     assert_eq!(config.upload_ttl_seconds.get(), 86400);
@@ -78,6 +80,8 @@ fn test_config_reads_every_group() {
         ("JUSTENCRYPT_USER_DATA_PATH", "/srv/data"),
         ("JUSTENCRYPT_MAX_ACTIVE_UPLOADS", "100"),
         ("JUSTENCRYPT_MAX_ACTIVE_DOWNLOADS", "3"),
+        ("JUSTENCRYPT_MAX_BLOCKING_THREADS", "64"),
+        ("JUSTENCRYPT_MAX_BLOCKING_THREADS_PER_USER", "8"),
         ("JUSTENCRYPT_DOWNLOAD_STALL_TIMEOUT_SECONDS", "15"),
         ("JUSTENCRYPT_ADMIN_API_KEY", "12345"),
         ("JUSTENCRYPT_SECURE_COOKIES", "false"),
@@ -95,6 +99,8 @@ fn test_config_reads_every_group() {
     assert_eq!(config.user_data_path, PathBuf::from("/srv/data"));
     assert_eq!(config.max_active_uploads.unwrap().get(), 100);
     assert_eq!(config.max_active_downloads.unwrap().get(), 3);
+    assert_eq!(config.server.max_blocking_threads.get(), 64);
+    assert_eq!(config.max_blocking_threads_per_user.unwrap().get(), 8);
     assert_eq!(config.download_stall_timeout_seconds.get(), 15);
     // A numeric key must stay a string.
     assert_eq!(
@@ -164,6 +170,8 @@ fn test_config_errors_name_the_variable() {
         ("JUSTENCRYPT_SESSION_IDLE_TIMEOUT_SECONDS", "-5"),
         ("JUSTENCRYPT_MAX_ACTIVE_UPLOADS", "0"),
         ("JUSTENCRYPT_MAX_ACTIVE_DOWNLOADS", "0"),
+        ("JUSTENCRYPT_MAX_BLOCKING_THREADS", "0"),
+        ("JUSTENCRYPT_MAX_BLOCKING_THREADS_PER_USER", "0"),
         ("JUSTENCRYPT_DOWNLOAD_STALL_TIMEOUT_SECONDS", "0"),
         ("JUSTENCRYPT_DB_CACHE_SIZE_KB", "-1"),
         (

@@ -29,6 +29,8 @@ use crate::{
         ENCRYPTED_CHUNK_SIZE,
     },
     enums::{db_error::DbError, encryption_error::EncryptionError},
+    session::user_context::UserContext,
+    tests::storage_context,
 };
 
 // Plaintext whose every byte depends on its position, so a byte from the
@@ -37,30 +39,44 @@ fn plaintext(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i % 251) as u8).collect()
 }
 
+// Encrypts `data` into the encrypted file "file" of a user whose files live
+// in `dir`, and returns the user's context, the file's path and its metadata.
 async fn encrypted_file(
     dir: &std::path::Path,
     data: &[u8],
-) -> (std::path::PathBuf, FileEncryptionMetadata) {
-    let path = dir.join("file.enc");
-    let mut encryptor = ChunkEncryptor::new(path.clone()).await.unwrap();
+) -> (UserContext, std::path::PathBuf, FileEncryptionMetadata) {
+    let context = storage_context(dir);
+    let mut encryptor = ChunkEncryptor::new(context.create_upload("file").await.unwrap());
 
     encryptor
         .encrypt_stream(&mut Cursor::new(data.to_vec()), u64::MAX)
         .await
         .unwrap();
     encryptor.sync().await.unwrap();
+    context.commit_upload("file").await.unwrap();
 
-    (path, encryptor.get_metadata())
+    let path = context.blob_path("file");
+
+    (context, path, encryptor.get_metadata())
 }
 
-// Runs `decrypt_range` and collects what it sends.
+async fn decryptor(
+    context: &UserContext,
+    name: &str,
+    metadata: FileEncryptionMetadata,
+) -> ChunkDecryptor {
+    ChunkDecryptor::new(context.open_blob(name).await.unwrap(), metadata).unwrap()
+}
+
+// Runs `decrypt_range` on the encrypted file `name` and collects what it sends.
 async fn decrypt_range(
-    path: std::path::PathBuf,
+    context: &UserContext,
+    name: &str,
     metadata: FileEncryptionMetadata,
     start: u64,
     end: u64,
 ) -> (Result<(), EncryptionError>, Vec<u8>) {
-    let mut decryptor = ChunkDecryptor::new(path, metadata).await.unwrap();
+    let mut decryptor = decryptor(context, name, metadata).await;
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(2);
     let receive = async {
         let mut received = Vec::new();
@@ -82,7 +98,7 @@ async fn decrypt_range(
 async fn test_decrypt_range_returns_exactly_the_requested_bytes() {
     let dir = tempdir().unwrap();
     let data = plaintext(3 * CHUNK_SIZE + 100);
-    let (path, metadata) = encrypted_file(dir.path(), &data).await;
+    let (context, _, metadata) = encrypted_file(dir.path(), &data).await;
     let last = data.len() as u64 - 1;
     let chunk = CHUNK_SIZE as u64;
 
@@ -96,7 +112,8 @@ async fn test_decrypt_range_returns_exactly_the_requested_bytes() {
         (3 * chunk, last),
         (last, last),
     ] {
-        let (result, received) = decrypt_range(path.clone(), metadata.clone(), start, end).await;
+        let (result, received) =
+            decrypt_range(&context, "file", metadata.clone(), start, end).await;
 
         result.unwrap();
         assert_eq!(
@@ -113,7 +130,7 @@ async fn test_decrypt_range_returns_exactly_the_requested_bytes() {
 async fn test_decrypt_range_reports_a_truncated_file() {
     let dir = tempdir().unwrap();
     let data = plaintext(3 * CHUNK_SIZE);
-    let (path, metadata) = encrypted_file(dir.path(), &data).await;
+    let (context, path, metadata) = encrypted_file(dir.path(), &data).await;
 
     std::fs::OpenOptions::new()
         .write(true)
@@ -122,7 +139,8 @@ async fn test_decrypt_range_reports_a_truncated_file() {
         .set_len(2 * ENCRYPTED_CHUNK_SIZE as u64)
         .unwrap();
 
-    let (result, received) = decrypt_range(path, metadata, 0, data.len() as u64 - 1).await;
+    let (result, received) =
+        decrypt_range(&context, "file", metadata, 0, data.len() as u64 - 1).await;
 
     assert!(
         matches!(
@@ -140,8 +158,8 @@ async fn test_decrypt_range_reports_a_truncated_file() {
 async fn test_decrypt_range_stops_quietly_when_the_receiver_is_gone() {
     let dir = tempdir().unwrap();
     let data = plaintext(4 * CHUNK_SIZE);
-    let (path, metadata) = encrypted_file(dir.path(), &data).await;
-    let mut decryptor = ChunkDecryptor::new(path, metadata).await.unwrap();
+    let (context, _, metadata) = encrypted_file(dir.path(), &data).await;
+    let mut decryptor = decryptor(&context, "file", metadata).await;
     let (tx, rx) = mpsc::channel::<Vec<u8>>(2);
 
     drop(rx);
@@ -158,8 +176,8 @@ async fn test_decrypt_range_stops_quietly_when_the_receiver_is_gone() {
 async fn test_decrypt_range_gives_up_when_the_receiver_stops_reading() {
     let dir = tempdir().unwrap();
     let data = plaintext(4 * CHUNK_SIZE);
-    let (path, metadata) = encrypted_file(dir.path(), &data).await;
-    let mut decryptor = ChunkDecryptor::new(path, metadata).await.unwrap();
+    let (context, _, metadata) = encrypted_file(dir.path(), &data).await;
+    let mut decryptor = decryptor(&context, "file", metadata).await;
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(2);
     let stall_timeout = Duration::from_millis(50);
 
@@ -187,8 +205,9 @@ fn test_sync_reader_reads_the_whole_file() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let dir = tempdir().unwrap();
     let data = plaintext(2 * CHUNK_SIZE + 7);
-    let (path, metadata) = rt.block_on(encrypted_file(dir.path(), &data));
-    let mut reader = SyncChunkDecryptReader::new(path, metadata).unwrap();
+    let (_context, path, metadata) = rt.block_on(encrypted_file(dir.path(), &data));
+    let mut reader =
+        SyncChunkDecryptReader::new(std::fs::File::open(path).unwrap(), metadata).unwrap();
     let mut read = Vec::new();
 
     reader.read_to_end(&mut read).unwrap();
@@ -200,22 +219,27 @@ fn test_sync_reader_reads_the_whole_file() {
 #[async_test]
 async fn test_unknown_encryption_versions_are_rejected() {
     let dir = tempdir().unwrap();
-    let (path, metadata) = encrypted_file(dir.path(), &plaintext(10)).await;
+    let (context, path, metadata) = encrypted_file(dir.path(), &plaintext(10)).await;
     let future = FileEncryptionMetadata {
         encryption_version: 2,
         ..metadata
     };
 
     assert!(matches!(
-        ChunkDecryptor::new(path.clone(), future.clone()).await,
+        ChunkDecryptor::new(context.open_blob("file").await.unwrap(), future.clone()),
         Err(EncryptionError::UnsupportedVersion(2))
     ));
     assert!(matches!(
-        ChunkEncryptor::new_with_metadata(dir.path().join("new.enc"), future.clone()).await,
+        ChunkEncryptor::new_with_metadata(
+            context.create_upload("new").await.unwrap(),
+            future.clone()
+        ),
         Err(EncryptionError::UnsupportedVersion(2))
     ));
 
-    let error = SyncChunkDecryptReader::new(path, future).err().unwrap();
+    let error = SyncChunkDecryptReader::new(std::fs::File::open(path).unwrap(), future)
+        .err()
+        .unwrap();
     assert!(error.to_string().contains("version 2"), "{error}");
 }
 
@@ -273,8 +297,8 @@ fn test_user_databases_use_secure_delete() {
 #[async_test]
 async fn test_chunks_of_one_upload_are_written_concurrently() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("upload.enc");
-    let encryptor = ChunkEncryptor::new(path.clone()).await.unwrap();
+    let context = storage_context(dir.path());
+    let encryptor = ChunkEncryptor::new(context.create_upload("upload").await.unwrap());
     let written_chunks = Mutex::new(BTreeMap::new());
     let first = plaintext(CHUNK_SIZE);
     let second = vec![7u8; 10];
@@ -314,9 +338,16 @@ async fn test_chunks_of_one_upload_are_written_concurrently() {
 
     let mut encryptor = encryptor;
     encryptor.seal(CHUNK_SIZE as u64 + 10).await.unwrap();
+    context.commit_upload("upload").await.unwrap();
 
-    let (result, received) =
-        decrypt_range(path, encryptor.get_metadata(), 0, CHUNK_SIZE as u64 + 9).await;
+    let (result, received) = decrypt_range(
+        &context,
+        "upload",
+        encryptor.get_metadata(),
+        0,
+        CHUNK_SIZE as u64 + 9,
+    )
+    .await;
 
     result.unwrap();
     assert_eq!(received, [first, second].concat());

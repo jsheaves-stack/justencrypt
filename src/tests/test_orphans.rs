@@ -16,7 +16,7 @@ use super::*;
 use crate::{
     routes::{file::put_file, session::create_session},
     session::{orphans::remove_orphaned_files, policy::SessionPolicy},
-    util::sharded_path::get_sharded_path,
+    util::sharded_path::sharded_path,
     AppState,
 };
 
@@ -28,8 +28,8 @@ fn stored_file(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-async fn sharded(base: PathBuf, name: &str) -> PathBuf {
-    get_sharded_path(base, name).await
+fn sharded(base: PathBuf, name: &str) -> PathBuf {
+    sharded_path(base, name)
 }
 
 #[async_test]
@@ -75,32 +75,22 @@ async fn test_remove_orphaned_files_removes_only_unreferenced_files() {
         .unwrap();
 
     let kept = [
-        sharded(user.clone(), &referenced).await,
-        stored_file(&sharded(cache.clone(), &referenced).await),
-        stored_file(
-            &sharded(user.clone(), &in_progress)
-                .await
-                .with_extension("part"),
-        ),
+        sharded(user.clone(), &referenced),
+        stored_file(&sharded(cache.clone(), &referenced)),
+        stored_file(&sharded(user.clone(), &in_progress).with_extension("part")),
         // Not named like anything the server creates.
         stored_file(&user.join("ab").join("notes.txt")),
         // Directly in the user's directory, next to the database.
         stored_file(&user.join(Uuid::new_v4().to_string())),
     ];
     let removed = [
-        stored_file(&sharded(user.clone(), &Uuid::new_v4().to_string()).await),
-        stored_file(&sharded(cache.clone(), &Uuid::new_v4().to_string()).await),
+        stored_file(&sharded(user.clone(), &Uuid::new_v4().to_string())),
+        stored_file(&sharded(cache.clone(), &Uuid::new_v4().to_string())),
         // A thumbnail temp file left behind by a crash.
         stored_file(
-            &sharded(cache.clone(), &referenced)
-                .await
-                .with_file_name(format!("{}.part", Uuid::new_v4())),
+            &sharded(cache.clone(), &referenced).with_file_name(format!("{}.part", Uuid::new_v4())),
         ),
-        stored_file(
-            &sharded(user.clone(), &Uuid::new_v4().to_string())
-                .await
-                .with_extension("part"),
-        ),
+        stored_file(&sharded(user.clone(), &Uuid::new_v4().to_string()).with_extension("part")),
     ];
 
     let count = remove_orphaned_files(&session).await.unwrap();
@@ -143,16 +133,20 @@ async fn test_every_login_scans_for_orphans_only_when_enabled() {
         // Sets up the account.
         let _ = create_test_session(client.rocket(), test_user.name.clone()).await;
 
-        let first =
-            stored_file(&sharded(test_user.path.clone(), &Uuid::new_v4().to_string()).await);
+        let first = stored_file(&sharded(
+            test_user.path.clone(),
+            &Uuid::new_v4().to_string(),
+        ));
 
         log_in_and_wait(&client, &test_user.name).await;
 
         assert_eq!(first.exists(), !enabled, "scan enabled: {}", enabled);
 
         // A later login scans again.
-        let second =
-            stored_file(&sharded(test_user.path.clone(), &Uuid::new_v4().to_string()).await);
+        let second = stored_file(&sharded(
+            test_user.path.clone(),
+            &Uuid::new_v4().to_string(),
+        ));
 
         log_in_and_wait(&client, &test_user.name).await;
 

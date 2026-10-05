@@ -10,12 +10,9 @@
 use std::{
     io::{self, Read, Write},
     mem,
-    path::{Path, PathBuf},
     time::Duration,
 };
 
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot},
@@ -29,9 +26,9 @@ use crate::{
         sync_chunk_decryptor::SyncChunkDecryptReader, FileEncryptionMetadata, CHUNK_SIZE,
     },
     enums::{archive_error::ArchiveError, db_error::DbError},
+    session::user_context::UserContext,
     util::{
         names::is_valid_relative_path,
-        sharded_path::sharded_path,
         tar::{self, EntryKind},
     },
 };
@@ -56,18 +53,18 @@ struct ArchivePlan {
     len: u64,
 }
 
-/// Builds the archive of `folder_path` and writes it to `out`. It runs on a
-/// blocking thread and returns when the archive is finished, has failed, or
-/// the client has gone away or stopped reading.
+/// Builds the archive of `folder_path` and writes it to `out`. It runs on one
+/// of the user's blocking threads, from `context`, and returns when the
+/// archive is finished, has failed, or the client has gone away or stopped
+/// reading.
 pub fn produce(
-    pool: Pool<SqliteConnectionManager>,
+    context: &UserContext,
     folder_path: &str,
     username: &str,
-    user_path: &Path,
     ready: ArchiveReady,
     mut out: ChannelWriter,
 ) {
-    let mut db = match pool.get() {
+    let mut db = match context.pool().get() {
         Ok(db) => db,
         Err(e) => {
             let _ = ready.send(Err(e.into()));
@@ -93,7 +90,7 @@ pub fn produce(
         return;
     }
 
-    match write_archive(&snapshot, &plan, user_path, &mut out) {
+    match write_archive(&snapshot, &plan, context, &mut out) {
         Ok(()) => {},
         Err(ArchiveError::Io(e)) if e.kind() == io::ErrorKind::BrokenPipe => {
             debug!("Client went away during a folder download");
@@ -126,6 +123,8 @@ fn start_archive<'c>(
     Ok((snapshot, plan))
 }
 
+/// Finds the folder, names the archive, and works out its exact length by
+/// walking the folder tree once, without reading any file.
 fn plan_archive(
     db: &Connection,
     folder_path: &str,
@@ -167,10 +166,11 @@ fn plan_archive(
     })
 }
 
+/// Writes every entry of the archive, then the end-of-archive marker.
 fn write_archive(
     db: &Connection,
     plan: &ArchivePlan,
-    user_path: &Path,
+    context: &UserContext,
     out: &mut ChannelWriter,
 ) -> Result<(), ArchiveError> {
     for_each_entry(db, plan.folder_id, &plan.root, |entry| {
@@ -184,7 +184,7 @@ fn write_archive(
                 metadata,
                 mtime,
             } => {
-                write_file(out, user_path, &path, &encoded_name, metadata, mtime)?;
+                write_file(out, context, &path, &encoded_name, metadata, mtime)?;
             },
         }
 
@@ -227,9 +227,11 @@ fn for_each_entry<E: From<DbError>>(
     Ok(skipped)
 }
 
+/// Writes one file's entry: its header, its decrypted content, and padding.
+/// Fails with `Truncated` if the stored file holds less than its recorded size.
 fn write_file(
     out: &mut ChannelWriter,
-    user_path: &Path,
+    context: &UserContext,
     path: &str,
     encoded_name: &str,
     metadata: FileEncryptionMetadata,
@@ -243,8 +245,8 @@ fn write_file(
         return Ok(());
     }
 
-    let blob_path = sharded_path(PathBuf::from(user_path), encoded_name);
-    let reader = SyncChunkDecryptReader::new(blob_path, metadata)?;
+    let file = context.open_blob_on_this_thread(encoded_name)?;
+    let reader = SyncChunkDecryptReader::new(file, metadata)?;
     let copied = io::copy(&mut reader.take(size), out)?;
 
     if copied != size {
@@ -289,6 +291,8 @@ impl ChannelWriter {
         }
     }
 
+    /// Sends the buffered bytes as one chunk, waiting at most the stall timeout
+    /// for room.
     fn send(&mut self) -> io::Result<()> {
         let chunk = mem::replace(&mut self.buf, Vec::with_capacity(CHUNK_SIZE));
         let sent = self

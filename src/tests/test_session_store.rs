@@ -18,10 +18,12 @@ use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::{
+    config::DbConfig,
     session::{
         policy::SessionPolicy,
         reaper::{reap_once, SessionReaper},
         store::{token_digest, SessionStore},
+        user_context::UserContext,
         user_session::{new_session_token, UserSession},
     },
     util::time::unix_now_secs,
@@ -43,8 +45,7 @@ fn aged_session(username: &str, age_secs: u64, idle_secs: u64) -> Arc<UserSessio
     let now = unix_now_secs();
 
     Arc::new(UserSession {
-        user_path: PathBuf::new(),
-        db_pool: pool,
+        context: UserContext::new(pool, PathBuf::new(), &DbConfig::default(), None),
         username: username.to_string(),
         created_at: UNIX_EPOCH + Duration::from_secs(now - age_secs),
         session_id: session_id.clone(),
@@ -134,7 +135,7 @@ async fn test_reinserting_a_session_under_a_new_token_drops_the_old_token() {
 }
 
 #[async_test]
-async fn test_snapshot_and_pool_for_user() {
+async fn test_snapshot_and_context_for_user() {
     let store = SessionStore::default();
     store.insert("tok-a", detached_session("alice")).await;
     store.insert("tok-b", detached_session("bob")).await;
@@ -148,8 +149,8 @@ async fn test_snapshot_and_pool_for_user() {
     names.sort();
 
     assert_eq!(names, ["alice", "bob"]);
-    assert!(store.pool_for_user("alice").await.is_some());
-    assert!(store.pool_for_user("carol").await.is_none());
+    assert!(store.context_for_user("alice").await.is_some());
+    assert!(store.context_for_user("carol").await.is_none());
 }
 
 // H1 regression: concurrent readers must keep making progress while other

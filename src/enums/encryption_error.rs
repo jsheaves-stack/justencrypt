@@ -3,6 +3,7 @@ use std::{io, time::Duration};
 use orion::errors::UnknownCryptoError;
 use thiserror::Error;
 
+/// Why encrypting or decrypting a file failed.
 #[derive(Error, Debug)]
 pub enum EncryptionError {
     #[error("I/O error: {0}")]

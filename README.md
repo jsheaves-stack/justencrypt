@@ -83,29 +83,31 @@ This returns `201` and creates `user_data/alice/` with the user's encrypted data
 
 The application is configured through environment variables. When run directly, the server also loads a `.env` file from its working directory; variables already set in the environment take precedence over it. With Docker, pass the file with `--env-file`. The following table details the available variables and their default values.
 
-All variables are read once at startup (`src/config/mod.rs`). An empty value counts as unset. A value that can't be parsed or is out of range, or a `JUSTENCRYPT_*` variable the server doesn't recognize, stops the server with an error that names the variable.
+All variables are read once at startup (`src/config/mod.rs`). An empty value counts as unset. A value that can't be parsed or is out of range stops the server with an error that names the variable. `JUSTENCRYPT_*` variables the server doesn't recognize are ignored.
 
 | Variable Name                                 | Description | Default |
 |-----------------------------------------------|-------------|---------|
 | `JUSTENCRYPT_ADDRESS`                         | The IP address Rocket will bind to. | `0.0.0.0` |
 | `JUSTENCRYPT_PORT`                            | The port Rocket will listen on. | `8000` |
 | `JUSTENCRYPT_WORKERS`                         | Number of worker threads for handling requests. | `16` |
+| `JUSTENCRYPT_MAX_BLOCKING_THREADS`            | Number of threads for work that blocks: database queries, file reads and writes, and image decoding. Shared by every user. | `512` |
 | `JUSTENCRYPT_KEEP_ALIVE`                      | Keep-alive timeout in seconds. | `5` |
 | `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` | The minimum zxcvbn password score (`0`-`4`) required when creating an account. | `4` |
 | `JUSTENCRYPT_ROCKET_LOG_LEVEL`                | Logging level for Rocket (`Off`, `Debug`, `Normal`, `Critical`). | `Critical` |
 | `JUSTENCRYPT_LOG_LEVEL`                       | Logging level for the application (`Off`, `Trace`, `Debug`, `Info`, `Warn`, `Error`). | `Warn` |
 | `JUSTENCRYPT_USER_DATA_PATH`                  | The path to store user data. | `./user_data` |
 | `JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER`     | Minimum number of idle SQLite connections per user. | `0` |
-| `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`     | Maximum number of concurrent SQLite connections per user. | `16` |
+| `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`     | Maximum number of SQLite connections per user. A user's database work waits for one of their own connections without holding a server thread, so a user who runs out slows down only themselves. Folder downloads may use at most half of them, leaving the rest for the user's other requests. | `16` |
 | `JUSTENCRYPT_DB_IDLE_TIMEOUT_SECONDS`         | Seconds a connection can be idle before being closed. | `600` |
 | `JUSTENCRYPT_DB_BUSY_TIMEOUT_MS`              | Milliseconds to wait when the database is locked. | `60000` |
 | `JUSTENCRYPT_DB_SYNCHRONOUS_MODE`             | SQLite PRAGMA synchronous setting (`OFF`, `NORMAL`, `FULL`, `EXTRA`). | `NORMAL` |
 | `JUSTENCRYPT_DB_CACHE_SIZE_KB`                | SQLite PRAGMA cache_size in kilobytes. | `16000` |
 | `JUSTENCRYPT_DB_TEMP_STORE`                   | SQLite PRAGMA temp_store setting (`DEFAULT`, `FILE`, `MEMORY`). | `MEMORY` |
 | `JUSTENCRYPT_DB_JOURNAL_SIZE_LIMIT_BYTES`     | Max size in bytes for the WAL file. | `67108864` |
-| `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds to wait for an available DB connection. | `30` |
+| `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`   | Seconds a request waits for one of its user's connections, folder download slots or (with `JUSTENCRYPT_MAX_BLOCKING_THREADS_PER_USER` set) blocking threads before giving up with `429`. | `30` |
 | `JUSTENCRYPT_MAX_ACTIVE_UPLOADS`              | Maximum number of uploads a session may have in progress at once. | (no limit) |
 | `JUSTENCRYPT_MAX_ACTIVE_DOWNLOADS`            | Maximum number of folder downloads that may run at once, across all users. Each one holds a thread and one of its user's database connections until it finishes; further downloads get `429`. | (no limit) |
+| `JUSTENCRYPT_MAX_BLOCKING_THREADS_PER_USER`   | Maximum number of blocking threads one user's requests may occupy at once. With no limit, a single busy user can take every one and slow down everyone else; set this to keep users from affecting each other. Requests over the limit wait without holding a thread. | (no limit) |
 | `JUSTENCRYPT_DOWNLOAD_STALL_TIMEOUT_SECONDS`  | Seconds a file or folder download waits for the client to read more before it is abandoned, freeing what it holds (for a folder download, its slot and database connection). | `60` |
 | `JUSTENCRYPT_UPLOAD_TTL_SECONDS`              | Seconds an upload can sit idle before it is considered abandoned and removed (checked when a new upload starts, and by the session reaper if enabled). | `86400` |
 | `JUSTENCRYPT_SESSION_IDLE_TIMEOUT_SECONDS`    | A session with no requests for this long expires. | `3600` |
@@ -133,7 +135,7 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 
 ## API Endpoints
 
-The full API, including request and response formats and every status code, is described in [`openapi.yaml`](openapi.yaml). Apart from `GET /`, `POST /session`, preflight `OPTIONS` requests and the admin routes, every route needs the `sid` session cookie set by `POST /session`.
+The full API, including request and response formats and every status code, is described in [`openapi.yaml`](openapi.yaml). Apart from `GET /`, `POST /session`, preflight `OPTIONS` requests and the admin routes, every route needs the `sid` session cookie set by `POST /session`. Any of those routes can answer `429` when the user's own requests in progress kept it waiting for longer than `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`; it can be retried later.
 
 ### Info (`/`)
 - `GET /`: Get server information.

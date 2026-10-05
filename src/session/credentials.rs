@@ -2,7 +2,9 @@ use zxcvbn::{zxcvbn, Score};
 
 use crate::enums::request_error::RequestError;
 
+/// The longest username accepted.
 pub const MAX_USERNAME_BYTES: usize = 64;
+/// The longest password accepted.
 pub const MAX_PASSWORD_BYTES: usize = 1024;
 
 /// A username becomes a directory and file name, so it must be non-empty, at

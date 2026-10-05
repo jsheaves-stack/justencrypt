@@ -1,5 +1,6 @@
 use std::path::{Component, Path};
 
+/// The longest file or folder name accepted.
 pub const MAX_ENTRY_NAME_BYTES: usize = 255;
 
 /// The error message for a name that fails [`is_valid_entry_name`].

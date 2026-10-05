@@ -173,7 +173,7 @@ async fn test_destroy_session_cleans_up_uploads_and_clears_the_cookie() {
         Vec::<std::path::PathBuf>::new()
     );
 
-    let db = session.db_pool.get().unwrap();
+    let db = session.context.pool().get().unwrap();
     assert!(sqlite::get_all_active_uploads(&db).unwrap().is_empty());
 }
 

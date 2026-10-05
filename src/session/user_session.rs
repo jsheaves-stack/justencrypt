@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    io,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -9,10 +10,9 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rocket::tokio::{
-    sync::{mpsc, oneshot, Mutex, OwnedSemaphorePermit, RwLock},
+    sync::{mpsc, oneshot, Mutex, RwLock},
     task,
 };
 use secrecy::SecretString;
@@ -23,14 +23,14 @@ use crate::{
     db::sqlite::{self, FolderContent},
     encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata, MPSC_CHANNEL_CAPACITY},
     enums::db_error::DbError,
-    session::{credentials::is_valid_username, policy::SessionPolicy},
+    session::{credentials::is_valid_username, policy::SessionPolicy, user_context::UserContext},
     util::{
         folder_archive::{self, ChannelWriter, FolderArchive},
-        sharded_path,
         time::unix_now_secs,
     },
 };
 
+/// A chunked upload in progress.
 #[derive(Clone)]
 pub struct UploadState {
     pub file_path: PathBuf,
@@ -47,6 +47,7 @@ pub struct UploadState {
 }
 
 impl UploadState {
+    /// Tracks a new upload to `file_path`, written by `encryptor`.
     pub fn new(file_path: PathBuf, encoded_file_name: String, encryptor: ChunkEncryptor) -> Self {
         Self {
             file_path,
@@ -57,22 +58,27 @@ impl UploadState {
         }
     }
 
+    /// Records activity on the upload, which keeps it from going stale.
     pub fn touch(&self) {
         self.last_updated.store(unix_now_secs(), Ordering::Relaxed);
     }
 
+    /// When the upload last saw activity.
     pub fn last_updated(&self) -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(self.last_updated.load(Ordering::Relaxed))
     }
 
+    /// Whether the upload has been idle for longer than `ttl` at `now_secs`.
     fn is_stale(&self, now_secs: u64, ttl: Duration) -> bool {
         now_secs.saturating_sub(self.last_updated.load(Ordering::Relaxed)) > ttl.as_secs()
     }
 }
 
+/// A logged-in session: one login of one user.
 pub struct UserSession {
-    pub user_path: PathBuf,
-    pub db_pool: Pool<SqliteConnectionManager>,
+    /// The user's database, files and limits, shared with their other
+    /// sessions. All blocking work for the user goes through it.
+    pub context: UserContext,
     pub username: String,
     pub created_at: SystemTime,
     pub session_id: String,
@@ -118,10 +124,14 @@ impl UserSession {
         idle > policy.idle_timeout.as_secs() || age > policy.max_lifetime.as_secs()
     }
 
+    /// Logs `user_name` in: opens their encrypted database with `passphrase`,
+    /// or, with `existing_context` from another of their sessions, checks the
+    /// password against it and shares it. Fails with `UserDoesNotExist` for an
+    /// unknown user and a database error for a wrong password.
     pub async fn open(
         user_name: &str,
         passphrase: &SecretString,
-        existing_pool: Option<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+        existing_context: Option<UserContext>,
         config: &AppConfig,
     ) -> Result<Self, DbError> {
         if !is_valid_username(user_name) {
@@ -135,7 +145,11 @@ impl UserSession {
         let user_name_clone = user_name.clone();
         let user_path = config.user_data_path.join(&user_name);
         let db_config = config.db.clone();
+        let blocking_limit = config.max_blocking_threads_per_user;
 
+        // Logging in happens before the user is authenticated, so it can't
+        // count against the user's limits: anyone who knew a username could
+        // then lock that user out by sending failed logins.
         let session = task::spawn_blocking(move || {
             let user_db_path = user_path.join(format!("{user_name}.db"));
 
@@ -149,22 +163,23 @@ impl UserSession {
                 return Err(DbError::UserDoesNotExist);
             }
 
-            let db_pool = if let Some(pool) = existing_pool {
+            let context = if let Some(context) = existing_context {
                 trace!("Using existing database pool.");
 
                 sqlite::verify_user_db_password(&user_db_path, &passphrase, &db_config)?;
-                pool
+                context
             } else {
                 trace!("Creating new database pool.");
 
-                sqlite::create_user_db_connection(user_db_path, passphrase, &db_config)?
+                let pool = sqlite::create_user_db_connection(user_db_path, passphrase, &db_config)?;
+
+                UserContext::new(pool, user_path, &db_config, blocking_limit)
             };
 
             trace!("DB connection pool ready.");
 
             Ok(Self {
-                user_path,
-                db_pool,
+                context,
                 username: user_name_clone,
                 created_at: SystemTime::now(),
                 session_id: Uuid::new_v4().hyphenated().to_string(),
@@ -178,6 +193,8 @@ impl UserSession {
         Ok(session)
     }
 
+    /// Runs `f` with one of the user's database connections (see
+    /// `UserContext::with_db`).
     async fn with_db<F, R>(&self, f: F) -> Result<R, DbError>
     where
         F: FnOnce(r2d2::PooledConnection<SqliteConnectionManager>) -> Result<R, DbError>
@@ -185,19 +202,11 @@ impl UserSession {
             + 'static,
         R: Send + 'static,
     {
-        let db_pool = self.db_pool.clone();
-        task::spawn_blocking(move || {
-            let db = db_pool.get()?;
-            f(db)
-        })
-        .await
-        .map_err(|e| DbError::ThreadJoinError(e.to_string()))?
+        self.context.with_db(f).await
     }
 
-    pub fn get_user_path(&self) -> PathBuf {
-        self.user_path.clone()
-    }
-
+    /// The name of the encrypted file stored for the file at `file_path`.
+    #[cfg(test)]
     pub async fn get_encoded_file_name(&self, file_path: PathBuf) -> Result<String, DbError> {
         let result = self
             .with_db(move |db| {
@@ -208,6 +217,8 @@ impl UserSession {
         Ok(result)
     }
 
+    /// Records an upload in progress, so its partial file can be found and
+    /// removed if the upload is never finished.
     pub async fn add_active_upload_db(
         &self,
         upload_id: String,
@@ -221,6 +232,7 @@ impl UserSession {
         .await
     }
 
+    /// Removes the record of an upload that has finished or been abandoned.
     pub async fn remove_active_upload_db(&self, upload_id: String) -> Result<(), DbError> {
         self.with_db(move |db| sqlite::remove_active_upload(&db, &upload_id))
             .await
@@ -229,12 +241,8 @@ impl UserSession {
     /// Deletes an upload's partial file and its tracking row. A partial file
     /// that is already gone is not an error.
     pub async fn abort_upload(&self, upload_id: &str, encoded_file_name: &str) {
-        let part_path = sharded_path::get_sharded_path(self.user_path.clone(), encoded_file_name)
-            .await
-            .with_extension("part");
-
-        if let Err(e) = sharded_path::remove_sharded_path(&self.user_path, &part_path).await {
-            if !sharded_path::is_not_found(e.as_ref()) {
+        if let Err(e) = self.context.remove_upload_part(encoded_file_name).await {
+            if e.kind() != io::ErrorKind::NotFound {
                 warn!(
                     "Failed to remove partial file for upload {}: {}",
                     upload_id, e
@@ -295,6 +303,8 @@ impl UserSession {
         .await
     }
 
+    /// Aborts the uploads recorded for sessions not in `active_session_ids`,
+    /// which ended without cleaning up after themselves (a crash, for example).
     pub async fn cleanup_orphaned_uploads(
         &self,
         active_session_ids: HashSet<String>,
@@ -314,6 +324,7 @@ impl UserSession {
         Ok(())
     }
 
+    /// Aborts every upload this session has in progress.
     pub async fn cleanup_own_uploads(&self) -> Result<(), DbError> {
         let active_uploads_db = self
             .with_db(|db| sqlite::get_all_active_uploads(&db))
@@ -374,6 +385,7 @@ impl UserSession {
         .await
     }
 
+    /// Creates the folder at `folder_path`, and any missing parent folders.
     pub async fn add_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
         self.with_db(move |mut db| {
             sqlite::add_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
@@ -419,6 +431,8 @@ impl UserSession {
         .await
     }
 
+    /// The id of the folder at `folder_path`, if it exists.
+    #[cfg(test)]
     pub async fn get_folder_id(&self, folder_path: PathBuf) -> Result<Option<i32>, DbError> {
         let result = self
             .with_db(move |db| {
@@ -429,6 +443,7 @@ impl UserSession {
         Ok(result)
     }
 
+    /// The files and folders directly inside the folder at `folder_path`.
     pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<FolderContent>, DbError> {
         let result = self
             .with_db(move |db| {
@@ -441,28 +456,32 @@ impl UserSession {
 
     /// Starts streaming a folder, with everything below it, as a TAR archive.
     /// Returns once the archive's length is known; its bytes then arrive on
-    /// the returned channel as fast as the client reads them. `permit`, if
-    /// any, is held until the archive is finished, the client goes away, or
-    /// the client reads nothing for `stall_timeout`.
-    pub async fn stream_folder_archive(
+    /// the returned channel as fast as the client reads them. `hold` (the
+    /// download's permits) is kept until the archive is finished, the client
+    /// goes away, or the client reads nothing for `stall_timeout`.
+    pub async fn stream_folder_archive<H: Send + 'static>(
         &self,
         folder_path: PathBuf,
-        permit: Option<OwnedSemaphorePermit>,
+        hold: H,
         stall_timeout: Duration,
     ) -> Result<FolderArchive, DbError> {
         let folder_path = folder_path.to_str().ok_or(DbError::InvalidPath)?.to_owned();
-        let pool = self.db_pool.clone();
+        let connection = self.context.reserve_connection().await?;
+        let context = self.context.clone();
         let username = self.username.clone();
-        let user_path = self.user_path.clone();
         let (ready_tx, ready_rx) = oneshot::channel();
         let (tx, rx) = mpsc::channel(MPSC_CHANNEL_CAPACITY);
         let out = ChannelWriter::new(tx, stall_timeout);
 
-        task::spawn_blocking(move || {
-            let _permit = permit;
+        // The producer occupies one of the user's blocking threads, and one
+        // of their connections, for as long as the download runs.
+        self.context
+            .start_blocking(move || {
+                let _held = (hold, connection);
 
-            folder_archive::produce(pool, &folder_path, &username, &user_path, ready_tx, out);
-        });
+                folder_archive::produce(&context, &folder_path, &username, ready_tx, out);
+            })
+            .await?;
 
         let (len, file_name) = ready_rx
             .await
@@ -471,6 +490,8 @@ impl UserSession {
         Ok(FolderArchive { rx, len, file_name })
     }
 
+    /// The name of the encrypted file stored for the file at `file_path`, with
+    /// its key and size.
     pub async fn get_file_decryption_data(
         &self,
         file_path: PathBuf,

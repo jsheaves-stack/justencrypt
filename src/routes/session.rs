@@ -20,17 +20,22 @@ use crate::{
     AppState,
 };
 
+/// The body of `POST /session`: the credentials to log in with.
 #[derive(Deserialize)]
 pub struct CreateSession {
     username: String,
     password: SecretString,
 }
 
+/// Answers the CORS preflight for `/session`.
 #[options("/")]
 pub fn session_options() -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
+/// Logs in: opens the user's encrypted database with their password and
+/// sets the session cookie. Every failure is the same `401`, so the response
+/// never reveals whether the account exists.
 #[post("/", format = "json", data = "<reqbody>")]
 pub async fn create_session(
     reqbody: Json<CreateSession>,
@@ -53,10 +58,10 @@ pub async fn create_session(
     // Held until the new session is in the store, so concurrent logins for
     // this user don't each create a pool and migrate the database at once.
     let login_guard = state.sessions.lock_login(&user_name).await;
-    let existing_pool = state.sessions.pool_for_user(&user_name).await;
+    let existing_context = state.sessions.context_for_user(&user_name).await;
 
     let session = Arc::new(
-        match UserSession::open(&user_name, &passphrase, existing_pool, &state.config).await {
+        match UserSession::open(&user_name, &passphrase, existing_context, &state.config).await {
             Ok(a) => {
                 trace!("User session opened successfully.");
 
@@ -129,6 +134,8 @@ pub async fn create_session(
     Ok(RequestSuccess::Created)
 }
 
+/// Logs out: ends the session in the cookie, cleans up its uploads in
+/// progress and clears the cookie.
 #[delete("/")]
 pub async fn destroy_session(
     state: &State<AppState>,

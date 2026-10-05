@@ -6,6 +6,7 @@
 
 use std::io::{self, Write};
 
+/// Everything in a TAR archive comes in blocks of this many bytes.
 pub const BLOCK_SIZE: u64 = 512;
 
 /// Length of the end-of-archive marker: two zero blocks.
@@ -18,6 +19,7 @@ const MAX_USTAR_SIZE: u64 = 0o777_7777_7777;
 
 const ZERO_BLOCK: [u8; BLOCK_SIZE as usize] = [0; BLOCK_SIZE as usize];
 
+/// What an archive entry is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EntryKind {
     File,
@@ -79,11 +81,13 @@ pub fn write_padding(w: &mut impl Write, len: u64) -> io::Result<()> {
     w.write_all(&ZERO_BLOCK[..padding])
 }
 
+/// Writes the end-of-archive marker: two zero blocks.
 pub fn write_end(w: &mut impl Write) -> io::Result<()> {
     w.write_all(&ZERO_BLOCK)?;
     w.write_all(&ZERO_BLOCK)
 }
 
+/// `len` rounded up to a whole number of blocks.
 fn padded_len(len: u64) -> u64 {
     len.div_ceil(BLOCK_SIZE) * BLOCK_SIZE
 }
@@ -118,10 +122,13 @@ fn pax_record(key: &str, value: &str) -> String {
     format!("{len} {key}={value}\n")
 }
 
+/// How many digits `n` has in decimal.
 fn decimal_digits(n: usize) -> usize {
     n.to_string().len()
 }
 
+/// A ustar header block for an entry named `name` (at most 100 bytes), with
+/// its checksum filled in.
 fn ustar_header(name: &[u8], type_flag: u8, size: u64, mtime: u64, mode: u32) -> [u8; 512] {
     let mut header = [0u8; 512];
 

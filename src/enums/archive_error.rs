@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::enums::db_error::DbError;
 
+/// Why a folder archive couldn't be finished.
 #[derive(Debug, Error)]
 pub enum ArchiveError {
     #[error(transparent)]

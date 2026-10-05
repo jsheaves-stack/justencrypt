@@ -173,7 +173,7 @@ async fn test_init_upload_rejects_invalid_names() {
 
     assert!(session.active_uploads.lock().await.is_empty());
     assert!(
-        sqlite::get_all_active_uploads(&session.db_pool.get().unwrap())
+        sqlite::get_all_active_uploads(&session.context.pool().get().unwrap())
             .unwrap()
             .is_empty()
     );

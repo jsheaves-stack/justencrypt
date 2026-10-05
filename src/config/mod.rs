@@ -30,6 +30,7 @@ const ENV_KEYS: &[(&str, &str)] = &[
     ("ADDRESS", "server.address"),
     ("PORT", "server.port"),
     ("WORKERS", "server.workers"),
+    ("MAX_BLOCKING_THREADS", "server.max_blocking_threads"),
     ("KEEP_ALIVE", "server.keep_alive"),
     ("ROCKET_SECRET_KEY", "server.secret_key"),
     ("TLS_CERT_PATH", "server.tls_cert_path"),
@@ -83,6 +84,10 @@ const ENV_KEYS: &[(&str, &str)] = &[
     ("MAX_ACTIVE_UPLOADS", "max_active_uploads"),
     ("MAX_ACTIVE_DOWNLOADS", "max_active_downloads"),
     (
+        "MAX_BLOCKING_THREADS_PER_USER",
+        "max_blocking_threads_per_user",
+    ),
+    (
         "DOWNLOAD_STALL_TIMEOUT_SECONDS",
         "download_stall_timeout_seconds",
     ),
@@ -90,6 +95,7 @@ const ENV_KEYS: &[(&str, &str)] = &[
     ("ORPHAN_SCAN_ENABLED", "orphan_scan_enabled"),
 ];
 
+/// The server's whole configuration, read from `JUSTENCRYPT_*` variables.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -114,6 +120,9 @@ pub struct AppConfig {
     /// when unset. Each one holds a blocking thread and a database connection
     /// until it finishes.
     pub max_active_downloads: Option<NonZeroUsize>,
+    /// Most blocking threads one user's requests may occupy at once; no limit
+    /// when unset, so a single user may use all of them.
+    pub max_blocking_threads_per_user: Option<NonZeroUsize>,
     /// How long a file or folder download may wait for the client to read
     /// more before it is abandoned, freeing what it holds.
     pub download_stall_timeout_seconds: NonZeroU64,
@@ -123,12 +132,17 @@ pub struct AppConfig {
     pub orphan_scan_enabled: bool,
 }
 
+/// How the server listens, how many threads it runs, and how it logs.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
     pub address: IpAddr,
     pub port: u16,
+    /// Threads that run requests.
     pub workers: NonZeroUsize,
+    /// Threads for work that blocks (database queries, file access, image
+    /// decoding), shared by every user.
+    pub max_blocking_threads: NonZeroUsize,
     pub keep_alive: u32,
     /// Signs the private session cookies. Required in release builds; debug
     /// builds let Rocket generate one for each launch.
@@ -156,6 +170,8 @@ pub struct LimitsConfig {
     pub string: ByteUnit,
 }
 
+/// When sessions expire, how many a user may have, and how often expired ones
+/// are cleared out.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct SessionConfig {
@@ -194,6 +210,7 @@ pub struct DbConfig {
     pub connection_timeout_seconds: NonZeroU64,
 }
 
+/// How much the server itself logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub enum LogLevel {
@@ -205,6 +222,7 @@ pub enum LogLevel {
     Trace,
 }
 
+/// How much Rocket, the web framework, logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub enum RocketLogLevel {
@@ -214,6 +232,8 @@ pub enum RocketLogLevel {
     Debug,
 }
 
+/// SQLite's `synchronous` setting: how hard it waits for writes to reach the
+/// disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub enum SyncMode {
@@ -223,6 +243,7 @@ pub enum SyncMode {
     Extra,
 }
 
+/// SQLite's `temp_store` setting: where it keeps temporary tables and indexes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub enum TempStore {
@@ -284,6 +305,7 @@ parse_names!(TempStore {
 });
 
 impl LogLevel {
+    /// The level as the logger takes it.
     pub fn filter(self) -> LevelFilter {
         match self {
             Self::Off => LevelFilter::Off,
@@ -297,6 +319,7 @@ impl LogLevel {
 }
 
 impl RocketLogLevel {
+    /// The level as the logger takes it, for Rocket's own messages.
     pub fn filter(self) -> LevelFilter {
         match self {
             Self::Off => LevelFilter::Off,
@@ -308,6 +331,7 @@ impl RocketLogLevel {
 }
 
 impl SyncMode {
+    /// The mode as written in a `PRAGMA synchronous` statement.
     pub fn as_sql(self) -> &'static str {
         match self {
             Self::Off => "OFF",
@@ -319,6 +343,7 @@ impl SyncMode {
 }
 
 impl TempStore {
+    /// The setting as written in a `PRAGMA temp_store` statement.
     pub fn as_sql(self) -> &'static str {
         match self {
             Self::Default => "DEFAULT",
@@ -343,6 +368,7 @@ impl Default for AppConfig {
             admin_api_key: None,
             max_active_uploads: None,
             max_active_downloads: None,
+            max_blocking_threads_per_user: None,
             download_stall_timeout_seconds: NonZeroU64::new(60).unwrap(),
             upload_ttl_seconds: NonZeroU64::new(24 * 60 * 60).unwrap(),
             orphan_scan_enabled: false,
@@ -356,6 +382,7 @@ impl Default for ServerConfig {
             address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8000,
             workers: NonZeroUsize::new(16).unwrap(),
+            max_blocking_threads: NonZeroUsize::new(512).unwrap(),
             keep_alive: 5,
             secret_key: None,
             tls_cert_path: None,
@@ -420,6 +447,7 @@ impl Default for ThumbnailConfig {
 }
 
 impl LimitsConfig {
+    /// The limits as Rocket's `limits` setting.
     pub fn to_rocket(&self) -> Limits {
         Limits::default()
             .limit("form", self.form)
@@ -478,6 +506,8 @@ impl AppConfig {
         Ok(config)
     }
 
+    /// Checks the values that are valid on their own but not together, or
+    /// that need more than a type to check, naming the variable at fault.
     fn validate(&self) -> Result<(), ConfigError> {
         let invalid = |name: &str, message: &str| {
             Err(ConfigError::Invalid(format!(
@@ -535,6 +565,7 @@ impl AppConfig {
             .merge(("address", server.address))
             .merge(("port", server.port))
             .merge(("workers", server.workers))
+            .merge(("max_blocking", server.max_blocking_threads))
             .merge(("keep_alive", server.keep_alive))
             .merge(("ident", false))
             .merge(("limits", self.limits.to_rocket()));
@@ -558,10 +589,12 @@ impl AppConfig {
         }
     }
 
+    /// How long an upload can sit idle before it is considered abandoned.
     pub fn upload_ttl(&self) -> Duration {
         Duration::from_secs(self.upload_ttl_seconds.get())
     }
 
+    /// How long a download may wait for the client to read more.
     pub fn download_stall_timeout(&self) -> Duration {
         Duration::from_secs(self.download_stall_timeout_seconds.get())
     }

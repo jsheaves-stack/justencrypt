@@ -1,8 +1,8 @@
 use std::{
     collections::BTreeMap,
     io::Read,
-    num::{NonZeroU64, NonZeroUsize},
-    time::Duration,
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    time::{Duration, Instant},
 };
 
 use rocket::{
@@ -21,7 +21,6 @@ use crate::{
         file::put_file,
         folder::{create_folder, download_folder, get_folder},
     },
-    util::sharded_path::get_sharded_path,
     AppState,
 };
 
@@ -260,7 +259,7 @@ async fn test_download_leaves_out_entries_with_invalid_names() {
 
     let state = client.rocket().state::<AppState>().unwrap();
     let session = state.sessions.snapshot().await.pop().unwrap();
-    let db = session.db_pool.get().unwrap();
+    let db = session.context.pool().get().unwrap();
     let mixed_id = sqlite::get_folder_id(&db, "mixed").unwrap().unwrap();
 
     // No blobs exist for these rows: if one were not left out, reading it
@@ -385,6 +384,34 @@ async fn test_download_beyond_the_limit_is_rejected() {
     );
 }
 
+// A user's folder downloads may use half of their connections. One more waits
+// for a slot, up to the connection timeout, and then is turned away.
+#[async_test]
+async fn test_download_beyond_the_users_share_waits_then_is_rejected() {
+    let (client, cookie, _user) = download_client(|config| {
+        config.db.max_connections = NonZeroU32::new(2).unwrap();
+        config.db.connection_timeout_seconds = NonZeroU64::new(1).unwrap();
+    })
+    .await;
+
+    put(&client, &cookie, "share/big.bin", &patterned(1024 * 1024)).await;
+
+    // Not read, so it keeps running and holds the user's only download slot.
+    let running = download(&client, &cookie, "share").await;
+
+    assert_eq!(running.status(), Status::Ok);
+
+    let started = Instant::now();
+    let waiting = download(&client, &cookie, "share").await;
+
+    assert_eq!(waiting.status(), Status::TooManyRequests);
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
 #[async_test]
 async fn test_download_is_abandoned_when_the_client_stops_reading() {
     let (client, cookie, _user) = download_client(|config| {
@@ -443,7 +470,7 @@ async fn test_download_is_a_snapshot_of_when_it_started() {
     // pass, and the file pass hasn't begun.
     let state = client.rocket().state::<AppState>().unwrap();
     let session = state.sessions.snapshot().await.pop().unwrap();
-    let mut db = session.db_pool.get().unwrap();
+    let mut db = session.context.pool().get().unwrap();
     let snap_id = sqlite::get_folder_id(&db, "snap").unwrap().unwrap();
     let inserts = db.transaction().unwrap();
     let mut expected = BTreeMap::from([
@@ -527,7 +554,7 @@ async fn test_download_with_a_missing_blob_ends_short() {
         .get_encoded_file_name("gone/b.txt".into())
         .await
         .unwrap();
-    let blob = get_sharded_path(session.get_user_path(), &encoded_name).await;
+    let blob = session.context.blob_path(&encoded_name);
 
     fs::remove_file(blob).unwrap();
 

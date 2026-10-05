@@ -12,10 +12,13 @@ use crate::{
     AppState,
 };
 
+/// The session of the request's `sid` cookie. A request without a live
+/// session is refused with `401`.
 pub struct AuthenticatedSession {
     pub session: Arc<UserSession>,
 }
 
+/// The request's `Range` header, if any.
 pub struct RangeHeader(pub Option<String>);
 
 #[async_trait]
@@ -31,6 +34,8 @@ impl<'r> FromRequest<'r> for RangeHeader {
     }
 }
 
+/// Proof that the request carries the admin API key in `X-Admin-Api-Key`. Other
+/// requests are refused with `401`.
 pub struct AdminGuard;
 
 #[async_trait]

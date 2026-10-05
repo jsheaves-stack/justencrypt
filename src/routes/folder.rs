@@ -3,16 +3,18 @@ use rocket::{delete, get, options, patch, put, serde::json::Json, State};
 use crate::{
     db::sqlite::FolderContent,
     enums::{request_error::RequestError, request_success::RequestSuccess},
-    util::{sharded_path::remove_blob_and_thumbnail, unrestricted_path::UnrestrictedPath},
+    util::unrestricted_path::UnrestrictedPath,
     web::{forwarding_guards::AuthenticatedSession, responders::ArchiveResponder},
     AppState,
 };
 
+/// Answers the CORS preflight for `/folder/<folder_path..>`.
 #[options("/<_folder_path..>")]
 pub fn folder_options(_folder_path: UnrestrictedPath) -> Result<RequestSuccess, RequestError> {
     Ok(RequestSuccess::NoContent)
 }
 
+/// Lists the files and folders directly inside the folder at `folder_path`.
 #[get("/<folder_path..>")]
 pub async fn get_folder(
     folder_path: UnrestrictedPath,
@@ -27,15 +29,26 @@ pub async fn get_folder(
     Ok(Json(folder_contents))
 }
 
-// Ranks ahead of `get_folder`, so it handles every request whose query
-// string has `download` in it.
+/// Streams the folder at `folder_path`, with everything below it, as a TAR
+/// archive. It ranks ahead of `get_folder`, so it handles every request whose
+/// query string has `download` in it.
 #[get("/<folder_path..>?download")]
 pub async fn download_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
     state: &State<AppState>,
 ) -> Result<ArchiveResponder, RequestError> {
-    let permit = state
+    // Waits while the user already has as many folder downloads running as
+    // they may. This comes first, so a download waiting on its own user never
+    // holds one of the server-wide permits other users need.
+    let user_permit = auth
+        .session
+        .context
+        .folder_download_permit()
+        .await
+        .ok_or(RequestError::TooManyActiveDownloads)?;
+
+    let server_permit = state
         .download_semaphore
         .as_ref()
         .map(|semaphore| semaphore.clone().try_acquire_owned())
@@ -46,7 +59,7 @@ pub async fn download_folder(
         .session
         .stream_folder_archive(
             folder_path.to_path_buf(),
-            permit,
+            (server_permit, user_permit),
             state.config.download_stall_timeout(),
         )
         .await?;
@@ -54,6 +67,7 @@ pub async fn download_folder(
     Ok(ArchiveResponder(archive))
 }
 
+/// Creates the folder at `folder_path`, and any missing parent folders.
 #[put("/<folder_path..>")]
 pub async fn create_folder(
     folder_path: UnrestrictedPath,
@@ -68,13 +82,13 @@ pub async fn create_folder(
     Ok(RequestSuccess::Created)
 }
 
+/// Deletes the folder at `folder_path` and everything below it.
 #[delete("/<folder_path..>")]
 pub async fn delete_folder(
     folder_path: UnrestrictedPath,
     auth: AuthenticatedSession,
 ) -> Result<RequestSuccess, RequestError> {
     let session = auth.session.clone();
-    let user_path = session.get_user_path();
 
     // All database rows go in one transaction; the blobs are removed only once
     // it has committed, so a failure can never leave rows without their data.
@@ -83,12 +97,16 @@ pub async fn delete_folder(
         .await?;
 
     for encoded_name in blobs {
-        remove_blob_and_thumbnail(&user_path, &encoded_name).await;
+        session
+            .context
+            .remove_blob_and_thumbnail(&encoded_name)
+            .await;
     }
 
     Ok(RequestSuccess::NoContent)
 }
 
+/// Renames the folder at `folder_path`, moves it to another folder, or both.
 #[patch("/<folder_path..>", data = "<patch_data>")]
 pub async fn patch_folder(
     folder_path: UnrestrictedPath,
@@ -111,6 +129,7 @@ pub async fn patch_folder(
     Ok(RequestSuccess::NoContent)
 }
 
+/// The body of `PATCH /folder`: a new name, a new parent folder, or both.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PatchFolderData {

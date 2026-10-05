@@ -1,5 +1,8 @@
 use thiserror::Error;
 
+use crate::enums::blocking_error::BlockingError;
+
+/// Why a database operation failed.
 #[derive(Debug, Error)]
 pub enum DbError {
     #[error("Generic database error: {0}")]
@@ -19,6 +22,10 @@ pub enum DbError {
 
     #[error("Connection pool error: {0}")]
     PoolError(#[from] r2d2::Error),
+
+    /// See [`BlockingError::Busy`].
+    #[error("Timed out waiting for the user's other work to finish")]
+    Busy,
 
     #[error("Thread join error: {0}")]
     ThreadJoinError(String),
@@ -49,4 +56,13 @@ pub enum DbError {
 
     #[error("Database migration failed: {0}")]
     Migration(String),
+}
+
+impl From<BlockingError> for DbError {
+    fn from(error: BlockingError) -> Self {
+        match error {
+            BlockingError::Busy => DbError::Busy,
+            BlockingError::Failed(e) => DbError::ThreadJoinError(e),
+        }
+    }
 }

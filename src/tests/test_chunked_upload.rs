@@ -19,7 +19,6 @@ use crate::{
     encryption::CHUNK_SIZE,
     routes::file::{finalize_upload, get_file, init_upload, upload_chunk, InitUploadResponse},
     session::user_session::UserSession,
-    util::sharded_path::get_sharded_path,
     AppState,
 };
 
@@ -256,13 +255,11 @@ async fn part_path_of(session: &UserSession, upload_id: &str) -> std::path::Path
         .encoded_file_name
         .clone();
 
-    get_sharded_path(session.get_user_path(), &encoded_file_name)
-        .await
-        .with_extension("part")
+    session.context.upload_part_path(&encoded_file_name)
 }
 
 fn active_upload_rows(session: &UserSession) -> Vec<String> {
-    let db = session.db_pool.get().unwrap();
+    let db = session.context.pool().get().unwrap();
 
     sqlite::get_all_active_uploads(&db)
         .unwrap()
@@ -680,7 +677,8 @@ async fn test_failed_finalize_leaves_no_upload_behind() {
     let state = client.rocket().state::<AppState>().unwrap();
     let session = state.sessions.snapshot().await.pop().unwrap();
     session
-        .db_pool
+        .context
+        .pool()
         .get()
         .unwrap()
         .execute_batch(

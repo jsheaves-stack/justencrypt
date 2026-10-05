@@ -4,10 +4,10 @@ use config::AppConfig;
 use rocket::{
     async_trait,
     fairing::{Fairing, Info, Kind},
-    launch,
     shield::{Hsts, Shield},
     time::Duration,
     tokio::sync::Semaphore,
+    Build, Rocket,
 };
 use routes::{
     admin::{
@@ -42,6 +42,7 @@ pub mod web;
 #[macro_use]
 extern crate rocket;
 
+/// State every request shares.
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub sessions: Arc<SessionStore>,
@@ -52,6 +53,8 @@ pub struct AppState {
     pub download_semaphore: Option<Arc<Semaphore>>,
 }
 
+/// Cleans up the uploads every live session has in progress when the server
+/// shuts down.
 pub struct CleanupOnShutdown;
 
 #[async_trait]
@@ -79,8 +82,9 @@ impl Fairing for CleanupOnShutdown {
     }
 }
 
-#[launch]
-async fn rocket() -> _ {
+/// Reads the configuration from the environment (and `.env`), sets up
+/// logging, then runs the server until it shuts down.
+fn main() {
     dotenv::dotenv().ok();
 
     // The logger isn't set up yet, and its level comes from this config.
@@ -94,6 +98,32 @@ async fn rocket() -> _ {
         },
     };
 
+    init_logger(&config);
+
+    trace!("Loaded .env file and initialized logger.");
+
+    // Rocket's `#[launch]` builds the async runtime from Rocket's own config
+    // sources, before any of ours is read, so the worker and blocking thread
+    // counts configured here would be ignored. The runtime is built here
+    // instead, the same way Rocket builds it.
+    let result = rocket::async_run(
+        build_rocket(config.clone()).launch(),
+        config.server.workers.get(),
+        config.server.max_blocking_threads.get(),
+        true,
+        "rocket-worker-thread",
+    );
+
+    if let Err(e) = result {
+        error!("The server stopped: {}", e.pretty_print());
+
+        process::exit(1);
+    }
+}
+
+/// Sets up logging at the configured levels, with each line naming the
+/// source file and line it came from.
+fn init_logger(config: &AppConfig) {
     env_logger::Builder::new()
         .format(|buf, record| {
             let mut file = record.file().unwrap_or("unknown");
@@ -125,14 +155,24 @@ async fn rocket() -> _ {
         .filter_level(config.server.log_level.filter())
         .filter_module("rocket", config.server.rocket_log_level.filter())
         .init();
+}
 
-    trace!("Loaded .env file and initialized logger.");
-
+/// Builds the server: its state, fairings and routes, as configured.
+fn build_rocket(config: Arc<AppConfig>) -> Rocket<Build> {
     let semaphore_tickets = config.thumbnail_concurrency();
 
     info!(
         "Thumbnails: at most {} generated at once, each decode limited to {}.",
         semaphore_tickets, config.thumbnail.max_decode_memory
+    );
+
+    info!(
+        "Blocking threads: at most {} in all, {}.",
+        config.server.max_blocking_threads,
+        match config.max_blocking_threads_per_user {
+            Some(limit) => format!("at most {} per user", limit),
+            None => "no limit per user (JUSTENCRYPT_MAX_BLOCKING_THREADS_PER_USER)".to_string(),
+        }
     );
 
     match config.max_active_downloads {

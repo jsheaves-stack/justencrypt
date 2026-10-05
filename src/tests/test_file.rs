@@ -11,7 +11,6 @@ use super::*;
 use crate::{
     db::sqlite,
     routes::file::{delete_file, file_options, get_file, patch_file, put_file},
-    util::sharded_path::get_sharded_path,
     AppState,
 };
 
@@ -49,7 +48,7 @@ async fn test_put_file() {
         .await
         .unwrap();
 
-    let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
+    let sharded_path = session.context.blob_path(&encoded_file_name);
 
     assert!(tokio::fs::metadata(sharded_path).await.is_ok());
 }
@@ -358,7 +357,7 @@ async fn test_put_file_over_the_file_limit_is_rejected_and_leaves_nothing_behind
         .get_by_id(&session_id)
         .await
         .unwrap();
-    let db = session.db_pool.get().unwrap();
+    let db = session.context.pool().get().unwrap();
 
     assert!(sqlite::get_all_active_uploads(&db).unwrap().is_empty());
 }
@@ -679,4 +678,30 @@ async fn test_get_file_is_abandoned_when_the_client_stops_reading() {
 
     assert!(body.len() < data.len(), "{}", body.len());
     assert_eq!(body, &data[..body.len()]);
+}
+
+// The encrypted file is opened before the response starts, so one that is
+// missing is reported as an error instead of a body cut short.
+#[async_test]
+async fn test_get_file_with_a_missing_blob_is_an_error() {
+    let (client, cookie, _test_user) = download_client().await;
+
+    upload(&client, &cookie, "gone.bin", vec![7u8; 1000]).await;
+
+    let state = client.rocket().state::<AppState>().unwrap();
+    let session = state.sessions.snapshot().await.pop().unwrap();
+    let encoded_name = session
+        .get_encoded_file_name("gone.bin".into())
+        .await
+        .unwrap();
+
+    std::fs::remove_file(session.context.blob_path(&encoded_name)).unwrap();
+
+    let response = client
+        .get("/file/gone.bin")
+        .private_cookie(cookie)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status(), Status::InternalServerError);
 }

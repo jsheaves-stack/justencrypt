@@ -1,54 +1,45 @@
-use std::{path::PathBuf, time::Duration};
+use std::{mem, time::Duration};
 
 use orion::aead;
-use rocket::tokio::{
-    fs::File,
-    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
-    sync::mpsc::Sender,
-    time,
-};
+use rocket::tokio::{sync::mpsc::Sender, time};
 
 use crate::{
     encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE, INDEX_LEN},
     enums::encryption_error::EncryptionError,
+    session::user_storage::BlobFile,
 };
 
+/// Decrypts a file of encrypted chunks, checking that every chunk is intact
+/// and in its place.
 pub struct ChunkDecryptor {
-    file_path: PathBuf,
+    file: BlobFile,
     metadata: FileEncryptionMetadata,
 }
 
 impl ChunkDecryptor {
-    pub async fn new(
-        file_path: PathBuf,
-        metadata: FileEncryptionMetadata,
-    ) -> Result<Self, EncryptionError> {
+    /// Decrypts `file` with the key in `metadata`. Fails for a format version
+    /// this code can't read.
+    pub fn new(file: BlobFile, metadata: FileEncryptionMetadata) -> Result<Self, EncryptionError> {
         metadata.check_version()?;
 
-        Ok(ChunkDecryptor {
-            file_path,
-            metadata,
-        })
+        Ok(ChunkDecryptor { file, metadata })
     }
 
-    /// Reads and decrypts the next chunk, which must be chunk `chunk_index`,
-    /// and returns its plaintext; empty at the end of the file.
+    /// Reads and decrypts chunk `chunk_index`, using `encrypted_buffer` to
+    /// read it into, and returns its plaintext; empty past the end of the
+    /// file.
     async fn decrypt_chunk(
         &self,
-        file: &mut File,
         chunk_index: u64,
-        encrypted_buffer: &mut [u8],
+        encrypted_buffer: &mut Vec<u8>,
     ) -> Result<Vec<u8>, EncryptionError> {
-        let mut bytes_read = 0;
+        let position = chunk_index * ENCRYPTED_CHUNK_SIZE as u64;
+        let (buffer, bytes_read) = self
+            .file
+            .read_at(mem::take(encrypted_buffer), position)
+            .await?;
 
-        while bytes_read < ENCRYPTED_CHUNK_SIZE {
-            match file.read(&mut encrypted_buffer[bytes_read..]).await {
-                Ok(0) => break,
-                Ok(n) => bytes_read += n,
-
-                Err(e) => return Err(EncryptionError::Io(e)),
-            }
-        }
+        *encrypted_buffer = buffer;
 
         if bytes_read == 0 {
             return Ok(Vec::new());
@@ -97,29 +88,12 @@ impl ChunkDecryptor {
     ) -> Result<(), EncryptionError> {
         let first_chunk_index = start / CHUNK_SIZE as u64;
         let last_chunk_index = end / CHUNK_SIZE as u64;
-        let disk_offset = first_chunk_index * ENCRYPTED_CHUNK_SIZE as u64;
-
-        let mut file = match File::open(&self.file_path).await {
-            Ok(f) => f,
-            Err(e) => {
-                error!("Failed to open file {:?}: {}", self.file_path, e);
-
-                return Err(EncryptionError::Io(e));
-            },
-        };
-
-        if let Err(e) = file.seek(SeekFrom::Start(disk_offset)).await {
-            error!("Seek error: {}", e);
-
-            return Err(EncryptionError::Io(e));
-        }
-
         let mut encrypted_buffer = vec![0u8; ENCRYPTED_CHUNK_SIZE];
         let mut sent = 0;
 
         for chunk_index in first_chunk_index..=last_chunk_index {
             let mut chunk = self
-                .decrypt_chunk(&mut file, chunk_index, &mut encrypted_buffer)
+                .decrypt_chunk(chunk_index, &mut encrypted_buffer)
                 .await
                 .inspect_err(|e| error!("{}", e))?;
 
@@ -155,7 +129,7 @@ impl ChunkDecryptor {
                 got: sent,
             };
 
-            error!("{} ({:?})", error, self.file_path);
+            error!("{}", error);
 
             return Err(error);
         }
@@ -163,14 +137,15 @@ impl ChunkDecryptor {
         Ok(())
     }
 
+    /// Decrypts the whole file into memory. Only for small files, such as
+    /// thumbnails.
     pub async fn decrypt_all(&mut self) -> Result<Vec<u8>, EncryptionError> {
         let mut result = Vec::with_capacity(self.metadata.total_size as usize);
-        let mut file = File::open(&self.file_path).await?;
         let mut encrypted_buffer = vec![0u8; ENCRYPTED_CHUNK_SIZE];
 
         for chunk_index in 0u64.. {
             let decrypted_chunk = self
-                .decrypt_chunk(&mut file, chunk_index, &mut encrypted_buffer)
+                .decrypt_chunk(chunk_index, &mut encrypted_buffer)
                 .await?;
 
             if decrypted_chunk.is_empty() {

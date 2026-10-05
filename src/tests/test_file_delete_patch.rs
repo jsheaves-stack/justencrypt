@@ -11,7 +11,6 @@ use crate::{
         file::{delete_file, file_options, get_file, patch_file, put_file},
         folder::{create_folder, get_folder},
     },
-    util::sharded_path::get_sharded_path,
     AppState,
 };
 
@@ -46,7 +45,7 @@ async fn test_delete_file_success() {
         .get_encoded_file_name(file_path.into())
         .await
         .unwrap();
-    let sharded_path = get_sharded_path(session.get_user_path().clone(), &encoded_file_name).await;
+    let sharded_path = session.context.blob_path(&encoded_file_name);
     assert!(tokio::fs::metadata(&sharded_path).await.is_ok());
 
     drop(session);

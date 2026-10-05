@@ -18,6 +18,8 @@ use crate::{
     util::names::{is_valid_entry_name, is_valid_entry_path, INVALID_ENTRY_NAME_MESSAGE},
 };
 
+/// Checks that `password` opens the encrypted database at `db_path`, without
+/// changing anything. Fails with the database's error if it doesn't.
 pub fn verify_user_db_password(
     db_path: &Path,
     password: &SecretString,
@@ -51,6 +53,9 @@ fn migration_error_summary(error: &rusqlite_migration::Error) -> String {
     }
 }
 
+/// Opens a user's encrypted database: checks `password`, brings the schema up
+/// to date, and returns a pool of connections set up per `config`. A wrong
+/// password fails at once, before any pool exists.
 pub fn create_user_db_connection(
     db_path: PathBuf,
     password: SecretString,
@@ -191,6 +196,8 @@ fn get_or_create_folder(conn: &Connection, folder_path_str: &str) -> Result<i32,
     Ok(current_id)
 }
 
+/// The id of the folder at `folder_path_str`, creating it and any missing
+/// parent folders (in one transaction) if needed.
 fn get_folder_id_and_create_if_missing(
     db: &mut PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
@@ -212,6 +219,8 @@ fn get_folder_id_and_create_if_missing(
     Ok(folder_id)
 }
 
+/// The id of the folder at `folder_path_str`, or `None` if any part of the path
+/// is missing.
 pub fn get_folder_id(db: &Connection, folder_path_str: &str) -> Result<Option<i32>, DbError> {
     let path = Path::new(folder_path_str.trim_matches('/'));
     let mut current_id = 1;
@@ -249,6 +258,8 @@ pub fn get_folder_id(db: &Connection, folder_path_str: &str) -> Result<Option<i3
     Ok(Some(current_id))
 }
 
+/// The encrypted file's name stored for the file at `full_file_path`.
+#[cfg(test)]
 pub fn get_encoded_file_name(
     db: &PooledConnection<SqliteConnectionManager>,
     full_file_path: &str,
@@ -410,6 +421,9 @@ pub fn delete_file(
     Ok(deleted_encoded_name)
 }
 
+/// The name of the encrypted file stored for the file at `file_path_str`,
+/// with its key, format version and size. Fails with `NotFound` if there is
+/// no such file.
 pub fn get_file_decryption_data(
     db: &PooledConnection<SqliteConnectionManager>,
     file_path_str: &str,
@@ -554,6 +568,7 @@ pub fn for_each_archive_entry<E: From<DbError>>(
     Ok(())
 }
 
+/// The name of the folder with the id `folder_id`.
 pub fn get_folder_name(db: &Connection, folder_id: i32) -> Result<String, DbError> {
     Ok(db.query_row(
         "SELECT name FROM folders WHERE id = ?1",
@@ -562,6 +577,7 @@ pub fn get_folder_name(db: &Connection, folder_id: i32) -> Result<String, DbErro
     )?)
 }
 
+/// One entry of a folder listing.
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum FolderContent {
@@ -569,6 +585,7 @@ pub enum FolderContent {
     Folder(Folder),
 }
 
+/// A file in a folder listing.
 #[derive(Deserialize, Serialize)]
 pub struct File {
     pub file_extension: Option<String>,
@@ -578,6 +595,7 @@ pub struct File {
     pub last_modified_date: Option<String>,
 }
 
+/// A folder in a folder listing, with the totals of everything below it.
 #[derive(Deserialize, Serialize)]
 pub struct Folder {
     pub file_name: String,
@@ -588,6 +606,8 @@ pub struct Folder {
     pub folder_count: u64,
 }
 
+/// The files and folders directly inside the folder at `folder_path_str`, in
+/// no particular order. Fails with `NotFound` if there is no such folder.
 pub fn get_folder(
     db: &PooledConnection<SqliteConnectionManager>,
     folder_path_str: &str,
@@ -709,6 +729,8 @@ pub fn delete_folder_tree(
     Ok(blobs)
 }
 
+/// Creates the folder at `path_str`, and any missing parent folders.
+/// Succeeds also when it already exists.
 pub fn add_folder(
     db: &mut PooledConnection<SqliteConnectionManager>,
     path_str: &str,
@@ -737,6 +759,8 @@ fn update_error(e: rusqlite::Error, what: &str) -> DbError {
     }
 }
 
+/// Fails with `InvalidInput` unless `new_name`, if given, is a valid entry
+/// name.
 fn check_new_name(new_name: Option<&str>) -> Result<(), DbError> {
     match new_name {
         Some(name) if !is_valid_entry_name(name) => Err(DbError::InvalidInput(
@@ -894,6 +918,8 @@ pub fn update_file(
     Ok(())
 }
 
+/// Records an upload in progress, by `session_id`, so its partial file can be
+/// found and removed if the upload is never finished.
 pub fn add_active_upload(
     db: &rusqlite::Connection,
     upload_id: &str,
@@ -910,6 +936,7 @@ pub fn add_active_upload(
     .map_err(|e| DbError::FailedToAddFileToDb(e.to_string()))
 }
 
+/// Removes the record of the upload `upload_id`.
 pub fn remove_active_upload(db: &rusqlite::Connection, upload_id: &str) -> Result<(), DbError> {
     db.execute(
         "DELETE FROM active_uploads WHERE upload_id = ?1",
@@ -933,6 +960,7 @@ pub fn get_all_encoded_names(db: &rusqlite::Connection) -> Result<Vec<String>, D
     Ok(names)
 }
 
+/// Every upload in progress, as (upload id, session id, encrypted file name).
 pub fn get_all_active_uploads(
     db: &rusqlite::Connection,
 ) -> Result<Vec<(String, String, String)>, DbError> {

@@ -19,6 +19,9 @@ use crate::{
 /// download; a whole chunk at a time avoids both.
 const MAX_BODY_CHUNK: usize = CHUNK_SIZE;
 
+/// A file download: the decrypted bytes `start..=end` of a `total_size`-byte
+/// file as they arrive on `rx`, with the matching `Content-Length` and, for a
+/// range, `Content-Range`.
 pub struct RangeResponder {
     pub rx: mpsc::Receiver<Vec<u8>>,
     pub status: Status,
@@ -136,9 +139,9 @@ impl<'r> Responder<'r, 'static> for RequestError {
             },
             RequestError::NotFound => Status::NotFound,
             RequestError::RangeNotSatisfiable { .. } => Status::RangeNotSatisfiable,
-            RequestError::TooManyActiveUploads | RequestError::TooManyActiveDownloads => {
-                Status::TooManyRequests
-            },
+            RequestError::TooManyActiveUploads
+            | RequestError::TooManyActiveDownloads
+            | RequestError::Busy => Status::TooManyRequests,
             RequestError::PayloadTooLarge => Status::PayloadTooLarge,
             RequestError::AccountAlreadyExists | RequestError::Conflict(_) => Status::Conflict,
         };

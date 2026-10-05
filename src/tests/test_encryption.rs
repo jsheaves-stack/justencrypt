@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, io::Cursor};
+use std::{collections::BTreeMap, io::Cursor, path::PathBuf};
 
 use rocket::{
     async_test,
@@ -12,14 +12,21 @@ use crate::{
         FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE,
     },
     enums::encryption_error::EncryptionError,
+    session::user_context::UserContext,
+    tests::storage_context,
     util::thumbnails::write_encrypted_atomically,
 };
+
+async fn new_encryptor(dir: &std::path::Path, name: &str) -> ChunkEncryptor {
+    ChunkEncryptor::new(storage_context(dir).create_upload(name).await.unwrap())
+}
 
 #[async_test]
 async fn test_encrypt_stream_at_offset() {
     let dir = tempdir().unwrap();
-    let file_path = dir.path().join("test_encrypt_offset.enc");
-    let encryptor = ChunkEncryptor::new(file_path.clone()).await.unwrap();
+    let context = storage_context(dir.path());
+    let encryptor = ChunkEncryptor::new(context.create_upload("offset").await.unwrap());
+    let file_path = context.upload_part_path("offset");
 
     let written_chunks = Mutex::new(BTreeMap::new());
     let mut data = Cursor::new(vec![b'A'; CHUNK_SIZE]);
@@ -55,8 +62,7 @@ async fn test_encrypt_stream_at_offset() {
 #[async_test]
 async fn test_encrypt_stream_at_invalid_offset() {
     let dir = tempdir().unwrap();
-    let file_path = dir.path().join("test_invalid_offset.enc");
-    let encryptor = ChunkEncryptor::new(file_path).await.unwrap();
+    let encryptor = new_encryptor(dir.path(), "invalid").await;
 
     let written_chunks = Mutex::new(BTreeMap::new());
     let mut data = Cursor::new(vec![b'A'; 100]);
@@ -87,9 +93,7 @@ fn test_encrypted_len() {
 #[async_test]
 async fn test_encrypt_stream_at_offset_records_the_length_of_each_chunk() {
     let dir = tempdir().unwrap();
-    let encryptor = ChunkEncryptor::new(dir.path().join("lengths.enc"))
-        .await
-        .unwrap();
+    let encryptor = new_encryptor(dir.path(), "lengths").await;
     let written_chunks = Mutex::new(BTreeMap::new());
     let mut data = Cursor::new(vec![b'A'; CHUNK_SIZE + 10]);
 
@@ -117,9 +121,7 @@ async fn test_encrypt_stream_at_offset_records_the_length_of_each_chunk() {
 #[async_test]
 async fn test_encrypt_stream_at_offset_stops_before_exceeding_the_limit() {
     let dir = tempdir().unwrap();
-    let encryptor = ChunkEncryptor::new(dir.path().join("limit.enc"))
-        .await
-        .unwrap();
+    let encryptor = new_encryptor(dir.path(), "limit").await;
     let written_chunks = Mutex::new(BTreeMap::new());
     let mut data = Cursor::new(vec![b'A'; CHUNK_SIZE + 1]);
 
@@ -146,17 +148,13 @@ async fn test_encrypt_stream_at_offset_stops_before_exceeding_the_limit() {
 async fn test_encrypt_stream_enforces_the_limit() {
     let dir = tempdir().unwrap();
 
-    let mut encryptor = ChunkEncryptor::new(dir.path().join("under.enc"))
-        .await
-        .unwrap();
+    let mut encryptor = new_encryptor(dir.path(), "under").await;
     let result = encryptor
         .encrypt_stream(&mut Cursor::new(vec![b'A'; 1000]), 1000)
         .await;
     assert_eq!(result.unwrap(), 1000);
 
-    let mut encryptor = ChunkEncryptor::new(dir.path().join("over.enc"))
-        .await
-        .unwrap();
+    let mut encryptor = new_encryptor(dir.path(), "over").await;
     let result = encryptor
         .encrypt_stream(&mut Cursor::new(vec![b'A'; 1001]), 1000)
         .await;
@@ -166,8 +164,9 @@ async fn test_encrypt_stream_enforces_the_limit() {
 #[async_test]
 async fn test_seal_truncates_the_file_to_the_exact_encrypted_length() {
     let dir = tempdir().unwrap();
-    let file_path = dir.path().join("seal.enc");
-    let mut encryptor = ChunkEncryptor::new(file_path.clone()).await.unwrap();
+    let context = storage_context(dir.path());
+    let mut encryptor = ChunkEncryptor::new(context.create_upload("seal").await.unwrap());
+    let file_path = context.upload_part_path("seal");
     let written_chunks = Mutex::new(BTreeMap::new());
 
     encryptor
@@ -229,58 +228,83 @@ fn files_in(dir: &std::path::Path) -> Vec<String> {
     names
 }
 
+// The directory a user's cached thumbnail named `name` goes in, created.
+fn thumbnail_dir(context: &UserContext, name: &str) -> PathBuf {
+    let dir = context.thumbnail_path(name).parent().unwrap().to_path_buf();
+
+    std::fs::create_dir_all(&dir).unwrap();
+
+    dir
+}
+
 #[async_test]
 async fn test_failed_atomic_write_leaves_nothing_behind() {
     let dir = tempdir().unwrap();
-    let final_path = dir.path().join("thumb");
+    let context = storage_context(dir.path());
     let mut source = FailingReader {
         good: std::io::Cursor::new(vec![b'A'; CHUNK_SIZE + 10]),
     };
 
-    let result =
-        write_encrypted_atomically(&final_path, FileEncryptionMetadata::new(), &mut source).await;
+    let result = write_encrypted_atomically(
+        &context,
+        "thumb",
+        FileEncryptionMetadata::new(),
+        &mut source,
+    )
+    .await;
 
     assert!(result.is_err());
-    assert_eq!(files_in(dir.path()), Vec::<String>::new());
+    assert_eq!(
+        files_in(&thumbnail_dir(&context, "thumb")),
+        Vec::<String>::new()
+    );
 }
 
 #[async_test]
 async fn test_failed_atomic_write_keeps_the_existing_file() {
     let dir = tempdir().unwrap();
-    let final_path = dir.path().join("thumb");
+    let context = storage_context(dir.path());
+    let thumbnails = thumbnail_dir(&context, "thumb");
+    let final_path = context.thumbnail_path("thumb");
     std::fs::write(&final_path, b"previous").unwrap();
     let mut source = FailingReader {
         good: std::io::Cursor::new(vec![b'A'; 10]),
     };
 
-    let result =
-        write_encrypted_atomically(&final_path, FileEncryptionMetadata::new(), &mut source).await;
+    let result = write_encrypted_atomically(
+        &context,
+        "thumb",
+        FileEncryptionMetadata::new(),
+        &mut source,
+    )
+    .await;
 
     assert!(result.is_err());
-    assert_eq!(files_in(dir.path()), ["thumb"]);
+    assert_eq!(files_in(&thumbnails), ["thumb"]);
     assert_eq!(std::fs::read(&final_path).unwrap(), b"previous");
 }
 
 #[async_test]
 async fn test_atomic_write_replaces_the_file_with_a_complete_one() {
     let dir = tempdir().unwrap();
-    let final_path = dir.path().join("thumb");
-    std::fs::write(&final_path, b"previous").unwrap();
+    let context = storage_context(dir.path());
+    let thumbnails = thumbnail_dir(&context, "thumb");
+    std::fs::write(context.thumbnail_path("thumb"), b"previous").unwrap();
     let metadata = FileEncryptionMetadata::new();
     let plaintext = vec![b'Z'; CHUNK_SIZE + 10];
 
     write_encrypted_atomically(
-        &final_path,
+        &context,
+        "thumb",
         metadata.clone(),
         &mut Cursor::new(plaintext.clone()),
     )
     .await
     .unwrap();
 
-    assert_eq!(files_in(dir.path()), ["thumb"]);
+    assert_eq!(files_in(&thumbnails), ["thumb"]);
 
-    let decrypted = ChunkDecryptor::new(final_path, metadata)
-        .await
+    let decrypted = ChunkDecryptor::new(context.open_thumbnail("thumb").await.unwrap(), metadata)
         .unwrap()
         .decrypt_all()
         .await
