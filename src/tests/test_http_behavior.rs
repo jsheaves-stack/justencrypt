@@ -109,11 +109,11 @@ async fn test_http_head_keeps_the_length_and_drops_the_body() {
     assert!(response.into_bytes().await.unwrap_or_default().is_empty());
 }
 
-// Each segment is percent-decoded on its own (so `%2F` splits a name
+// The path is percent-decoded before it is split (so `%2F` splits a name
 // in two), empty segments are dropped, invalid UTF-8 is replaced, and names
 // starting with a dot are kept.
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn test_path_segments_are_decoded_one_by_one() {
+async fn test_path_is_decoded_then_split() {
     let (client, cookie, _user) = http_client(|_| {}).await;
 
     for path in [
@@ -136,6 +136,39 @@ async fn test_path_segments_are_decoded_one_by_one() {
     assert_eq!(names(&list(&client, &cookie, "f").await), ["g"]);
     assert_eq!(names(&list(&client, &cookie, "j").await), ["k"]);
     assert_eq!(names(&list(&client, &cookie, "l").await), ["m"]);
+}
+
+// A segment starting with an encoded `/` stays below the folders before it
+// instead of starting again from the root.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn test_encoded_slash_stays_in_its_folder() {
+    let (client, cookie, _user) = http_client(|_| {}).await;
+
+    for (path, body) in [("secret.txt", "root"), ("docs/%2Fsecret.txt", "docs")] {
+        let response = client
+            .put(format!("/file/{path}"))
+            .private_cookie(cookie.clone())
+            .body(body)
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), StatusCode::CREATED, "{path}");
+    }
+
+    for (path, body) in [("secret.txt", "root"), ("docs/secret.txt", "docs")] {
+        let response = client
+            .get(format!("/file/{path}"))
+            .private_cookie(cookie.clone())
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response.into_string().await.as_deref(),
+            Some(body),
+            "{path}"
+        );
+    }
 }
 
 // The bare mount path and a trailing slash reach the same handlers.
@@ -737,8 +770,8 @@ async fn test_http_json_response_shapes() {
     assert!(upload["last_updated"]["nanos_since_epoch"].is_u64());
 }
 
-// The file is looked up before its `Range` header is read, so a
-// missing file is `404` whatever the header says.
+// The `Range` header is parsed before the file is looked up, so a malformed
+// one is `400` even when there is no such file.
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_http_missing_file_with_a_malformed_range() {
     let (client, cookie, _user) = http_client(|_| {}).await;
@@ -750,7 +783,7 @@ async fn test_http_missing_file_with_a_malformed_range() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 // A route error's body is Problem Details, with the error's message as the
@@ -773,6 +806,40 @@ async fn test_http_route_error_bodies() {
     assert_eq!(problem.title, "Not Found");
     assert_eq!(problem.status, 404);
     assert_eq!(problem.detail.as_deref(), Some("Not found"));
+}
+
+// A URL parameter that isn't valid UTF-8 is `400`, with a Problem Details
+// body like every other error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn test_http_undecodable_path_parameters() {
+    let (client, cookie, _user) = http_client(|_| {}).await;
+
+    let responses = [
+        client
+            .put("/upload/chunk/%FF?offset=0")
+            .private_cookie(cookie.clone())
+            .dispatch()
+            .await,
+        client
+            .post("/upload/finalize/%FF?total_size=0")
+            .private_cookie(cookie.clone())
+            .dispatch()
+            .await,
+        client
+            .delete("/admin/session/%FF")
+            .header("X-Admin-Api-Key", ADMIN_KEY)
+            .dispatch()
+            .await,
+    ];
+
+    for response in responses {
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let problem = response.into_problem().await;
+
+        assert_eq!(problem.status, 400);
+        assert!(problem.detail.is_some());
+    }
 }
 
 // Any `download` parameter, with or without a value, selects the archive.

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     app::App,
-    encryption::{chunk_encryptor::ChunkEncryptor, CHUNK_SIZE},
+    encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata, CHUNK_SIZE},
     enums::service_error::ServiceError,
     service::{
         chunks::check_uploaded_chunks,
@@ -196,8 +196,27 @@ pub async fn finalize(
 
     drop(encryptor);
 
+    commit_file(
+        session,
+        upload_id,
+        upload_state.encoded_file_name,
+        upload_state.file_path,
+        metadata,
+    )
+    .await
+}
+
+/// Moves the fully written file of upload `upload_id` into place and records
+/// it at `file_path`, replacing any file already there. If a step fails, the
+/// upload is cleaned up and nothing is recorded.
+pub(super) async fn commit_file(
+    session: &UserSession,
+    upload_id: &str,
+    encoded_file_name: String,
+    file_path: PathBuf,
+    metadata: FileEncryptionMetadata,
+) -> Result<(), ServiceError> {
     let context = &session.context;
-    let encoded_file_name = upload_state.encoded_file_name.clone();
 
     if let Err(e) = context.commit_upload(&encoded_file_name).await {
         error!("Failed to rename part file to final file: {}", e);
@@ -217,11 +236,7 @@ pub async fn finalize(
     }
 
     let replaced = match context
-        .add_file(
-            upload_state.file_path,
-            upload_state.encoded_file_name,
-            metadata,
-        )
+        .add_file(file_path, encoded_file_name.clone(), metadata)
         .await
     {
         Ok(replaced) => replaced,

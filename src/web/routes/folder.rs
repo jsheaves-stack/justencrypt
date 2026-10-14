@@ -7,9 +7,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::sqlite::{self, FolderContent},
     enums::service_error::ServiceError,
-    service::folders::{self, EntryChanges},
+    service::folders::{self, Entry, EntryChanges, FileSummary, FolderSummary},
     web::{
         extractors::{AuthenticatedSession, JsonBody, QueryParams},
         responses::ArchiveResponse,
@@ -47,32 +46,32 @@ pub struct FolderEntrySummary {
     pub folder_count: u64,
 }
 
-impl From<FolderContent> for FolderEntry {
-    fn from(content: FolderContent) -> Self {
-        match content {
-            FolderContent::File(sqlite::File {
-                file_extension,
-                file_name,
-                file_size,
+impl From<Entry> for FolderEntry {
+    fn from(entry: Entry) -> Self {
+        match entry {
+            Entry::File(FileSummary {
+                extension,
+                name,
+                size,
                 created_date,
                 last_modified_date,
             }) => FolderEntry::File(FileEntry {
-                file_extension,
-                file_name,
-                file_size,
+                file_extension: extension,
+                file_name: name,
+                file_size: size,
                 created_date,
                 last_modified_date,
             }),
-            FolderContent::Folder(sqlite::Folder {
-                file_name,
-                file_size,
+            Entry::Folder(FolderSummary {
+                name,
+                size,
                 created_date,
                 last_modified_date,
                 file_count,
                 folder_count,
             }) => FolderEntry::Folder(FolderEntrySummary {
-                file_name,
-                file_size,
+                file_name: name,
+                file_size: size,
                 created_date,
                 last_modified_date,
                 file_count,
@@ -118,8 +117,8 @@ pub async fn get_folder(
         return Ok(ArchiveResponse(archive).into_response());
     }
 
-    let contents = folders::list(&auth.session, folder_path.to_path_buf()).await?;
-    let entries: Vec<FolderEntry> = contents.into_iter().map(FolderEntry::from).collect();
+    let entries = folders::list(&auth.session, folder_path.to_path_buf()).await?;
+    let entries: Vec<FolderEntry> = entries.into_iter().map(FolderEntry::from).collect();
 
     Ok(Json(entries).into_response())
 }

@@ -7,10 +7,10 @@ use axum::{
 };
 use percent_encoding::percent_decode_str;
 
-/// A file or folder path from the URL, segment by segment. Each segment is
-/// percent-decoded on its own, so an encoded `/` (`%2F`) splits a name in two
-/// just as a plain one does, and empty segments are dropped. Names such as
-/// `.hidden` are kept; names are checked when an entry is created instead.
+/// A file or folder path from the URL, segment by segment. The path is
+/// percent-decoded before it is split, so an encoded `/` (`%2F`) splits a name
+/// in two just as a plain one does, and empty segments are dropped. Names such
+/// as `.hidden` are kept; names are checked when an entry is created instead.
 #[derive(Debug)]
 pub struct UnrestrictedPath(Vec<String>);
 
@@ -19,9 +19,11 @@ impl UnrestrictedPath {
     /// percent-encoded). Bytes that don't decode to UTF-8 are replaced.
     pub fn parse(raw: &str) -> Self {
         UnrestrictedPath(
-            raw.split('/')
+            percent_decode_str(raw)
+                .decode_utf8_lossy()
+                .split('/')
                 .filter(|segment| !segment.is_empty())
-                .map(|segment| percent_decode_str(segment).decode_utf8_lossy().into_owned())
+                .map(str::to_owned)
                 .collect(),
         )
     }

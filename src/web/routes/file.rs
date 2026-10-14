@@ -43,16 +43,17 @@ pub async fn put_file(
 }
 
 /// Streams the file at `file_path`, decrypting it as it is sent. A single
-/// `Range` gets just those bytes.
+/// `Range` gets just those bytes; a malformed one is refused before the file
+/// is looked up.
 pub async fn get_file(
     State(state): State<WebState>,
     file_path: UnrestrictedPath,
     auth: AuthenticatedSession,
     range: RangeHeader,
 ) -> Result<FileResponse, ServiceError> {
-    let file = files::find(&auth.session, file_path.to_path_buf()).await?;
     let range = range.parse()?;
-    let download = files::download(&state.app, &auth.session, file, range).await?;
+    let download =
+        files::download(&state.app, &auth.session, file_path.to_path_buf(), range).await?;
 
     Ok(FileResponse(download))
 }

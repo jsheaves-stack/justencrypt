@@ -78,8 +78,8 @@ impl App {
         }
     }
 
-    /// Cleans up the uploads every live session has in progress. Called once
-    /// the server has stopped taking requests.
+    /// Cleans up the uploads every live session has in progress. Called only
+    /// once every request has finished, so none can still be using them.
     pub async fn shutdown(&self) {
         info!("Shutting down. Cleaning up active uploads for all sessions.");
 

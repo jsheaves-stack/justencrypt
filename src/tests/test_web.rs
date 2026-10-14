@@ -248,7 +248,7 @@ async fn test_files_under_upload_are_ordinary_files() {
 }
 
 #[test]
-fn test_path_segments_are_decoded_one_by_one() {
+fn test_path_is_decoded_then_split() {
     let cases = [
         ("", ""),
         ("a", "a"),
@@ -256,6 +256,9 @@ fn test_path_segments_are_decoded_one_by_one() {
         ("a//b/", "a/b"),
         ("a%20b", "a b"),
         ("a%2Fb", "a/b"),
+        ("a/%2Fb", "a/b"),
+        ("%2Fsecret", "secret"),
+        ("%2F", ""),
         (".hidden", ".hidden"),
         ("h%FFi", "h\u{FFFD}i"),
     ];

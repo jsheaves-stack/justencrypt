@@ -47,7 +47,8 @@ pub async fn run(app: Arc<App>) -> io::Result<()> {
         });
 
     // Once the signal comes, requests still running get a grace period to
-    // finish; after that the server stops without them.
+    // finish. After that the server stops waiting for them, but their tasks
+    // keep running until the runtime shuts down.
     let deadline = async {
         if stopping_rx.await.is_ok() {
             tokio::time::sleep(SHUTDOWN_GRACE).await;
@@ -56,18 +57,29 @@ pub async fn run(app: Arc<App>) -> io::Result<()> {
         }
     };
 
-    let result = tokio::select! {
-        result = server => result,
-        () = deadline => {
-            warn!("Requests still running after {}s; stopping anyway.", SHUTDOWN_GRACE.as_secs());
+    let drained = tokio::select! {
+        result = server => Some(result),
+        () = deadline => None,
+    };
+
+    // Uploads are only cleaned up once no request can still be writing or
+    // storing one. Otherwise they are left for the cleanup at each user's
+    // next login, which aborts the uploads of sessions that no longer exist.
+    match drained {
+        Some(result) => {
+            app.shutdown().await;
+
+            result
+        },
+        None => {
+            warn!(
+                "Requests still running after {}s; stopping anyway. Their uploads are cleaned up at the next login.",
+                SHUTDOWN_GRACE.as_secs()
+            );
 
             Ok(())
         },
-    };
-
-    app.shutdown().await;
-
-    result
+    }
 }
 
 /// Resolves when the process is asked to stop: Ctrl-C, or `SIGTERM` on Unix.

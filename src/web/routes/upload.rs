@@ -1,9 +1,4 @@
-use axum::{
-    body::Body,
-    extract::{Path, State},
-    http::StatusCode,
-    Json,
-};
+use axum::{body::Body, extract::State, http::StatusCode, Json};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tokio_util::io::StreamReader;
@@ -12,7 +7,7 @@ use crate::{
     enums::service_error::ServiceError,
     service::uploads,
     web::{
-        extractors::{AuthenticatedSession, QueryParams},
+        extractors::{AuthenticatedSession, PathParam, QueryParams},
         state::WebState,
         unrestricted_path::UnrestrictedPath,
     },
@@ -58,7 +53,7 @@ pub async fn init_upload(
 /// starts in the file, and must be a multiple of the chunk size.
 pub async fn upload_chunk(
     State(state): State<WebState>,
-    Path(upload_id): Path<String>,
+    PathParam(upload_id): PathParam<String>,
     auth: AuthenticatedSession,
     QueryParams(query): QueryParams<ChunkQuery>,
     body: Body,
@@ -76,7 +71,7 @@ pub async fn upload_chunk(
 /// it and try again.
 pub async fn finalize_upload(
     State(state): State<WebState>,
-    Path(upload_id): Path<String>,
+    PathParam(upload_id): PathParam<String>,
     auth: AuthenticatedSession,
     QueryParams(query): QueryParams<FinalizeQuery>,
 ) -> Result<StatusCode, ServiceError> {

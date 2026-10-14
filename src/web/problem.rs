@@ -3,7 +3,7 @@
 //! `detail` saying what went wrong.
 
 use axum::{
-    extract::rejection::{JsonRejection, QueryRejection},
+    extract::rejection::{JsonRejection, PathRejection, QueryRejection},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -104,6 +104,17 @@ impl IntoResponse for ServiceError {
 /// A JSON body that is missing, of the wrong type, malformed or too large.
 impl From<JsonRejection> for Problem {
     fn from(rejection: JsonRejection) -> Self {
+        Self {
+            status: rejection.status(),
+            detail: Some(rejection.body_text()),
+        }
+    }
+}
+
+/// A URL parameter that doesn't decode or parse, such as an upload id that
+/// isn't valid UTF-8.
+impl From<PathRejection> for Problem {
+    fn from(rejection: PathRejection) -> Self {
         Self {
             status: rejection.status(),
             detail: Some(rejection.body_text()),

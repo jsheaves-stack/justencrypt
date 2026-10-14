@@ -1,7 +1,7 @@
 use std::{convert::Infallible, sync::Arc};
 
 use axum::{
-    extract::{FromRequest, FromRequestParts, Query},
+    extract::{FromRequest, FromRequestParts, Path, Query},
     http::{request::Parts, HeaderMap},
     Json,
 };
@@ -32,6 +32,12 @@ pub struct AdminGuard;
 #[derive(FromRequest)]
 #[from_request(via(Json), rejection(Problem))]
 pub struct JsonBody<T>(pub T);
+
+/// A parameter from the URL, such as an upload id. One that doesn't decode or
+/// parse is refused with `400`.
+#[derive(FromRequestParts)]
+#[from_request(via(Path), rejection(Problem))]
+pub struct PathParam<T>(pub T);
 
 /// The query string's parameters. Missing or unparsable ones are refused with
 /// `422`.

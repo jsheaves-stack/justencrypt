@@ -4,9 +4,37 @@
 use std::path::PathBuf;
 
 use crate::{
-    app::App, db::sqlite::FolderContent, enums::service_error::ServiceError,
-    session::user_session::UserSession, util::folder_archive::FolderArchive,
+    app::App,
+    db::sqlite::{self, FolderContent},
+    enums::service_error::ServiceError,
+    session::user_session::UserSession,
+    util::folder_archive::FolderArchive,
 };
+
+/// One entry of a folder listing.
+pub enum Entry {
+    File(FileSummary),
+    Folder(FolderSummary),
+}
+
+/// A file in a folder listing.
+pub struct FileSummary {
+    pub extension: Option<String>,
+    pub name: String,
+    pub size: Option<u64>,
+    pub created_date: Option<String>,
+    pub last_modified_date: Option<String>,
+}
+
+/// A folder in a folder listing, with the totals of everything below it.
+pub struct FolderSummary {
+    pub name: String,
+    pub size: Option<u64>,
+    pub created_date: Option<String>,
+    pub last_modified_date: Option<String>,
+    pub file_count: u64,
+    pub folder_count: u64,
+}
 
 /// What to change about a file or folder: a new name, a new parent folder, or
 /// both.
@@ -26,12 +54,46 @@ impl EntryChanges {
     }
 }
 
+impl From<FolderContent> for Entry {
+    fn from(content: FolderContent) -> Self {
+        match content {
+            FolderContent::File(sqlite::File {
+                file_extension,
+                file_name,
+                file_size,
+                created_date,
+                last_modified_date,
+            }) => Entry::File(FileSummary {
+                extension: file_extension,
+                name: file_name,
+                size: file_size,
+                created_date,
+                last_modified_date,
+            }),
+            FolderContent::Folder(sqlite::Folder {
+                file_name,
+                file_size,
+                created_date,
+                last_modified_date,
+                file_count,
+                folder_count,
+            }) => Entry::Folder(FolderSummary {
+                name: file_name,
+                size: file_size,
+                created_date,
+                last_modified_date,
+                file_count,
+                folder_count,
+            }),
+        }
+    }
+}
+
 /// The files and folders directly inside the folder at `folder_path`.
-pub async fn list(
-    session: &UserSession,
-    folder_path: PathBuf,
-) -> Result<Vec<FolderContent>, ServiceError> {
-    Ok(session.context.get_folder(folder_path).await?)
+pub async fn list(session: &UserSession, folder_path: PathBuf) -> Result<Vec<Entry>, ServiceError> {
+    let contents = session.context.get_folder(folder_path).await?;
+
+    Ok(contents.into_iter().map(Entry::from).collect())
 }
 
 /// Creates the folder at `folder_path`, and any missing parent folders.

@@ -1,10 +1,6 @@
 use std::time::SystemTime;
 
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +11,7 @@ use crate::{
         admin::{self, SessionSummary, UploadSummary},
     },
     web::{
-        extractors::{AdminGuard, JsonBody},
+        extractors::{AdminGuard, JsonBody, PathParam},
         state::WebState,
     },
 };
@@ -93,7 +89,7 @@ pub async fn get_session(
 pub async fn delete_session(
     _admin_guard: AdminGuard,
     State(state): State<WebState>,
-    Path(session_id): Path<String>,
+    PathParam(session_id): PathParam<String>,
 ) -> Result<StatusCode, ServiceError> {
     admin::end_session(&state.app, &session_id).await?;
 

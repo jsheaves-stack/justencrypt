@@ -9,13 +9,13 @@ use uuid::Uuid;
 use crate::{
     app::App,
     encryption::{
-        chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata,
-        MPSC_CHANNEL_CAPACITY,
+        chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor, MPSC_CHANNEL_CAPACITY,
     },
     enums::{encryption_error::EncryptionError, service_error::ServiceError},
     service::{
         folders::EntryChanges,
         limits::{max_file_size, read_with_limit},
+        uploads::commit_file,
     },
     session::user_session::UserSession,
 };
@@ -56,19 +56,6 @@ impl ByteRangeSpec {
         }
 
         Ok((start, end.min(total_size - 1)))
-    }
-}
-
-/// A stored file, found by [`find`] and ready to [`download`].
-pub struct FileRef {
-    encoded_file_name: String,
-    metadata: FileEncryptionMetadata,
-}
-
-impl FileRef {
-    /// The file's size in bytes.
-    pub fn total_size(&self) -> u64 {
-        self.metadata.total_size
     }
 }
 
@@ -113,7 +100,7 @@ pub async fn store<R: AsyncRead + Unpin>(
         Err(e) => {
             error!("Failed to create the upload's file: {}", e);
 
-            let _ = context.remove_active_upload(upload_id.clone()).await;
+            session.abort_upload(&upload_id, &encoded_file_name).await;
 
             return Err(e.into());
         },
@@ -131,76 +118,25 @@ pub async fn store<R: AsyncRead + Unpin>(
     };
 
     if let Err(e) = written {
-        let _ = context.remove_upload_part(&encoded_file_name).await;
-        let _ = context.remove_active_upload(upload_id.clone()).await;
-
-        return Err(e.into());
-    }
-
-    if let Err(e) = context.commit_upload(&encoded_file_name).await {
-        error!("Failed to rename part file to final file: {}", e);
-
-        let _ = context.remove_upload_part(&encoded_file_name).await;
-        let _ = context.remove_active_upload(upload_id.clone()).await;
-
-        return Err(e.into());
-    }
-
-    if let Err(e) = context.sync_blob_dir(&encoded_file_name).await {
-        error!("Failed to sync the renamed file's directory: {}", e);
-
-        let _ = context.remove_blob(&encoded_file_name).await;
-        let _ = context.remove_active_upload(upload_id.clone()).await;
+        session.abort_upload(&upload_id, &encoded_file_name).await;
 
         return Err(e.into());
     }
 
     let metadata = encryptor.get_metadata();
 
-    let replaced = match context
-        .add_file(file_path, encoded_file_name.clone(), metadata)
-        .await
-    {
-        Ok(replaced) => replaced,
-        Err(e) => {
-            let _ = context.remove_blob(&encoded_file_name).await;
-            let _ = context.remove_active_upload(upload_id.clone()).await;
-
-            return Err(e.into());
-        },
-    };
-
-    let _ = context.remove_active_upload(upload_id.clone()).await;
-
-    if let Some(old_name) = replaced {
-        context.remove_blob_and_thumbnail(&old_name).await;
-    }
-
-    Ok(())
+    commit_file(session, &upload_id, encoded_file_name, file_path, metadata).await
 }
 
-/// Finds the file at `file_path`. Fails with `NotFound` if there is none.
-pub async fn find(session: &UserSession, file_path: PathBuf) -> Result<FileRef, ServiceError> {
-    let (encoded_file_name, metadata) = session.context.get_file_decryption_data(file_path).await?;
-
-    Ok(FileRef {
-        encoded_file_name,
-        metadata,
-    })
-}
-
-/// Starts streaming `file`, decrypting it as it is read: all of it, or just
-/// `range`.
+/// Starts streaming the file at `file_path`, decrypting it as it is read: all
+/// of it, or just `range`. Fails with `NotFound` if there is no such file.
 pub async fn download(
     app: &App,
     session: &UserSession,
-    file: FileRef,
+    file_path: PathBuf,
     range: Option<ByteRangeSpec>,
 ) -> Result<FileDownload, ServiceError> {
-    let FileRef {
-        encoded_file_name,
-        metadata,
-    } = file;
+    let (encoded_file_name, metadata) = session.context.get_file_decryption_data(file_path).await?;
     let total_size = metadata.total_size;
 
     let (start, end, partial) = match range {
