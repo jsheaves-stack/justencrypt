@@ -2,24 +2,10 @@
 // naming rule as renames and moves (`util::names::is_valid_entry_name`), so
 // every entry that can be created can also be renamed.
 
-use rocket::{
-    async_test,
-    http::Status,
-    local::asynchronous::{Client, LocalResponse},
-    routes,
-};
-
 use super::*;
 use crate::{
-    db::sqlite,
-    encryption::FileEncryptionMetadata,
-    enums::db_error::DbError,
-    routes::{
-        file::{get_file, init_upload, put_file},
-        folder::{create_folder, get_folder},
-    },
+    db::sqlite, encryption::FileEncryptionMetadata, enums::db_error::DbError,
     util::names::is_valid_entry_path,
-    AppState,
 };
 
 // URL-encoded paths whose file or folder name breaks the rule: a control
@@ -33,19 +19,16 @@ fn invalid_paths() -> Vec<String> {
     ]
 }
 
-async fn names_client() -> (Client, Cookie<'static>, TestUser) {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/file", routes![get_file, put_file, init_upload])
-        .mount("/folder", routes![create_folder, get_folder]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+async fn names_client() -> (TestClient, Cookie<'static>, TestUser) {
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     (client, cookie, test_user)
 }
 
-async fn assert_bad_request(response: LocalResponse<'_>, path: &str) {
-    assert_eq!(response.status(), Status::BadRequest, "{path}");
+async fn assert_bad_request(response: TestResponse, path: &str) {
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
     assert!(
         response
             .into_string()
@@ -98,7 +81,7 @@ fn test_db_create_functions_reject_invalid_names() {
 }
 
 // These used to be created with a 201.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_put_file_rejects_invalid_names() {
     let (client, cookie, test_user) = names_client().await;
 
@@ -123,11 +106,11 @@ async fn test_put_file_rejects_invalid_names() {
         .body("data")
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 // These used to be created with a 201.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_create_folder_rejects_invalid_names() {
     let (client, cookie, _test_user) = names_client().await;
 
@@ -150,17 +133,17 @@ async fn test_create_folder_rejects_invalid_names() {
 
     let longest = format!("/folder/{}", "d".repeat(255));
     let response = client.put(&longest).private_cookie(cookie).dispatch().await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 // A bad name is reported before the client uploads any chunks.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_init_upload_rejects_invalid_names() {
     let (client, cookie, test_user) = names_client().await;
 
     for path in invalid_paths() {
         let response = client
-            .post(format!("/file/upload/initiate/{path}"))
+            .post(format!("/upload/initiate/{path}"))
             .private_cookie(cookie.clone())
             .dispatch()
             .await;
@@ -168,7 +151,7 @@ async fn test_init_upload_rejects_invalid_names() {
         assert_bad_request(response, &path).await;
     }
 
-    let state = client.rocket().state::<AppState>().unwrap();
+    let state = client.app();
     let session = state.sessions.snapshot().await.pop().unwrap();
 
     assert!(session.active_uploads.lock().await.is_empty());

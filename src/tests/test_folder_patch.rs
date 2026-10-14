@@ -1,26 +1,17 @@
 use std::time::Duration;
 
-use rocket::{
-    async_test,
-    http::{Cookie, Status},
-    local::asynchronous::{Client, LocalResponse},
-    routes,
-    tokio::time::timeout,
-};
+use tokio::time::timeout;
 
 use super::*;
-use crate::routes::folder::{create_folder, get_folder, patch_folder, PatchFolderData};
+use crate::web::routes::folder::PatchFolderData;
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_patch_folder_rename() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/folder", routes![create_folder, patch_folder, get_folder]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let client = TestClient::new(app);
 
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let folder_path = "old_folder";
     let response = client
@@ -28,7 +19,7 @@ async fn test_patch_folder_rename() {
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     let patch_data = PatchFolderData {
         folder_name: Some("new_folder".to_string()),
@@ -42,26 +33,23 @@ async fn test_patch_folder_rename() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NoContent);
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     let get_response = client
         .get("/folder/new_folder")
         .private_cookie(cookie)
         .dispatch()
         .await;
-    assert_eq!(get_response.status(), Status::Ok);
+    assert_eq!(get_response.status(), StatusCode::OK);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_patch_folder_move() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/folder", routes![create_folder, patch_folder, get_folder]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let client = TestClient::new(app);
 
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let folder_path = "source_folder";
     let dest_path = "dest_folder";
@@ -90,26 +78,23 @@ async fn test_patch_folder_move() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NoContent);
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     let get_response = client
         .get(format!("/folder/{}/{}", dest_path, folder_path))
         .private_cookie(cookie)
         .dispatch()
         .await;
-    assert_eq!(get_response.status(), Status::Ok);
+    assert_eq!(get_response.status(), StatusCode::OK);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_patch_folder_move_into_self_fails() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/folder", routes![create_folder, patch_folder]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let client = TestClient::new(app);
 
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let folder_path = "source_folder";
 
@@ -131,18 +116,18 @@ async fn test_patch_folder_move_into_self_fails() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::BadRequest);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 // A folder-cycle regression used to hang the request forever, and the stuck
 // blocking thread would then wedge the whole test binary. If that ever happens
 // again, fail loudly by exiting instead.
-async fn move_folder_or_exit<'c>(
-    client: &'c Client,
+async fn move_folder_or_exit(
+    client: &TestClient,
     cookie: &Cookie<'static>,
     folder: &str,
     destination: &str,
-) -> LocalResponse<'c> {
+) -> TestResponse {
     let request = client
         .patch(format!("/folder/{}", folder))
         .private_cookie(cookie.clone())
@@ -164,21 +149,18 @@ async fn move_folder_or_exit<'c>(
     }
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_patch_folder_move_into_own_subtree_is_rejected_for_every_path_spelling() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/folder", routes![create_folder, patch_folder, get_folder]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let response = client
         .put("/folder/a/b/c")
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     for destination in [
         "a/b",
@@ -194,7 +176,7 @@ async fn test_patch_folder_move_into_own_subtree_is_rejected_for_every_path_spel
 
         assert_eq!(
             response.status(),
-            Status::BadRequest,
+            StatusCode::BAD_REQUEST,
             "destination '{}'",
             destination
         );
@@ -205,17 +187,14 @@ async fn test_patch_folder_move_into_own_subtree_is_rejected_for_every_path_spel
         .private_cookie(cookie)
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_rejected_folder_move_does_not_leave_new_folders_behind() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/folder", routes![create_folder, patch_folder, get_folder]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     client
         .put("/folder/a/b")
@@ -226,24 +205,21 @@ async fn test_rejected_folder_move_does_not_leave_new_folders_behind() {
     // Resolves to a/b/new, so the move is a cycle, but only after the missing
     // destination folder has been created.
     let response = move_folder_or_exit(&client, &cookie, "a/b", "a//b/new").await;
-    assert_eq!(response.status(), Status::BadRequest);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let response = client
         .get("/folder/a/b/new")
         .private_cookie(cookie)
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::NotFound);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_patch_folder_move_creates_a_missing_destination() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/folder", routes![create_folder, patch_folder, get_folder]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     client
         .put("/folder/a/b")
@@ -252,72 +228,74 @@ async fn test_patch_folder_move_creates_a_missing_destination() {
         .await;
 
     let response = move_folder_or_exit(&client, &cookie, "a/b", "x/y").await;
-    assert_eq!(response.status(), Status::NoContent);
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     let moved = client
         .get("/folder/x/y/b")
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(moved.status(), Status::Ok);
+    assert_eq!(moved.status(), StatusCode::OK);
 
     let old = client
         .get("/folder/a/b")
         .private_cookie(cookie)
         .dispatch()
         .await;
-    assert_eq!(old.status(), Status::NotFound);
+    assert_eq!(old.status(), StatusCode::NOT_FOUND);
 }
 
-async fn folder_client() -> (Client, Cookie<'static>, TestUser) {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/folder", routes![create_folder, patch_folder, get_folder]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+async fn folder_client() -> (TestClient, Cookie<'static>, TestUser) {
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     (client, cookie, test_user)
 }
 
-async fn make_folder(client: &Client, cookie: &Cookie<'static>, path: &str) {
+async fn make_folder(client: &TestClient, cookie: &Cookie<'static>, path: &str) {
     let response = client
         .put(format!("/folder/{}", path))
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
-async fn patch_raw(client: &Client, cookie: &Cookie<'static>, path: &str, body: &str) -> Status {
+async fn patch_raw(
+    client: &TestClient,
+    cookie: &Cookie<'static>,
+    path: &str,
+    body: &str,
+) -> StatusCode {
     client
         .patch(format!("/folder/{}", path))
         .private_cookie(cookie.clone())
-        .header(rocket::http::ContentType::JSON)
+        .header("Content-Type", "application/json")
         .body(body)
         .dispatch()
         .await
         .status()
 }
 
-async fn folder_exists(client: &Client, cookie: &Cookie<'static>, path: &str) -> bool {
+async fn folder_exists(client: &TestClient, cookie: &Cookie<'static>, path: &str) -> bool {
     client
         .get(format!("/folder/{}", path))
         .private_cookie(cookie.clone())
         .dispatch()
         .await
         .status()
-        == Status::Ok
+        == StatusCode::OK
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_patch_missing_folder_is_not_found_and_creates_nothing() {
     let (client, cookie, _test_user) = folder_client().await;
 
     assert_eq!(
         patch_raw(&client, &cookie, "ghost", r#"{"folder_name": "z"}"#).await,
-        Status::NotFound
+        StatusCode::NOT_FOUND
     );
     assert_eq!(
         patch_raw(
@@ -327,12 +305,12 @@ async fn test_patch_missing_folder_is_not_found_and_creates_nothing() {
             r#"{"parent_folder_path": "auto/dir"}"#
         )
         .await,
-        Status::NotFound
+        StatusCode::NOT_FOUND
     );
     assert!(!folder_exists(&client, &cookie, "auto").await);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_patch_folder_onto_an_existing_name_is_a_conflict() {
     let (client, cookie, _test_user) = folder_client().await;
     make_folder(&client, &cookie, "a").await;
@@ -341,11 +319,11 @@ async fn test_patch_folder_onto_an_existing_name_is_a_conflict() {
 
     assert_eq!(
         patch_raw(&client, &cookie, "a", r#"{"folder_name": "b"}"#).await,
-        Status::Conflict
+        StatusCode::CONFLICT
     );
     assert_eq!(
         patch_raw(&client, &cookie, "a", r#"{"parent_folder_path": "dest"}"#).await,
-        Status::Conflict
+        StatusCode::CONFLICT
     );
     // Rename and move together: nothing changes when the move collides.
     assert_eq!(
@@ -356,7 +334,7 @@ async fn test_patch_folder_onto_an_existing_name_is_a_conflict() {
             r#"{"folder_name": "a", "parent_folder_path": "dest"}"#
         )
         .await,
-        Status::Conflict
+        StatusCode::CONFLICT
     );
 
     for path in ["a", "b", "dest/a"] {
@@ -368,7 +346,7 @@ async fn test_patch_folder_onto_an_existing_name_is_a_conflict() {
     }
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_patch_folder_rejects_invalid_names() {
     let (client, cookie, _test_user) = folder_client().await;
     make_folder(&client, &cookie, "a").await;
@@ -378,7 +356,7 @@ async fn test_patch_folder_rejects_invalid_names() {
 
         assert_eq!(
             patch_raw(&client, &cookie, "a", &body).await,
-            Status::BadRequest,
+            StatusCode::BAD_REQUEST,
             "name {:?}",
             name
         );
@@ -386,7 +364,7 @@ async fn test_patch_folder_rejects_invalid_names() {
 
     assert_eq!(
         patch_raw(&client, &cookie, "a", "{}").await,
-        Status::BadRequest
+        StatusCode::BAD_REQUEST
     );
     assert!(folder_exists(&client, &cookie, "a").await);
 }

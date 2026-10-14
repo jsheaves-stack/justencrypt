@@ -1,5 +1,8 @@
 use std::path::{Component, Path};
 
+/// The longest username accepted.
+pub const MAX_USERNAME_BYTES: usize = 64;
+
 /// The longest file or folder name accepted.
 pub const MAX_ENTRY_NAME_BYTES: usize = 255;
 
@@ -36,4 +39,13 @@ pub fn is_valid_relative_path(path: &str) -> bool {
     let path = path.strip_suffix('/').unwrap_or(path);
 
     path.split('/').all(is_valid_entry_name)
+}
+
+/// A username becomes a directory and file name, so it must be non-empty, at
+/// most 64 bytes, and free of path separators, dots and control characters.
+pub fn is_valid_username(username: &str) -> bool {
+    !username.is_empty()
+        && username.len() <= MAX_USERNAME_BYTES
+        && !username.contains(['/', '\\', '.'])
+        && !username.chars().any(char::is_control)
 }

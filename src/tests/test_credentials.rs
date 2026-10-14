@@ -1,4 +1,4 @@
-use crate::session::credentials::{is_valid_username, validate_credentials};
+use crate::{service::credentials::validate_credentials, util::names::is_valid_username};
 
 #[test]
 fn test_valid_usernames() {

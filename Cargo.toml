@@ -9,7 +9,21 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocket = { version = "0.5.1", features = ["json", "secrets", "tls"] }
+axum = { version = "0.8.9", default-features = false, features = [
+  "http1",
+  "http2",
+  "tokio",
+  "json",
+  "query",
+  "matched-path",
+  "macros",
+] }
+axum-extra = { version = "0.12.6", default-features = false, features = [
+  "cookie-private",
+  "cookie-key-expansion",
+] }
+cookie = { version = "0.18.2", features = ["private", "key-expansion"] }
+tower = { version = "0.5.3", features = ["util"] }
 uuid = { version = "1.8.0", features = ["v4"] }
 rusqlite = { version = "0.37.0", features = [
   "bundled-sqlcipher-vendored-openssl",
@@ -18,7 +32,7 @@ rusqlite_migration = "2.3.0"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.31.0"
 dotenv = "0.15.0"
-serde = "1.0.202"
+serde = { version = "1.0.202", features = ["derive"] }
 serde_json = "1.0.117"
 secrecy = { version = "0.8.0", features = ["serde"] }
 thiserror = "1.0.61"
@@ -28,6 +42,22 @@ env_logger = "0.11.8"
 zxcvbn = "3.1.0"
 orion = { version = "0.17.6", features = ["safe_api"] }
 base64 = "0.22.1"
+tokio = { version = "1.53.3", features = [
+  "rt-multi-thread",
+  "macros",
+  "sync",
+  "time",
+  "fs",
+  "io-util",
+  "net",
+  "signal",
+] }
+futures-util = "0.3.34"
+tokio-util = { version = "0.7.20", features = ["io"] }
+tokio-stream = "0.1.19"
+percent-encoding = "2.3.2"
+figment = "0.10.19"
+ubyte = { version = "0.10.4", features = ["serde"] }
 
 [dev-dependencies]
 tar = "0.4.46"

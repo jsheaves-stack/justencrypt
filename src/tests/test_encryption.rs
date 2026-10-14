@@ -1,10 +1,7 @@
 use std::{collections::BTreeMap, io::Cursor, path::PathBuf};
 
-use rocket::{
-    async_test,
-    tokio::{fs, sync::Mutex},
-};
 use tempfile::tempdir;
+use tokio::{fs, sync::Mutex};
 
 use crate::{
     encryption::{
@@ -12,16 +9,16 @@ use crate::{
         FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE,
     },
     enums::encryption_error::EncryptionError,
-    session::user_context::UserContext,
+    service::thumbnails::write_encrypted_atomically,
+    storage::user_context::UserContext,
     tests::storage_context,
-    util::thumbnails::write_encrypted_atomically,
 };
 
 async fn new_encryptor(dir: &std::path::Path, name: &str) -> ChunkEncryptor {
     ChunkEncryptor::new(storage_context(dir).create_upload(name).await.unwrap())
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_encrypt_stream_at_offset() {
     let dir = tempdir().unwrap();
     let context = storage_context(dir.path());
@@ -59,7 +56,7 @@ async fn test_encrypt_stream_at_offset() {
     assert_eq!(metadata.len(), (ENCRYPTED_CHUNK_SIZE * 2) as u64);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_encrypt_stream_at_invalid_offset() {
     let dir = tempdir().unwrap();
     let encryptor = new_encryptor(dir.path(), "invalid").await;
@@ -90,7 +87,7 @@ fn test_encrypted_len() {
     );
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_encrypt_stream_at_offset_records_the_length_of_each_chunk() {
     let dir = tempdir().unwrap();
     let encryptor = new_encryptor(dir.path(), "lengths").await;
@@ -118,7 +115,7 @@ async fn test_encrypt_stream_at_offset_records_the_length_of_each_chunk() {
     assert_eq!(written_chunks.lock().await.get(&1), Some(&3));
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_encrypt_stream_at_offset_stops_before_exceeding_the_limit() {
     let dir = tempdir().unwrap();
     let encryptor = new_encryptor(dir.path(), "limit").await;
@@ -144,7 +141,7 @@ async fn test_encrypt_stream_at_offset_stops_before_exceeding_the_limit() {
     assert_eq!(result.unwrap(), CHUNK_SIZE as u64);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_encrypt_stream_enforces_the_limit() {
     let dir = tempdir().unwrap();
 
@@ -161,7 +158,7 @@ async fn test_encrypt_stream_enforces_the_limit() {
     assert!(matches!(result, Err(EncryptionError::TooLarge)));
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_seal_truncates_the_file_to_the_exact_encrypted_length() {
     let dir = tempdir().unwrap();
     let context = storage_context(dir.path());
@@ -204,11 +201,11 @@ struct FailingReader {
     good: std::io::Cursor<Vec<u8>>,
 }
 
-impl rocket::tokio::io::AsyncRead for FailingReader {
+impl tokio::io::AsyncRead for FailingReader {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-        buf: &mut rocket::tokio::io::ReadBuf<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         if self.good.position() < self.good.get_ref().len() as u64 {
             return std::pin::Pin::new(&mut self.good).poll_read(cx, buf);
@@ -237,7 +234,7 @@ fn thumbnail_dir(context: &UserContext, name: &str) -> PathBuf {
     dir
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_failed_atomic_write_leaves_nothing_behind() {
     let dir = tempdir().unwrap();
     let context = storage_context(dir.path());
@@ -260,7 +257,7 @@ async fn test_failed_atomic_write_leaves_nothing_behind() {
     );
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_failed_atomic_write_keeps_the_existing_file() {
     let dir = tempdir().unwrap();
     let context = storage_context(dir.path());
@@ -284,7 +281,7 @@ async fn test_failed_atomic_write_keeps_the_existing_file() {
     assert_eq!(std::fs::read(&final_path).unwrap(), b"previous");
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_atomic_write_replaces_the_file_with_a_complete_one() {
     let dir = tempdir().unwrap();
     let context = storage_context(dir.path());

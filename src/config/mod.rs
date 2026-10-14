@@ -11,14 +11,12 @@ use std::{
     time::Duration,
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine};
+use figment::{providers::Serialized, Figment};
 use log::LevelFilter;
-use rocket::{
-    config::{Config, TlsConfig},
-    data::{ByteUnit, Limits, ToByteUnit},
-    figment::{providers::Serialized, Figment},
-};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use ubyte::{ByteUnit, ToByteUnit};
 
 use crate::enums::config_error::ConfigError;
 
@@ -27,25 +25,16 @@ const ENV_PREFIX: &str = "JUSTENCRYPT_";
 /// Every environment variable the server reads, without the `JUSTENCRYPT_`
 /// prefix, and the [`AppConfig`] field its value goes to.
 const ENV_KEYS: &[(&str, &str)] = &[
-    ("ADDRESS", "server.address"),
-    ("PORT", "server.port"),
-    ("WORKERS", "server.workers"),
-    ("MAX_BLOCKING_THREADS", "server.max_blocking_threads"),
-    ("KEEP_ALIVE", "server.keep_alive"),
-    ("ROCKET_SECRET_KEY", "server.secret_key"),
-    ("TLS_CERT_PATH", "server.tls_cert_path"),
-    ("TLS_KEY_PATH", "server.tls_key_path"),
-    ("LOG_LEVEL", "server.log_level"),
-    ("ROCKET_LOG_LEVEL", "server.rocket_log_level"),
-    ("LIMITS_FORM", "limits.form"),
-    ("LIMITS_DATA_FORM", "limits.data_form"),
+    ("ADDRESS", "http.address"),
+    ("PORT", "http.port"),
+    ("WORKERS", "runtime.workers"),
+    ("MAX_BLOCKING_THREADS", "runtime.max_blocking_threads"),
+    ("SECRET_KEY", "http.secret_key"),
+    ("LOG_LEVEL", "runtime.log_level"),
+    ("HTTP_LOG_LEVEL", "http.log_level"),
     ("LIMITS_FILE", "limits.file"),
     ("LIMITS_FILE_CHUNK", "limits.file_chunk"),
-    ("LIMITS_JSON", "limits.json"),
-    ("LIMITS_MSGPACK", "limits.msgpack"),
-    ("LIMITS_FILE_JPG", "limits.file_jpg"),
-    ("LIMITS_BYTES", "limits.bytes"),
-    ("LIMITS_STRING", "limits.string"),
+    ("LIMITS_JSON", "http.json_limit"),
     (
         "SESSION_IDLE_TIMEOUT_SECONDS",
         "session.idle_timeout_seconds",
@@ -78,8 +67,8 @@ const ENV_KEYS: &[(&str, &str)] = &[
         "MINIMUM_PASSWORD_SECURITY_SCORE",
         "minimum_password_security_score",
     ),
-    ("SECURE_COOKIES", "secure_cookies"),
-    ("ALLOW_ORIGIN", "allow_origin"),
+    ("SECURE_COOKIES", "http.secure_cookies"),
+    ("ALLOW_ORIGIN", "http.allow_origin"),
     ("ADMIN_API_KEY", "admin_api_key"),
     ("MAX_ACTIVE_UPLOADS", "max_active_uploads"),
     ("MAX_ACTIVE_DOWNLOADS", "max_active_downloads"),
@@ -99,7 +88,8 @@ const ENV_KEYS: &[(&str, &str)] = &[
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
-    pub server: ServerConfig,
+    pub runtime: RuntimeConfig,
+    pub http: HttpConfig,
     pub limits: LimitsConfig,
     pub session: SessionConfig,
     pub db: DbConfig,
@@ -108,10 +98,6 @@ pub struct AppConfig {
     pub user_data_path: PathBuf,
     /// Minimum zxcvbn score (0-4) for the password of a new account.
     pub minimum_password_security_score: u8,
-    /// Whether session cookies are only sent over HTTPS.
-    pub secure_cookies: bool,
-    /// Value of the `Access-Control-Allow-Origin` header; none when unset.
-    pub allow_origin: Option<String>,
     /// Key for the admin routes, which are only mounted when it is set.
     pub admin_api_key: Option<SecretString>,
     /// Most uploads a session may have in progress; no limit when unset.
@@ -132,42 +118,47 @@ pub struct AppConfig {
     pub orphan_scan_enabled: bool,
 }
 
-/// How the server listens, how many threads it runs, and how it logs.
+/// How many threads the server runs, and how much it logs.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
-pub struct ServerConfig {
-    pub address: IpAddr,
-    pub port: u16,
+pub struct RuntimeConfig {
     /// Threads that run requests.
     pub workers: NonZeroUsize,
     /// Threads for work that blocks (database queries, file access, image
     /// decoding), shared by every user.
     pub max_blocking_threads: NonZeroUsize,
-    pub keep_alive: u32,
-    /// Signs the private session cookies. Required in release builds; debug
-    /// builds let Rocket generate one for each launch.
-    pub secret_key: Option<SecretString>,
-    pub tls_cert_path: Option<PathBuf>,
-    pub tls_key_path: Option<PathBuf>,
     pub log_level: LogLevel,
-    pub rocket_log_level: RocketLogLevel,
 }
 
-/// Request body limits, passed to Rocket as its `limits` setting.
+/// Settings only the web layer reads: where it listens, its cookies, CORS,
+/// request bodies and how the HTTP server logs.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct HttpConfig {
+    pub address: IpAddr,
+    pub port: u16,
+    /// Encrypts the session cookies: 256 or 512 bits, as base64 or hex.
+    /// Required in release builds; debug builds without one use a random key
+    /// for each launch.
+    pub secret_key: Option<SecretString>,
+    /// How much the HTTP server and its libraries log.
+    pub log_level: LogLevel,
+    /// Whether session cookies are only sent over HTTPS.
+    pub secure_cookies: bool,
+    /// Value of the `Access-Control-Allow-Origin` header; none when unset.
+    pub allow_origin: Option<String>,
+    /// Largest JSON request body.
+    pub json_limit: ByteUnit,
+}
+
+/// How large stored files and upload requests may be.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct LimitsConfig {
-    pub form: ByteUnit,
-    pub data_form: ByteUnit,
     /// Largest file that may be stored.
     pub file: ByteUnit,
     /// Largest body of a single chunk-upload request.
     pub file_chunk: ByteUnit,
-    pub json: ByteUnit,
-    pub msgpack: ByteUnit,
-    pub file_jpg: ByteUnit,
-    pub bytes: ByteUnit,
-    pub string: ByteUnit,
 }
 
 /// When sessions expire, how many a user may have, and how often expired ones
@@ -222,16 +213,6 @@ pub enum LogLevel {
     Trace,
 }
 
-/// How much Rocket, the web framework, logs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "String")]
-pub enum RocketLogLevel {
-    Off,
-    Critical,
-    Normal,
-    Debug,
-}
-
 /// SQLite's `synchronous` setting: how hard it waits for writes to reach the
 /// disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -284,13 +265,6 @@ parse_names!(LogLevel {
     "Trace" => Trace,
 });
 
-parse_names!(RocketLogLevel {
-    "Off" => Off,
-    "Critical" => Critical,
-    "Normal" => Normal,
-    "Debug" => Debug,
-});
-
 parse_names!(SyncMode {
     "OFF" => Off,
     "NORMAL" => Normal,
@@ -314,18 +288,6 @@ impl LogLevel {
             Self::Info => LevelFilter::Info,
             Self::Debug => LevelFilter::Debug,
             Self::Trace => LevelFilter::Trace,
-        }
-    }
-}
-
-impl RocketLogLevel {
-    /// The level as the logger takes it, for Rocket's own messages.
-    pub fn filter(self) -> LevelFilter {
-        match self {
-            Self::Off => LevelFilter::Off,
-            Self::Critical => LevelFilter::Error,
-            Self::Normal => LevelFilter::Info,
-            Self::Debug => LevelFilter::Debug,
         }
     }
 }
@@ -356,15 +318,14 @@ impl TempStore {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            server: ServerConfig::default(),
+            runtime: RuntimeConfig::default(),
+            http: HttpConfig::default(),
             limits: LimitsConfig::default(),
             session: SessionConfig::default(),
             db: DbConfig::default(),
             thumbnail: ThumbnailConfig::default(),
             user_data_path: PathBuf::from("./user_data"),
             minimum_password_security_score: 4,
-            secure_cookies: true,
-            allow_origin: None,
             admin_api_key: None,
             max_active_uploads: None,
             max_active_downloads: None,
@@ -376,19 +337,26 @@ impl Default for AppConfig {
     }
 }
 
-impl Default for ServerConfig {
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            workers: NonZeroUsize::new(16).unwrap(),
+            max_blocking_threads: NonZeroUsize::new(512).unwrap(),
+            log_level: LogLevel::Warn,
+        }
+    }
+}
+
+impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8000,
-            workers: NonZeroUsize::new(16).unwrap(),
-            max_blocking_threads: NonZeroUsize::new(512).unwrap(),
-            keep_alive: 5,
             secret_key: None,
-            tls_cert_path: None,
-            tls_key_path: None,
-            log_level: LogLevel::Warn,
-            rocket_log_level: RocketLogLevel::Critical,
+            log_level: LogLevel::Error,
+            secure_cookies: true,
+            allow_origin: None,
+            json_limit: 10.mebibytes(),
         }
     }
 }
@@ -396,15 +364,8 @@ impl Default for ServerConfig {
 impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
-            form: 10.mebibytes(),
-            data_form: 10.mebibytes(),
             file: 64.gibibytes(),
             file_chunk: 32.mebibytes(),
-            json: 10.mebibytes(),
-            msgpack: 1.mebibytes(),
-            file_jpg: 10.gibibytes(),
-            bytes: 10.mebibytes(),
-            string: 10.mebibytes(),
         }
     }
 }
@@ -443,22 +404,6 @@ impl Default for ThumbnailConfig {
             // Enough for a 64-megapixel RGB photo.
             max_decode_memory: 256.mebibytes(),
         }
-    }
-}
-
-impl LimitsConfig {
-    /// The limits as Rocket's `limits` setting.
-    pub fn to_rocket(&self) -> Limits {
-        Limits::default()
-            .limit("form", self.form)
-            .limit("data-form", self.data_form)
-            .limit("file", self.file)
-            .limit("file-chunk", self.file_chunk)
-            .limit("json", self.json)
-            .limit("msgpack", self.msgpack)
-            .limit("file/jpg", self.file_jpg)
-            .limit("bytes", self.bytes)
-            .limit("string", self.string)
     }
 }
 
@@ -526,14 +471,7 @@ impl AppConfig {
             );
         }
 
-        if self.server.tls_cert_path.is_some() != self.server.tls_key_path.is_some() {
-            return invalid(
-                "TLS_CERT_PATH",
-                "JUSTENCRYPT_TLS_CERT_PATH and JUSTENCRYPT_TLS_KEY_PATH must be set together",
-            );
-        }
-
-        if let Some(origin) = &self.allow_origin {
+        if let Some(origin) = &self.http.allow_origin {
             if origin == "*" {
                 return invalid(
                     "ALLOW_ORIGIN",
@@ -549,43 +487,26 @@ impl AppConfig {
             }
         }
 
-        if !cfg!(debug_assertions) && self.server.secret_key.is_none() {
-            return invalid("ROCKET_SECRET_KEY", "must be set in release builds");
+        match &self.http.secret_key {
+            Some(key) => {
+                if let Err(message) = decode_secret_key(key.expose_secret()) {
+                    return invalid("SECRET_KEY", &message);
+                }
+            },
+            None if !cfg!(debug_assertions) => {
+                return invalid("SECRET_KEY", "must be set in release builds");
+            },
+            None => {},
         }
 
         Ok(())
-    }
-
-    /// Rocket's own settings: address, port, workers, keep-alive, body
-    /// limits, secret key and TLS. Responses get no `Server` header.
-    pub fn rocket_figment(&self) -> Figment {
-        let server = &self.server;
-
-        let mut figment = Config::figment()
-            .merge(("address", server.address))
-            .merge(("port", server.port))
-            .merge(("workers", server.workers))
-            .merge(("max_blocking", server.max_blocking_threads))
-            .merge(("keep_alive", server.keep_alive))
-            .merge(("ident", false))
-            .merge(("limits", self.limits.to_rocket()));
-
-        if let Some(secret_key) = &server.secret_key {
-            figment = figment.merge(("secret_key", secret_key.expose_secret()));
-        }
-
-        if let (Some(cert), Some(key)) = (&server.tls_cert_path, &server.tls_key_path) {
-            figment = figment.merge(("tls", TlsConfig::from_paths(cert, key)));
-        }
-
-        figment
     }
 
     /// How many thumbnails may be generated at once.
     pub fn thumbnail_concurrency(&self) -> usize {
         match self.thumbnail.concurrency {
             Some(concurrency) => concurrency.get(),
-            None => (self.server.workers.get() * 7 / 10).max(1),
+            None => (self.runtime.workers.get() * 7 / 10).max(1),
         }
     }
 
@@ -598,6 +519,46 @@ impl AppConfig {
     pub fn download_stall_timeout(&self) -> Duration {
         Duration::from_secs(self.download_stall_timeout_seconds.get())
     }
+}
+
+/// The key material in a secret key setting: 256 or 512 bits, written as
+/// base64 (44 or 88 characters) or hex (64 characters). A key of all zero
+/// bytes is rejected.
+pub fn decode_secret_key(value: &str) -> Result<Vec<u8>, String> {
+    let bytes = match value.len() {
+        44 | 88 => STANDARD
+            .decode(value)
+            .map_err(|_| "is not valid base64".to_string())?,
+        64 => decode_hex(value).ok_or_else(|| "is not valid hex".to_string())?,
+        n => {
+            return Err(format!(
+                "has {n} characters, but must be 44 or 88 (base64) or 64 (hex); generate one with \
+                 `openssl rand -base64 32`"
+            ))
+        },
+    };
+
+    if bytes.len() < 32 {
+        return Err("must be at least 256 bits".to_string());
+    }
+
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err("must not be all zeros".to_string());
+    }
+
+    Ok(bytes)
+}
+
+// The bytes `hex` spells out, two digits each.
+fn decode_hex(hex: &str) -> Option<Vec<u8>> {
+    if !hex.is_ascii() {
+        return None;
+    }
+
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 // Whether `value` has the form of a web origin: an http(s) scheme and a host,
@@ -615,7 +576,7 @@ fn is_origin(value: &str) -> bool {
 }
 
 // Reports each error against the environment variable it came from.
-fn describe_errors(errors: rocket::figment::Error) -> ConfigError {
+fn describe_errors(errors: figment::Error) -> ConfigError {
     let messages: Vec<String> = errors
         .into_iter()
         .map(|e| {

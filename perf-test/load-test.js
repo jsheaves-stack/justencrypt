@@ -107,7 +107,7 @@ export default function () {
         }
       } else {
         // Chunked upload
-        const initRes = http.post(`${BASE_URL}/file/upload/initiate/${file.name}`, null, {
+        const initRes = http.post(`${BASE_URL}/upload/initiate/${file.name}`, null, {
           tags: { name: 'UploadInit' }
         });
         
@@ -126,7 +126,7 @@ export default function () {
           const end = Math.min(offset + REQUEST_CHUNK_SIZE, file.size);
           const chunkData = DATA_SOURCE.slice(offset, end);
           
-          const chunkRes = http.put(`${BASE_URL}/file/upload/chunk/${uploadId}?offset=${offset}`, chunkData, {
+          const chunkRes = http.put(`${BASE_URL}/upload/chunk/${uploadId}?offset=${offset}`, chunkData, {
             headers: { 'Content-Type': 'application/octet-stream' },
             timeout: '180s',
             tags: { name: 'UploadChunk' }
@@ -140,7 +140,7 @@ export default function () {
         }
 
         if (chunkedSuccess) {
-          const finalizeRes = http.post(`${BASE_URL}/file/upload/finalize/${uploadId}?total_size=${file.size}`, null, {
+          const finalizeRes = http.post(`${BASE_URL}/upload/finalize/${uploadId}?total_size=${file.size}`, null, {
             tags: { name: 'UploadFinalize' }
           });
           const success = check(finalizeRes, { [`finalize chunked upload ok`]: (r) => r.status === 201 });

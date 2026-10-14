@@ -3,14 +3,14 @@ use std::{
     io::ErrorKind,
 };
 
-use rocket::tokio::task;
 use secrecy::{ExposeSecret, SecretString};
+use tokio::task;
 
 use crate::{
     config::AppConfig,
     db::sqlite,
-    enums::request_error::RequestError,
-    session::credentials::{check_password_strength, validate_credentials},
+    enums::service_error::ServiceError,
+    service::credentials::{check_password_strength, validate_credentials},
 };
 
 /// Creates an account after checking the username and the password's
@@ -20,7 +20,7 @@ pub async fn create_account(
     username: &str,
     password: &SecretString,
     config: &AppConfig,
-) -> Result<(), RequestError> {
+) -> Result<(), ServiceError> {
     validate_credentials(username, password.expose_secret())?;
     check_password_strength(
         password.expose_secret(),
@@ -37,7 +37,7 @@ pub async fn create_account_storage(
     username: &str,
     password: &SecretString,
     config: &AppConfig,
-) -> Result<(), RequestError> {
+) -> Result<(), ServiceError> {
     let username = username.to_owned();
     let password = password.clone();
     let user_path = config.user_data_path.join(&username);
@@ -49,7 +49,7 @@ pub async fn create_account_storage(
         fs::create_dir_all(&user_path).map_err(|e| {
             error!("Failed to create user directory for {}: {}", username, e);
 
-            RequestError::InternalServerError
+            ServiceError::Internal
         })?;
 
         // Claims the database file atomically, so two concurrent requests for
@@ -62,12 +62,12 @@ pub async fn create_account_storage(
         {
             Ok(_) => {},
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                return Err(RequestError::AccountAlreadyExists);
+                return Err(ServiceError::AccountAlreadyExists);
             },
             Err(e) => {
                 error!("Failed to create database for {}: {}", username, e);
 
-                return Err(RequestError::InternalServerError);
+                return Err(ServiceError::Internal);
             },
         }
 
@@ -78,7 +78,7 @@ pub async fn create_account_storage(
 
             let _ = fs::remove_file(&db_path);
 
-            return Err(RequestError::InternalServerError);
+            return Err(ServiceError::Internal);
         }
 
         info!("Created account {}", username);
@@ -89,6 +89,6 @@ pub async fn create_account_storage(
     .map_err(|e| {
         error!("Blocking task failed: {}", e);
 
-        RequestError::InternalServerError
+        ServiceError::Internal
     })?
 }

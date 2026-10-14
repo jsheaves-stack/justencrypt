@@ -5,24 +5,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rocket::{
-    async_test,
-    http::{ContentType, Cookie, Status},
-    local::asynchronous::{Client, LocalResponse},
-    routes,
-    tokio::time::sleep,
-};
 use rusqlite::params;
+use tokio::time::sleep;
 
 use super::*;
-use crate::{
-    db::sqlite,
-    routes::{
-        file::put_file,
-        folder::{create_folder, download_folder, get_folder},
-    },
-    AppState,
-};
+use crate::db::sqlite;
 
 /// What an archive entry unpacked to: a directory, or a file's bytes.
 #[derive(Debug, PartialEq)]
@@ -33,16 +20,10 @@ enum Unpacked {
 
 async fn download_client(
     configure: impl FnOnce(&mut AppConfig),
-) -> (Client, Cookie<'static>, TestUser) {
-    let (rocket, test_user) = setup_rocket_with_config(configure).await;
-    let rocket = rocket.mount("/file", routes![put_file]).mount(
-        "/folder",
-        routes![get_folder, download_folder, create_folder],
-    );
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+) -> (TestClient, Cookie<'static>, TestUser) {
+    let (app, test_user) = setup_app_with_config(configure).await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     (client, cookie, test_user)
 }
@@ -61,7 +42,7 @@ fn encode(path: &str) -> String {
         .collect()
 }
 
-async fn put(client: &Client, cookie: &Cookie<'static>, path: &str, body: &[u8]) {
+async fn put(client: &TestClient, cookie: &Cookie<'static>, path: &str, body: &[u8]) {
     let response = client
         .put(format!("/file/{}", encode(path)))
         .private_cookie(cookie.clone())
@@ -69,14 +50,10 @@ async fn put(client: &Client, cookie: &Cookie<'static>, path: &str, body: &[u8])
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created, "{path}");
+    assert_eq!(response.status(), StatusCode::CREATED, "{path}");
 }
 
-async fn download<'c>(
-    client: &'c Client,
-    cookie: &Cookie<'static>,
-    path: &str,
-) -> LocalResponse<'c> {
+async fn download(client: &TestClient, cookie: &Cookie<'static>, path: &str) -> TestResponse {
     client
         .get(format!("/folder/{}?download", encode(path)))
         .private_cookie(cookie.clone())
@@ -84,7 +61,7 @@ async fn download<'c>(
         .await
 }
 
-fn content_length(response: &LocalResponse<'_>) -> usize {
+fn content_length(response: &TestResponse) -> usize {
     response
         .headers()
         .get_one("Content-Length")
@@ -95,8 +72,8 @@ fn content_length(response: &LocalResponse<'_>) -> usize {
 
 /// Reads a complete download, checking that it is exactly as long as its
 /// `Content-Length` said.
-async fn read_archive(response: LocalResponse<'_>) -> Vec<u8> {
-    assert_eq!(response.status(), Status::Ok);
+async fn read_archive(response: TestResponse) -> Vec<u8> {
+    assert_eq!(response.status(), StatusCode::OK);
 
     let expected_len = content_length(&response);
     let body = response.into_bytes().await.unwrap();
@@ -139,7 +116,7 @@ fn patterned(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i % 251) as u8).collect()
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_folder_tree() {
     let (client, cookie, _user) = download_client(|_| {}).await;
     let big = patterned(200_000);
@@ -155,14 +132,11 @@ async fn test_download_folder_tree() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     let response = download(&client, &cookie, "docs").await;
 
-    assert_eq!(
-        response.content_type(),
-        Some(ContentType::new("application", "x-tar"))
-    );
+    assert_eq!(response.content_type(), Some("application/x-tar"));
     assert_eq!(
         response.headers().get_one("Content-Disposition"),
         Some("attachment; filename=\"docs.tar\"; filename*=UTF-8''docs.tar")
@@ -181,7 +155,7 @@ async fn test_download_folder_tree() {
     assert_eq!(entries, expected);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_long_and_unicode_names() {
     let (client, cookie, _user) = download_client(|_| {}).await;
     let long_dir = "d".repeat(200);
@@ -198,7 +172,7 @@ async fn test_download_long_and_unicode_names() {
     assert_eq!(entries[&format!("names/{long_dir}")], Unpacked::Dir);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_names_the_file_after_a_unicode_folder() {
     let (client, cookie, _user) = download_client(|_| {}).await;
 
@@ -218,7 +192,7 @@ async fn test_download_names_the_file_after_a_unicode_folder() {
     assert_eq!(entries["fötö \"x\"/a.txt"], Unpacked::File(b"a".to_vec()));
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_root_folder_is_named_after_the_user() {
     let (client, cookie, user) = download_client(|_| {}).await;
 
@@ -251,13 +225,13 @@ async fn test_download_root_folder_is_named_after_the_user() {
 // Entries whose names the API would refuse could point outside the directory
 // the archive is extracted to. They are left out, and the archive is still
 // exactly as long as its Content-Length says.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_leaves_out_entries_with_invalid_names() {
     let (client, cookie, _user) = download_client(|_| {}).await;
 
     put(&client, &cookie, "mixed/good.txt", b"good").await;
 
-    let state = client.rocket().state::<AppState>().unwrap();
+    let state = client.app();
     let session = state.sessions.snapshot().await.pop().unwrap();
     let db = session.context.pool().get().unwrap();
     let mixed_id = sqlite::get_folder_id(&db, "mixed").unwrap().unwrap();
@@ -296,7 +270,7 @@ async fn test_download_leaves_out_entries_with_invalid_names() {
     assert_eq!(entries, expected);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_get_folder_without_download_still_lists_it() {
     let (client, cookie, _user) = download_client(|_| {}).await;
 
@@ -308,30 +282,30 @@ async fn test_get_folder_without_download_still_lists_it() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Ok);
-    assert_eq!(response.content_type(), Some(ContentType::JSON));
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.content_type(), Some("application/json"));
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_missing_folder_is_not_found() {
     let (client, cookie, _user) = download_client(|_| {}).await;
 
     let response = download(&client, &cookie, "missing").await;
 
-    assert_eq!(response.status(), Status::NotFound);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_without_a_session_is_unauthorized() {
     let (client, _cookie, _user) = download_client(|_| {}).await;
 
     let response = client.get("/folder/?download").dispatch().await;
 
-    assert_eq!(response.status(), Status::Unauthorized);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 // Folder downloads are unlimited unless a limit is configured.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_downloads_are_unlimited_by_default() {
     let (client, cookie, _user) = download_client(|_| {}).await;
 
@@ -344,7 +318,7 @@ async fn test_downloads_are_unlimited_by_default() {
     for _ in 0..5 {
         let response = download(&client, &cookie, "many").await;
 
-        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.status(), StatusCode::OK);
 
         running.push(response);
     }
@@ -359,7 +333,7 @@ async fn test_downloads_are_unlimited_by_default() {
     }
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_beyond_the_limit_is_rejected() {
     let (client, cookie, _user) =
         download_client(|config| config.max_active_downloads = NonZeroUsize::new(1)).await;
@@ -370,11 +344,11 @@ async fn test_download_beyond_the_limit_is_rejected() {
     // holds the only permit.
     let first = download(&client, &cookie, "busy").await;
 
-    assert_eq!(first.status(), Status::Ok);
+    assert_eq!(first.status(), StatusCode::OK);
 
     let second = download(&client, &cookie, "busy").await;
 
-    assert_eq!(second.status(), Status::TooManyRequests);
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
 
     let entries = unpack(&read_archive(first).await);
 
@@ -386,7 +360,7 @@ async fn test_download_beyond_the_limit_is_rejected() {
 
 // A user's folder downloads may use half of their connections. One more waits
 // for a slot, up to the connection timeout, and then is turned away.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_beyond_the_users_share_waits_then_is_rejected() {
     let (client, cookie, _user) = download_client(|config| {
         config.db.max_connections = NonZeroU32::new(2).unwrap();
@@ -399,12 +373,12 @@ async fn test_download_beyond_the_users_share_waits_then_is_rejected() {
     // Not read, so it keeps running and holds the user's only download slot.
     let running = download(&client, &cookie, "share").await;
 
-    assert_eq!(running.status(), Status::Ok);
+    assert_eq!(running.status(), StatusCode::OK);
 
     let started = Instant::now();
     let waiting = download(&client, &cookie, "share").await;
 
-    assert_eq!(waiting.status(), Status::TooManyRequests);
+    assert_eq!(waiting.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(
         started.elapsed() >= Duration::from_millis(900),
         "{:?}",
@@ -412,7 +386,7 @@ async fn test_download_beyond_the_users_share_waits_then_is_rejected() {
     );
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_is_abandoned_when_the_client_stops_reading() {
     let (client, cookie, _user) = download_client(|config| {
         config.max_active_downloads = NonZeroUsize::new(1);
@@ -426,21 +400,21 @@ async fn test_download_is_abandoned_when_the_client_stops_reading() {
     // for the client, gives up after a second, and frees the only permit.
     let stalled = download(&client, &cookie, "stalled").await;
 
-    assert_eq!(stalled.status(), Status::Ok);
+    assert_eq!(stalled.status(), StatusCode::OK);
 
-    let mut status = Status::TooManyRequests;
+    let mut status = StatusCode::TOO_MANY_REQUESTS;
 
     for _ in 0..50 {
         status = download(&client, &cookie, "stalled").await.status();
 
-        if status != Status::TooManyRequests {
+        if status != StatusCode::TOO_MANY_REQUESTS {
             break;
         }
 
         sleep(Duration::from_millis(100)).await;
     }
 
-    assert_eq!(status, Status::Ok);
+    assert_eq!(status, StatusCode::OK);
 
     // What the abandoned download had already queued still arrives, but the
     // body falls short of its Content-Length, so the client sees a failure.
@@ -458,7 +432,7 @@ async fn test_download_is_abandoned_when_the_client_stops_reading() {
 // The folder pass and the file pass each read the database; one read
 // transaction makes both see the database as it was when the download
 // started.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_is_a_snapshot_of_when_it_started() {
     let (client, cookie, _user) = download_client(|_| {}).await;
 
@@ -468,7 +442,7 @@ async fn test_download_is_a_snapshot_of_when_it_started() {
     // all) that their entries alone overflow the ~192 KiB the producer can
     // buffer. Until the body is read, the producer is stuck in the folder
     // pass, and the file pass hasn't begun.
-    let state = client.rocket().state::<AppState>().unwrap();
+    let state = client.app();
     let session = state.sessions.snapshot().await.pop().unwrap();
     let mut db = session.context.pool().get().unwrap();
     let snap_id = sqlite::get_folder_id(&db, "snap").unwrap().unwrap();
@@ -505,7 +479,7 @@ async fn test_download_is_a_snapshot_of_when_it_started() {
 
 // A client that goes away mid-download frees its permit right away, without
 // waiting for the stall timeout.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_dropping_a_download_frees_its_permit() {
     let (client, cookie, _user) = download_client(|config| {
         config.max_active_downloads = NonZeroUsize::new(1);
@@ -516,41 +490,42 @@ async fn test_dropping_a_download_frees_its_permit() {
 
     let first = download(&client, &cookie, "dropped").await;
 
-    assert_eq!(first.status(), Status::Ok);
+    assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(
         download(&client, &cookie, "dropped").await.status(),
-        Status::TooManyRequests
+        StatusCode::TOO_MANY_REQUESTS
     );
 
     drop(first);
 
     // The producer notices the next time it sends, which wakes it at once;
     // the stall timeout (60s here) never comes into it.
-    let mut status = Status::TooManyRequests;
+    let mut status = StatusCode::TOO_MANY_REQUESTS;
 
     for _ in 0..50 {
         status = download(&client, &cookie, "dropped").await.status();
 
-        if status != Status::TooManyRequests {
+        if status != StatusCode::TOO_MANY_REQUESTS {
             break;
         }
 
         sleep(Duration::from_millis(20)).await;
     }
 
-    assert_eq!(status, Status::Ok);
+    assert_eq!(status, StatusCode::OK);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_download_with_a_missing_blob_ends_short() {
     let (client, cookie, _user) = download_client(|_| {}).await;
 
     put(&client, &cookie, "gone/a.txt", b"still here").await;
     put(&client, &cookie, "gone/b.txt", b"blob deleted").await;
 
-    let state = client.rocket().state::<AppState>().unwrap();
+    let state = client.app();
     let session = state.sessions.snapshot().await.pop().unwrap();
     let encoded_name = session
+        .context
         .get_encoded_file_name("gone/b.txt".into())
         .await
         .unwrap();
@@ -560,7 +535,7 @@ async fn test_download_with_a_missing_blob_ends_short() {
 
     let response = download(&client, &cookie, "gone").await;
 
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
 
     let expected_len = content_length(&response);
     let body = response.into_bytes().await.unwrap();

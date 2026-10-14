@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{encryption::CHUNK_SIZE, enums::request_error::RequestError};
+use crate::{encryption::CHUNK_SIZE, enums::service_error::ServiceError};
 
 const MAX_REPORTED_MISSING_CHUNKS: usize = 100;
 
@@ -10,7 +10,7 @@ const MAX_REPORTED_MISSING_CHUNKS: usize = 100;
 pub fn check_uploaded_chunks(
     chunks: &BTreeMap<u64, u32>,
     total_size: u64,
-) -> Result<(), RequestError> {
+) -> Result<(), ServiceError> {
     let chunk_size = CHUNK_SIZE as u64;
     let expected_chunks = total_size.div_ceil(chunk_size);
     let present = chunks.range(..expected_chunks).count() as u64;
@@ -30,11 +30,11 @@ pub fn check_uploaded_chunks(
             ));
         }
 
-        return Err(RequestError::BadRequest(message));
+        return Err(ServiceError::InvalidInput(message));
     }
 
     let size_mismatch =
-        || RequestError::BadRequest("total_size does not match uploaded data".to_string());
+        || ServiceError::InvalidInput("total_size does not match uploaded data".to_string());
 
     if chunks.len() as u64 != expected_chunks {
         return Err(size_mismatch());
@@ -53,7 +53,7 @@ pub fn check_uploaded_chunks(
                 return Err(size_mismatch());
             }
 
-            return Err(RequestError::BadRequest(format!(
+            return Err(ServiceError::InvalidInput(format!(
                 "Chunk {} is incomplete: expected {} bytes, got {}",
                 index, expected_len, len
             )));

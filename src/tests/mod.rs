@@ -1,3 +1,4 @@
+mod client;
 mod test_admin;
 mod test_chunked_upload;
 mod test_config;
@@ -15,6 +16,7 @@ mod test_folder;
 mod test_folder_delete;
 mod test_folder_download;
 mod test_folder_patch;
+mod test_http_behavior;
 mod test_orphans;
 mod test_range;
 mod test_response_headers;
@@ -25,24 +27,30 @@ mod test_thumbnail;
 mod test_user_context;
 mod test_user_isolation;
 mod test_user_storage;
+mod test_web;
 
 use std::{env, fs, path::PathBuf, str::FromStr, sync::Arc};
 
+pub use axum::http::StatusCode;
+pub use client::{TestClient, TestResponse};
+pub use cookie::Cookie;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::{custom, http::Cookie, tokio::sync::Semaphore, Build, Orbit, Rocket};
 use secrecy::SecretString;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::{
+    app::App,
     config::{AppConfig, DbConfig},
     db::migrations::get_migrations,
-    enums::request_error::RequestError,
+    enums::service_error::ServiceError,
+    service::accounts::create_account_storage,
     session::{
-        accounts::create_account_storage, orphans::OrphanScanner, policy::SessionPolicy,
-        store::SessionStore, user_context::UserContext, user_session::UserSession,
+        orphans::OrphanScanner, policy::SessionPolicy, store::SessionStore,
+        user_session::UserSession,
     },
-    AppState,
+    storage::user_context::UserContext,
 };
 
 pub type Db = PooledConnection<SqliteConnectionManager>;
@@ -83,29 +91,25 @@ impl Drop for TestUser {
     }
 }
 
-pub async fn setup_rocket() -> (Rocket<Build>, TestUser) {
-    setup_rocket_with_config(|_| {}).await
+pub async fn setup_app() -> (Arc<App>, TestUser) {
+    setup_app_with_config(|_| {}).await
 }
 
-// Lets a test change the config its Rocket instance is built with.
-pub async fn setup_rocket_with_config(
-    configure: impl FnOnce(&mut AppConfig),
-) -> (Rocket<Build>, TestUser) {
-    build_test_rocket(configure, SessionPolicy::default(), false, 1)
+// Lets a test change the config its application is built with.
+pub async fn setup_app_with_config(configure: impl FnOnce(&mut AppConfig)) -> (Arc<App>, TestUser) {
+    build_test_app(configure, SessionPolicy::default(), false, 1)
 }
 
-pub async fn setup_rocket_with_session_policy(
-    session_policy: SessionPolicy,
-) -> (Rocket<Build>, TestUser) {
-    setup_rocket_with_options(session_policy, false, 1).await
+pub async fn setup_app_with_session_policy(session_policy: SessionPolicy) -> (Arc<App>, TestUser) {
+    setup_app_with_options(session_policy, false, 1).await
 }
 
-pub async fn setup_rocket_with_options(
+pub async fn setup_app_with_options(
     session_policy: SessionPolicy,
     orphan_scan_enabled: bool,
     thumbnail_permits: usize,
-) -> (Rocket<Build>, TestUser) {
-    build_test_rocket(
+) -> (Arc<App>, TestUser) {
+    build_test_app(
         |_| {},
         session_policy,
         orphan_scan_enabled,
@@ -121,18 +125,18 @@ pub fn test_config() -> AppConfig {
         ..AppConfig::default()
     };
 
-    config.server.secret_key =
+    config.http.secret_key =
         Some(SecretString::from_str("BlN4QMqM8+wmRLPNRn10X/ZwmM58tEcCOgeY8cuMsB8=").unwrap());
 
     config
 }
 
-fn build_test_rocket(
+fn build_test_app(
     configure: impl FnOnce(&mut AppConfig),
     session_policy: SessionPolicy,
     orphan_scan_enabled: bool,
     thumbnail_permits: usize,
-) -> (Rocket<Build>, TestUser) {
+) -> (Arc<App>, TestUser) {
     let temp_user = Uuid::new_v4().to_string();
     let temp_dir = env::temp_dir().join(&temp_user);
     fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
@@ -146,7 +150,7 @@ fn build_test_rocket(
     config.orphan_scan_enabled = orphan_scan_enabled;
     configure(&mut config);
 
-    let state = AppState {
+    let app = App {
         config: Arc::new(config.clone()),
         sessions: Arc::new(SessionStore::new(session_policy)),
         orphan_scanner: OrphanScanner::new(orphan_scan_enabled),
@@ -156,37 +160,28 @@ fn build_test_rocket(
             .map(|limit| Arc::new(Semaphore::new(limit.get()))),
     };
 
-    let rocket = custom(config.rocket_figment()).manage(state);
-
-    (rocket, user)
+    (Arc::new(app), user)
 }
 
-// Gives a test's Rocket instance its own upload limits, so limit behavior can
-// be tested with small sizes without touching process-wide env vars.
-pub fn with_upload_limits(rocket: Rocket<Build>, file: u64, file_chunk: u64) -> Rocket<Build> {
-    let figment = rocket
-        .figment()
-        .clone()
-        .merge(("limits.file", file))
-        .merge(("limits.file-chunk", file_chunk));
-
-    rocket.configure(figment)
+// Gives a test's application its own upload limits, so limit behavior can be
+// tested with small sizes without touching process-wide env vars.
+pub fn upload_limits(file: u64, file_chunk: u64) -> impl FnOnce(&mut AppConfig) {
+    move |config| {
+        config.limits.file = ubyte::ByteUnit::Byte(file);
+        config.limits.file_chunk = ubyte::ByteUnit::Byte(file_chunk);
+    }
 }
 
-pub async fn create_test_session(
-    rocket: &Rocket<Orbit>,
-    temp_user: String,
-) -> (String, Cookie<'static>) {
+pub async fn create_test_session(state: &App, temp_user: String) -> (String, Cookie<'static>) {
     let user_token = Uuid::new_v4().to_string();
     let passphrase = SecretString::from_str("test_password").unwrap();
-    let state = rocket.state::<AppState>().unwrap();
 
     // Tests use a weak password, so this skips the strength check that
     // `accounts::create_account` applies. The account may already exist when a
     // test logs in more than once.
 
     match create_account_storage(&temp_user, &passphrase, &state.config).await {
-        Ok(()) | Err(RequestError::AccountAlreadyExists) => {},
+        Ok(()) | Err(ServiceError::AccountAlreadyExists) => {},
 
         Err(e) => panic!("Failed to create test account: {}", e),
     }
@@ -200,7 +195,7 @@ pub async fn create_test_session(
 
     state.sessions.insert(&user_token, user_session).await;
 
-    let cookie = Cookie::build(("sid", user_token)).build();
+    let cookie = Cookie::new("sid", user_token);
 
     (session_id, cookie)
 }

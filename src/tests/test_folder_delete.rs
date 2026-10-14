@@ -1,23 +1,11 @@
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
-
 use super::*;
-use crate::{
-    routes::{
-        file::{get_file, put_file},
-        folder::{create_folder, delete_folder, get_folder},
-    },
-    AppState,
-};
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_delete_folder_success() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/folder", routes![create_folder, get_folder, delete_folder])
-        .mount("/file", routes![put_file]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let client = TestClient::new(app);
+    let (session_id, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let parent_folder = "parent_folder";
     let child_folder = format!("{}/child_folder", parent_folder);
@@ -51,30 +39,22 @@ async fn test_delete_folder_success() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NoContent);
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     // Verify folder is gone
-    let session = client
-        .rocket()
-        .state::<AppState>()
-        .unwrap()
-        .sessions
-        .get_by_id(&session_id)
-        .await
-        .unwrap();
+    let session = client.app().sessions.get_by_id(&session_id).await.unwrap();
 
     // The DB query should fail because the folder doesn't exist
-    let lookup_result = session.get_folder_id(parent_folder.into()).await;
+    let lookup_result = session.context.get_folder_id(parent_folder.into()).await;
     assert!(lookup_result.is_err() || lookup_result.unwrap().is_none());
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_delete_folder_not_found() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/folder", routes![delete_folder]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let response = client
         .delete("/folder/does_not_exist")
@@ -82,10 +62,10 @@ async fn test_delete_folder_not_found() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NotFound);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-async fn put_text(client: &Client, cookie: &rocket::http::Cookie<'static>, path: &str) {
+async fn put_text(client: &TestClient, cookie: &Cookie<'static>, path: &str) {
     let response = client
         .put(format!("/file/{}", path))
         .private_cookie(cookie.clone())
@@ -93,19 +73,16 @@ async fn put_text(client: &Client, cookie: &rocket::http::Cookie<'static>, path:
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 // M7: deleting the root used to delete every file and folder first, then fail
 // on the root itself, wiping the account and still returning 500.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_delete_root_folder_is_rejected_and_deletes_nothing() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/folder", routes![get_folder, delete_folder])
-        .mount("/file", routes![put_file, get_file]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     put_text(&client, &cookie, "top.txt").await;
     put_text(&client, &cookie, "docs/nested/deep.txt").await;
@@ -118,7 +95,12 @@ async fn test_delete_root_folder_is_rejected_and_deletes_nothing() {
             .dispatch()
             .await;
 
-        assert_eq!(response.status(), Status::BadRequest, "DELETE {}", root);
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "DELETE {}",
+            root
+        );
     }
 
     for path in ["top.txt", "docs/nested/deep.txt"] {
@@ -128,20 +110,17 @@ async fn test_delete_root_folder_is_rejected_and_deletes_nothing() {
             .dispatch()
             .await;
 
-        assert_eq!(response.status(), Status::Ok, "{} should survive", path);
+        assert_eq!(response.status(), StatusCode::OK, "{} should survive", path);
     }
 
     assert_eq!(stored_files(&test_user.path).len(), blobs_before);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_delete_folder_tree_removes_every_file_and_leaves_siblings() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/folder", routes![get_folder, delete_folder])
-        .mount("/file", routes![put_file, get_file]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     put_text(&client, &cookie, "doomed/a.txt").await;
     put_text(&client, &cookie, "doomed/sub/b.txt").await;
@@ -155,15 +134,15 @@ async fn test_delete_folder_tree_removes_every_file_and_leaves_siblings() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NoContent);
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(stored_files(&test_user.path).len(), 2);
 
     for (path, expected) in [
-        ("/folder/doomed", Status::NotFound),
-        ("/folder/doomed/sub", Status::NotFound),
-        ("/file/doomed/sub/b.txt", Status::NotFound),
-        ("/file/kept/d.txt", Status::Ok),
-        ("/file/e.txt", Status::Ok),
+        ("/folder/doomed", StatusCode::NOT_FOUND),
+        ("/folder/doomed/sub", StatusCode::NOT_FOUND),
+        ("/file/doomed/sub/b.txt", StatusCode::NOT_FOUND),
+        ("/file/kept/d.txt", StatusCode::OK),
+        ("/file/e.txt", StatusCode::OK),
     ] {
         let response = client
             .get(path)

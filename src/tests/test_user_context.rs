@@ -9,12 +9,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::future::join_all;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::{async_test, futures::future::join_all};
 
 use crate::{
-    config::DbConfig, enums::blocking_error::BlockingError, session::user_context::UserContext,
+    config::DbConfig, enums::blocking_error::BlockingError, storage::user_context::UserContext,
 };
 
 // A context whose user may occupy at most `threads` blocking threads (no
@@ -63,7 +63,7 @@ async fn peak_concurrency(context: &UserContext) -> usize {
     peak.load(Ordering::SeqCst)
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_blocking_work_never_exceeds_the_users_limit() {
     // The test runtime has 32 blocking threads, so without the limit all 20
     // tasks would run at once.
@@ -71,12 +71,12 @@ async fn test_blocking_work_never_exceeds_the_users_limit() {
 }
 
 // By default a single user may use every blocking thread.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_blocking_work_is_unlimited_by_default() {
     assert_eq!(peak_concurrency(&context(None, 30)).await, 20);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_waiting_for_a_turn_gives_up_after_the_timeout() {
     let context = context(Some(1), 1);
     let _taken = context.reserve_blocking().await.unwrap();
@@ -94,7 +94,7 @@ async fn test_waiting_for_a_turn_gives_up_after_the_timeout() {
 
 // `start_blocking` returns at once, but the thread counts against the user's
 // limit until the work finishes.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_started_work_keeps_its_thread_until_it_finishes() {
     let context = context(Some(1), 1);
     let (finish, finished) = mpsc::channel::<()>();
@@ -117,7 +117,7 @@ async fn test_started_work_keeps_its_thread_until_it_finishes() {
 
 // A scan walks all of the user's storage, so a second one (from a second
 // login) waits until the first is over instead of repeating its work.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_only_one_orphan_scan_runs_per_user() {
     let context = context(Some(1), 1);
     let first = context.try_claim_orphan_scan();

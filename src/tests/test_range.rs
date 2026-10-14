@@ -1,4 +1,12 @@
-use crate::{enums::request_error::RequestError, util::range::parse_range};
+use crate::{enums::service_error::ServiceError, web::range};
+
+// Parses `header` and resolves it against a file of `total_size` bytes, as a
+// download does.
+fn parse_range(header: &str, total_size: u64) -> Result<Option<(u64, u64)>, ServiceError> {
+    range::parse_range(header)?
+        .map(|spec| spec.resolve(total_size))
+        .transpose()
+}
 
 fn range(header: &str, total_size: u64) -> Option<(u64, u64)> {
     parse_range(header, total_size).expect("range should be accepted")
@@ -7,7 +15,7 @@ fn range(header: &str, total_size: u64) -> Option<(u64, u64)> {
 fn is_unsatisfiable(header: &str, total_size: u64) -> bool {
     matches!(
         parse_range(header, total_size),
-        Err(RequestError::RangeNotSatisfiable { total_size: t }) if t == total_size
+        Err(ServiceError::RangeNotSatisfiable { total_size: t }) if t == total_size
     )
 }
 
@@ -58,7 +66,7 @@ fn test_parse_range_unsatisfiable() {
 fn test_parse_range_malformed() {
     for header in ["bytes=", "bytes=-", "bytes=a-5", "bytes=0-b", "bytes=1-2-3"] {
         assert!(
-            matches!(parse_range(header, 10), Err(RequestError::BadRequest(_))),
+            matches!(parse_range(header, 10), Err(ServiceError::InvalidInput(_))),
             "{header}"
         );
     }

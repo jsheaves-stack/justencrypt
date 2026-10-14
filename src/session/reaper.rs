@@ -1,16 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
-use rocket::{
-    async_trait,
-    fairing::{Fairing, Info, Kind},
-    tokio::{self, time::interval},
-    Orbit, Rocket,
-};
+use tokio::time::interval;
 
 use crate::{
     session::{store::SessionStore, user_session::UserSession},
     util::time::unix_now_secs,
-    AppState,
 };
 
 /// Cleans up the uploads of sessions that have been removed from the store:
@@ -47,8 +41,9 @@ pub async fn reap_once(store: &SessionStore, upload_ttl: Duration) {
 
 /// Periodically runs [`reap_once`] in the background.
 ///
-/// Expired sessions are already rejected on their next request by the
-/// `AuthenticatedSession` guard, and swept out on every login, so the reaper
+/// Expired sessions are already rejected on their next request (see
+/// [`authenticate`](crate::service::auth::authenticate)), and swept out on
+/// every login, so the reaper
 /// is only needed to reclaim sessions that are never used again. It runs only
 /// when `JUSTENCRYPT_SESSION_REAPER_INTERVAL_SECONDS` is set above 0.
 pub struct SessionReaper {
@@ -62,26 +57,10 @@ impl SessionReaper {
             interval: Duration::from_secs(seconds),
         })
     }
-}
 
-#[async_trait]
-impl Fairing for SessionReaper {
-    fn info(&self) -> Info {
-        Info {
-            name: "Session Reaper",
-            kind: Kind::Liftoff,
-        }
-    }
-
-    async fn on_liftoff(&self, rocket: &Rocket<Orbit>) {
-        let Some(state) = rocket.state::<AppState>() else {
-            error!("Session reaper not started: AppState is not managed.");
-
-            return;
-        };
-
-        let store = state.sessions.clone();
-        let upload_ttl = state.config.upload_ttl();
+    /// Starts the reaper on `store`, removing uploads idle for longer than
+    /// `upload_ttl`. It runs until the runtime shuts down.
+    pub fn spawn(&self, store: Arc<SessionStore>, upload_ttl: Duration) {
         let period = self.interval;
 
         info!(

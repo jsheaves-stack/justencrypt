@@ -5,10 +5,9 @@ use std::{
 
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::async_test;
 use tempfile::tempdir;
 
-use crate::{config::DbConfig, session::user_context::UserContext};
+use crate::{config::DbConfig, storage::user_context::UserContext};
 
 // A context whose files live in `dir`, limited to one blocking thread,
 // that gives up waiting for a turn after a second.
@@ -35,7 +34,7 @@ fn is_busy(result: io::Result<impl Sized>) -> bool {
 
 // File access counts against the user's limits like database work does: with
 // the user's only blocking thread taken, every file operation waits for it.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_file_operations_wait_for_the_users_turn() {
     let dir = tempdir().unwrap();
     let context = one_thread_context(dir.path());
@@ -69,7 +68,7 @@ async fn test_file_operations_wait_for_the_users_turn() {
 
 // Removing a file also removes the shard directories it leaves empty, but
 // never the user's own directory or a shard still in use.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_removing_a_file_prunes_only_empty_shard_directories() {
     let dir = tempdir().unwrap();
     let context = one_thread_context(dir.path());
