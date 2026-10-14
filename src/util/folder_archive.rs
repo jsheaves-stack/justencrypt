@@ -13,12 +13,12 @@ use std::{
     time::Duration,
 };
 
-use rocket::tokio::{
+use rusqlite::{Connection, Transaction, TransactionBehavior};
+use tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot},
     time,
 };
-use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::{
     db::sqlite::{self, ArchiveEntry},
@@ -26,7 +26,7 @@ use crate::{
         sync_chunk_decryptor::SyncChunkDecryptReader, FileEncryptionMetadata, CHUNK_SIZE,
     },
     enums::{archive_error::ArchiveError, db_error::DbError},
-    session::user_context::UserContext,
+    storage::user_context::UserContext,
     util::{
         names::is_valid_relative_path,
         tar::{self, EntryKind},

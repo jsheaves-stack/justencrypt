@@ -1,35 +1,20 @@
 use std::time::Duration;
 
-use rocket::{
-    async_test,
-    http::{ContentType, Cookie, Status},
-    local::asynchronous::Client,
-    routes,
-};
-
 use super::*;
 use crate::{
     db::sqlite,
     enums::db_error::DbError,
-    routes::{
-        file::{init_upload, InitUploadResponse},
-        folder::get_folder,
-        session::{create_session, destroy_session, session_options},
-    },
     session::{policy::SessionPolicy, reaper::SessionReaper},
-    AppState,
+    web::routes::upload::InitUploadResponse,
 };
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_create_session_success() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/session", routes![create_session, session_options]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
 
     // Initialize the user DB with the test password
-    let _ = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let _ = create_test_session(client.app(), test_user.name.clone()).await;
 
     let login_data = format!(
         r#"{{"username": "{}", "password": "test_password"}}"#,
@@ -38,26 +23,23 @@ async fn test_create_session_success() {
 
     let response = client
         .post("/session")
-        .header(ContentType::JSON)
+        .header("Content-Type", "application/json")
         .body(login_data)
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
     let cookies = response.cookies();
     assert!(cookies.iter().any(|c| c.name() == "sid"));
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_create_session_invalid_password() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/session", routes![create_session, session_options]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
 
     // Initialize the user DB with the test password
-    let _ = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let _ = create_test_session(client.app(), test_user.name.clone()).await;
 
     let login_data = format!(
         r#"{{"username": "{}", "password": "wrong_password"}}"#,
@@ -66,23 +48,20 @@ async fn test_create_session_invalid_password() {
 
     let response = client
         .post("/session")
-        .header(ContentType::JSON)
+        .header("Content-Type", "application/json")
         .body(login_data)
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Unauthorized);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_destroy_session_success() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/session", routes![destroy_session, session_options]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
 
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let response = client
         .delete("/session")
@@ -90,20 +69,17 @@ async fn test_destroy_session_success() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NoContent);
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_destroy_session_no_auth() {
-    let (rocket, _test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/session", routes![destroy_session, session_options]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
+    let (app, _test_user) = setup_app().await;
+    let client = TestClient::new(app);
 
     let response = client.delete("/session").dispatch().await;
 
-    assert_eq!(response.status(), Status::Unauthorized);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 // Every `.part` file under the user's directory.
@@ -123,31 +99,19 @@ fn partial_uploads(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     found
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_destroy_session_cleans_up_uploads_and_clears_the_cookie() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/session", routes![destroy_session])
-        .mount("/file", routes![init_upload]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
-    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
-    let session = client
-        .rocket()
-        .state::<AppState>()
-        .unwrap()
-        .sessions
-        .get_by_id(&session_id)
-        .await
-        .unwrap();
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (session_id, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
+    let session = client.app().sessions.get_by_id(&session_id).await.unwrap();
 
     let response = client
-        .post("/file/upload/initiate/in-flight.bin")
+        .post("/upload/initiate/in-flight.bin")
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
     let _: InitUploadResponse = response.into_json().await.unwrap();
     assert_eq!(partial_uploads(&test_user.path).len(), 1);
 
@@ -157,7 +121,7 @@ async fn test_destroy_session_cleans_up_uploads_and_clears_the_cookie() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NoContent);
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     let set_cookie: Vec<&str> = response.headers().get("Set-Cookie").collect();
     assert!(
@@ -185,7 +149,7 @@ fn short_policy(idle_secs: u64, lifetime_secs: u64) -> SessionPolicy {
     }
 }
 
-async fn list_root(client: &Client, cookie: &Cookie<'static>) -> Status {
+async fn list_root(client: &TestClient, cookie: &Cookie<'static>) -> StatusCode {
     client
         .get("/folder/")
         .private_cookie(cookie.clone())
@@ -194,101 +158,83 @@ async fn list_root(client: &Client, cookie: &Cookie<'static>) -> Status {
         .status()
 }
 
-async fn session_exists(client: &Client, session_id: &str) -> bool {
-    client
-        .rocket()
-        .state::<AppState>()
-        .unwrap()
-        .sessions
-        .get_by_id(session_id)
-        .await
-        .is_some()
+async fn session_exists(client: &TestClient, session_id: &str) -> bool {
+    client.app().sessions.get_by_id(session_id).await.is_some()
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_idle_session_expires() {
-    let (rocket, test_user) = setup_rocket_with_session_policy(short_policy(1, 3600)).await;
-    let rocket = rocket.mount("/folder", routes![get_folder]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
-    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app_with_session_policy(short_policy(1, 3600)).await;
+    let client = TestClient::new(app);
+    let (session_id, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
-    assert_eq!(list_root(&client, &cookie).await, Status::Ok);
+    assert_eq!(list_root(&client, &cookie).await, StatusCode::OK);
 
-    rocket::tokio::time::sleep(Duration::from_millis(2100)).await;
+    tokio::time::sleep(Duration::from_millis(2100)).await;
 
-    assert_eq!(list_root(&client, &cookie).await, Status::Unauthorized);
+    assert_eq!(list_root(&client, &cookie).await, StatusCode::UNAUTHORIZED);
     assert!(!session_exists(&client, &session_id).await);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_activity_keeps_a_session_alive() {
-    let (rocket, test_user) = setup_rocket_with_session_policy(short_policy(2, 3600)).await;
-    let rocket = rocket.mount("/folder", routes![get_folder]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app_with_session_policy(short_policy(2, 3600)).await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     // Well past the idle timeout in total, but never idle for that long.
     for _ in 0..5 {
-        assert_eq!(list_root(&client, &cookie).await, Status::Ok);
+        assert_eq!(list_root(&client, &cookie).await, StatusCode::OK);
 
-        rocket::tokio::time::sleep(Duration::from_millis(700)).await;
+        tokio::time::sleep(Duration::from_millis(700)).await;
     }
 
-    assert_eq!(list_root(&client, &cookie).await, Status::Ok);
+    assert_eq!(list_root(&client, &cookie).await, StatusCode::OK);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_session_expires_at_its_max_lifetime_even_when_active() {
-    let (rocket, test_user) = setup_rocket_with_session_policy(short_policy(3600, 1)).await;
-    let rocket = rocket.mount("/folder", routes![get_folder]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
-    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app_with_session_policy(short_policy(3600, 1)).await;
+    let client = TestClient::new(app);
+    let (session_id, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     for _ in 0..3 {
-        rocket::tokio::time::sleep(Duration::from_millis(700)).await;
+        tokio::time::sleep(Duration::from_millis(700)).await;
         list_root(&client, &cookie).await;
     }
 
-    assert_eq!(list_root(&client, &cookie).await, Status::Unauthorized);
+    assert_eq!(list_root(&client, &cookie).await, StatusCode::UNAUTHORIZED);
     assert!(!session_exists(&client, &session_id).await);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_enabled_reaper_removes_expired_sessions_without_any_request() {
-    let (rocket, test_user) = setup_rocket_with_session_policy(short_policy(1, 3600)).await;
-    let rocket = rocket.attach(SessionReaper::every(1).unwrap());
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
-    let (session_id, _) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app_with_session_policy(short_policy(1, 3600)).await;
+    let client = TestClient::new(app);
+    let app = client.app();
+    SessionReaper::every(1)
+        .unwrap()
+        .spawn(app.sessions.clone(), app.config.upload_ttl());
+    let (session_id, _) = create_test_session(client.app(), test_user.name.clone()).await;
 
     assert!(session_exists(&client, &session_id).await);
 
-    rocket::tokio::time::sleep(Duration::from_millis(3500)).await;
+    tokio::time::sleep(Duration::from_millis(3500)).await;
 
     assert!(!session_exists(&client, &session_id).await);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_login_cookie_lives_as_long_as_the_session() {
-    let (rocket, test_user) = setup_rocket_with_session_policy(short_policy(3600, 1234)).await;
-    let rocket = rocket.mount("/session", routes![create_session]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
+    let (app, test_user) = setup_app_with_session_policy(short_policy(3600, 1234)).await;
+    let client = TestClient::new(app);
 
     // Initialize the user DB with the test password
-    let _ = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let _ = create_test_session(client.app(), test_user.name.clone()).await;
 
     let response = client
         .post("/session")
-        .header(ContentType::JSON)
+        .header("Content-Type", "application/json")
         .body(format!(
             r#"{{"username": "{}", "password": "test_password"}}"#,
             test_user.name
@@ -296,7 +242,7 @@ async fn test_login_cookie_lives_as_long_as_the_session() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     let set_cookie: Vec<&str> = response.headers().get("Set-Cookie").collect();
     assert!(
@@ -313,22 +259,19 @@ async fn test_login_cookie_lives_as_long_as_the_session() {
 
 // With the reaper disabled (the default), logins are what clear out sessions
 // that expired and were never used again.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_login_removes_expired_sessions_when_the_reaper_is_disabled() {
-    let (rocket, test_user) = setup_rocket_with_session_policy(short_policy(1, 3600)).await;
-    let rocket = rocket.mount("/session", routes![create_session]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
-    let (abandoned_id, _) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app_with_session_policy(short_policy(1, 3600)).await;
+    let client = TestClient::new(app);
+    let (abandoned_id, _) = create_test_session(client.app(), test_user.name.clone()).await;
 
-    rocket::tokio::time::sleep(Duration::from_millis(2100)).await;
+    tokio::time::sleep(Duration::from_millis(2100)).await;
 
     assert!(session_exists(&client, &abandoned_id).await);
 
     let response = client
         .post("/session")
-        .header(ContentType::JSON)
+        .header("Content-Type", "application/json")
         .body(format!(
             r#"{{"username": "{}", "password": "test_password"}}"#,
             test_user.name
@@ -336,15 +279,15 @@ async fn test_login_removes_expired_sessions_when_the_reaper_is_disabled() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
     assert!(!session_exists(&client, &abandoned_id).await);
 }
 
-async fn login(client: &Client, username: &str, password: &str) -> (Status, String) {
+async fn login(client: &TestClient, username: &str, password: &str) -> (StatusCode, String) {
     let body = serde_json::json!({ "username": username, "password": password }).to_string();
     let response = client
         .post("/session")
-        .header(ContentType::JSON)
+        .header("Content-Type", "application/json")
         .body(body)
         .dispatch()
         .await;
@@ -355,14 +298,11 @@ async fn login(client: &Client, username: &str, password: &str) -> (Status, Stri
 
 // M4: every failed login looks the same, so a response never reveals whether
 // the username exists.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_failed_logins_are_indistinguishable() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/session", routes![create_session]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
-    let _ = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let _ = create_test_session(client.app(), test_user.name.clone()).await;
 
     // A folder with no database: an account that was never set up.
     let name = uuid::Uuid::new_v4().to_string();
@@ -387,7 +327,7 @@ async fn test_failed_logins_are_indistinguishable() {
     ];
 
     let (first_status, first_body) = login(&client, attempts[0].0, attempts[0].1).await;
-    assert_eq!(first_status, Status::Unauthorized);
+    assert_eq!(first_status, StatusCode::UNAUTHORIZED);
 
     for (username, password) in attempts {
         let (status, body) = login(&client, username, password).await;
@@ -408,13 +348,10 @@ async fn test_failed_logins_are_indistinguishable() {
         .exists());
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_login_rejects_malformed_credentials_before_touching_the_filesystem() {
-    let (rocket, _test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/session", routes![create_session]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
+    let (app, _test_user) = setup_app().await;
+    let client = TestClient::new(app);
 
     // An absolute-path username used to make the server probe for
     // `<path>.db` anywhere on disk, answering differently if it existed.
@@ -449,7 +386,7 @@ async fn test_login_rejects_malformed_credentials_before_touching_the_filesystem
     ] {
         let (status, _) = login(&client, username, password).await;
 
-        assert_eq!(status, Status::BadRequest, "username {:?}", username);
+        assert_eq!(status, StatusCode::BAD_REQUEST, "username {:?}", username);
     }
 }
 
@@ -468,29 +405,26 @@ fn create_unmigrated_user_db(test_user: &TestUser, password: &str) -> PathBuf {
 
 // M12: concurrent first logins used to migrate the same database at once, and
 // every login but the first failed with a 401.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_concurrent_first_logins_all_succeed() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/session", routes![create_session]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
 
     create_unmigrated_user_db(&test_user, "test_password");
 
     let logins = (0..8).map(|_| login(&client, &test_user.name, "test_password"));
-    let results = rocket::futures::future::join_all(logins).await;
+    let results = futures_util::future::join_all(logins).await;
 
     for (status, body) in results {
-        assert_eq!(status, Status::Created, "body: {}", body);
+        assert_eq!(status, StatusCode::CREATED, "body: {}", body);
     }
 }
 
 // M12: a failed migration is reported as a migration error rather than being
 // disguised as a missing row.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_failed_migration_is_reported_as_a_migration_error() {
-    let (_rocket, test_user) = setup_rocket().await;
+    let (_app, test_user) = setup_app().await;
     let db_path = create_unmigrated_user_db(&test_user, "test_password");
     let password = SecretString::from_str("test_password").unwrap();
     let db_config = test_config().db;

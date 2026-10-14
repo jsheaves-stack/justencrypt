@@ -10,24 +10,21 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use r2d2_sqlite::SqliteConnectionManager;
-use rocket::tokio::{
-    sync::{mpsc, oneshot, Mutex, RwLock},
+use secrecy::SecretString;
+use tokio::{
+    sync::{Mutex, RwLock},
     task,
 };
-use secrecy::SecretString;
 use uuid::Uuid;
 
 use crate::{
     config::AppConfig,
-    db::sqlite::{self, FolderContent},
-    encryption::{chunk_encryptor::ChunkEncryptor, FileEncryptionMetadata, MPSC_CHANNEL_CAPACITY},
+    db::sqlite,
+    encryption::chunk_encryptor::ChunkEncryptor,
     enums::db_error::DbError,
-    session::{credentials::is_valid_username, policy::SessionPolicy, user_context::UserContext},
-    util::{
-        folder_archive::{self, ChannelWriter, FolderArchive},
-        time::unix_now_secs,
-    },
+    session::policy::SessionPolicy,
+    storage::user_context::UserContext,
+    util::{names::is_valid_username, time::unix_now_secs},
 };
 
 /// A chunked upload in progress.
@@ -193,51 +190,6 @@ impl UserSession {
         Ok(session)
     }
 
-    /// Runs `f` with one of the user's database connections (see
-    /// `UserContext::with_db`).
-    async fn with_db<F, R>(&self, f: F) -> Result<R, DbError>
-    where
-        F: FnOnce(r2d2::PooledConnection<SqliteConnectionManager>) -> Result<R, DbError>
-            + Send
-            + 'static,
-        R: Send + 'static,
-    {
-        self.context.with_db(f).await
-    }
-
-    /// The name of the encrypted file stored for the file at `file_path`.
-    #[cfg(test)]
-    pub async fn get_encoded_file_name(&self, file_path: PathBuf) -> Result<String, DbError> {
-        let result = self
-            .with_db(move |db| {
-                sqlite::get_encoded_file_name(&db, file_path.to_str().ok_or(DbError::InvalidPath)?)
-            })
-            .await?;
-
-        Ok(result)
-    }
-
-    /// Records an upload in progress, so its partial file can be found and
-    /// removed if the upload is never finished.
-    pub async fn add_active_upload_db(
-        &self,
-        upload_id: String,
-        encoded_file_name: String,
-        file_path: String,
-    ) -> Result<(), DbError> {
-        let session_id = self.session_id.clone();
-        self.with_db(move |db| {
-            sqlite::add_active_upload(&db, &upload_id, &session_id, &encoded_file_name, &file_path)
-        })
-        .await
-    }
-
-    /// Removes the record of an upload that has finished or been abandoned.
-    pub async fn remove_active_upload_db(&self, upload_id: String) -> Result<(), DbError> {
-        self.with_db(move |db| sqlite::remove_active_upload(&db, &upload_id))
-            .await
-    }
-
     /// Deletes an upload's partial file and its tracking row. A partial file
     /// that is already gone is not an error.
     pub async fn abort_upload(&self, upload_id: &str, encoded_file_name: &str) {
@@ -250,7 +202,11 @@ impl UserSession {
             }
         }
 
-        if let Err(e) = self.remove_active_upload_db(upload_id.to_owned()).await {
+        if let Err(e) = self
+            .context
+            .remove_active_upload(upload_id.to_owned())
+            .await
+        {
             warn!(
                 "Failed to remove upload {} from the database: {}",
                 upload_id, e
@@ -286,32 +242,13 @@ impl UserSession {
         }
     }
 
-    /// The encoded names of every blob the database refers to: those of stored
-    /// files, and those of uploads still in progress (in any session).
-    pub async fn referenced_blob_names(
-        &self,
-    ) -> Result<(HashSet<String>, HashSet<String>), DbError> {
-        self.with_db(|db| {
-            let files = sqlite::get_all_encoded_names(&db)?.into_iter().collect();
-            let uploads = sqlite::get_all_active_uploads(&db)?
-                .into_iter()
-                .map(|(_, _, encoded_file_name)| encoded_file_name)
-                .collect();
-
-            Ok((files, uploads))
-        })
-        .await
-    }
-
     /// Aborts the uploads recorded for sessions not in `active_session_ids`,
     /// which ended without cleaning up after themselves (a crash, for example).
     pub async fn cleanup_orphaned_uploads(
         &self,
         active_session_ids: HashSet<String>,
     ) -> Result<(), DbError> {
-        let active_uploads_db = self
-            .with_db(|db| sqlite::get_all_active_uploads(&db))
-            .await?;
+        let active_uploads_db = self.context.recorded_uploads().await?;
 
         for (upload_id, session_id, encoded_file_name) in active_uploads_db {
             if active_session_ids.contains(&session_id) {
@@ -326,9 +263,7 @@ impl UserSession {
 
     /// Aborts every upload this session has in progress.
     pub async fn cleanup_own_uploads(&self) -> Result<(), DbError> {
-        let active_uploads_db = self
-            .with_db(|db| sqlite::get_all_active_uploads(&db))
-            .await?;
+        let active_uploads_db = self.context.recorded_uploads().await?;
 
         for (upload_id, session_id, encoded_file_name) in active_uploads_db {
             if session_id != self.session_id {
@@ -339,172 +274,5 @@ impl UserSession {
         }
 
         Ok(())
-    }
-
-    /// Stores a file and returns the encoded name of the blob it replaced, if
-    /// any. The caller owns deleting that blob.
-    pub async fn add_file(
-        &self,
-        file_path: PathBuf,
-        encoded_file_name: String,
-        metadata: FileEncryptionMetadata,
-    ) -> Result<Option<String>, DbError> {
-        let replaced = self
-            .with_db(move |mut db| {
-                sqlite::add_file(
-                    &mut db,
-                    file_path.to_str().ok_or(DbError::InvalidPath)?,
-                    &encoded_file_name,
-                    metadata,
-                )
-            })
-            .await?;
-
-        Ok(replaced)
-    }
-
-    /// Deletes a file and returns the encoded name of its blob, or `None` if
-    /// there was no such file. The caller owns deleting that blob.
-    pub async fn delete_file(&self, file_path: PathBuf) -> Result<Option<String>, DbError> {
-        let deleted = self
-            .with_db(move |mut db| {
-                sqlite::delete_file(&mut db, file_path.to_str().ok_or(DbError::InvalidPath)?)
-            })
-            .await?;
-
-        Ok(deleted)
-    }
-
-    /// Deletes a folder and everything under it, and returns the encoded names
-    /// of the blobs that belonged to the deleted files. The caller owns
-    /// deleting those blobs.
-    pub async fn delete_folder_tree(&self, folder_path: PathBuf) -> Result<Vec<String>, DbError> {
-        self.with_db(move |mut db| {
-            sqlite::delete_folder_tree(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await
-    }
-
-    /// Creates the folder at `folder_path`, and any missing parent folders.
-    pub async fn add_folder(&self, folder_path: PathBuf) -> Result<(), DbError> {
-        self.with_db(move |mut db| {
-            sqlite::add_folder(&mut db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
-        })
-        .await?;
-
-        Ok(())
-    }
-
-    /// Renames and/or moves a folder in one transaction.
-    pub async fn update_folder(
-        &self,
-        folder_path: PathBuf,
-        new_name: Option<String>,
-        destination: Option<String>,
-    ) -> Result<(), DbError> {
-        self.with_db(move |mut db| {
-            sqlite::update_folder(
-                &mut db,
-                folder_path.to_str().ok_or(DbError::InvalidPath)?,
-                new_name.as_deref(),
-                destination.as_deref(),
-            )
-        })
-        .await
-    }
-
-    /// Renames and/or moves a file in one transaction.
-    pub async fn update_file(
-        &self,
-        file_path: PathBuf,
-        new_name: Option<String>,
-        destination: Option<String>,
-    ) -> Result<(), DbError> {
-        self.with_db(move |mut db| {
-            sqlite::update_file(
-                &mut db,
-                file_path.to_str().ok_or(DbError::InvalidPath)?,
-                new_name.as_deref(),
-                destination.as_deref(),
-            )
-        })
-        .await
-    }
-
-    /// The id of the folder at `folder_path`, if it exists.
-    #[cfg(test)]
-    pub async fn get_folder_id(&self, folder_path: PathBuf) -> Result<Option<i32>, DbError> {
-        let result = self
-            .with_db(move |db| {
-                sqlite::get_folder_id(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
-            })
-            .await?;
-
-        Ok(result)
-    }
-
-    /// The files and folders directly inside the folder at `folder_path`.
-    pub async fn get_folder(&self, folder_path: PathBuf) -> Result<Vec<FolderContent>, DbError> {
-        let result = self
-            .with_db(move |db| {
-                sqlite::get_folder(&db, folder_path.to_str().ok_or(DbError::InvalidPath)?)
-            })
-            .await?;
-
-        Ok(result)
-    }
-
-    /// Starts streaming a folder, with everything below it, as a TAR archive.
-    /// Returns once the archive's length is known; its bytes then arrive on
-    /// the returned channel as fast as the client reads them. `hold` (the
-    /// download's permits) is kept until the archive is finished, the client
-    /// goes away, or the client reads nothing for `stall_timeout`.
-    pub async fn stream_folder_archive<H: Send + 'static>(
-        &self,
-        folder_path: PathBuf,
-        hold: H,
-        stall_timeout: Duration,
-    ) -> Result<FolderArchive, DbError> {
-        let folder_path = folder_path.to_str().ok_or(DbError::InvalidPath)?.to_owned();
-        let connection = self.context.reserve_connection().await?;
-        let context = self.context.clone();
-        let username = self.username.clone();
-        let (ready_tx, ready_rx) = oneshot::channel();
-        let (tx, rx) = mpsc::channel(MPSC_CHANNEL_CAPACITY);
-        let out = ChannelWriter::new(tx, stall_timeout);
-
-        // The producer occupies one of the user's blocking threads, and one
-        // of their connections, for as long as the download runs.
-        self.context
-            .start_blocking(move || {
-                let _held = (hold, connection);
-
-                folder_archive::produce(&context, &folder_path, &username, ready_tx, out);
-            })
-            .await?;
-
-        let (len, file_name) = ready_rx
-            .await
-            .map_err(|e| DbError::ThreadJoinError(e.to_string()))??;
-
-        Ok(FolderArchive { rx, len, file_name })
-    }
-
-    /// The name of the encrypted file stored for the file at `file_path`, with
-    /// its key and size.
-    pub async fn get_file_decryption_data(
-        &self,
-        file_path: PathBuf,
-    ) -> Result<(String, FileEncryptionMetadata), DbError> {
-        let result = self
-            .with_db(move |db| {
-                sqlite::get_file_decryption_data(
-                    &db,
-                    file_path.to_str().ok_or(DbError::InvalidPath)?,
-                )
-            })
-            .await?;
-
-        Ok(result)
     }
 }

@@ -1,14 +1,14 @@
 use std::{collections::BTreeMap, io};
 
 use orion::aead;
-use rocket::tokio::{io::AsyncReadExt, sync::Mutex};
+use tokio::{io::AsyncReadExt, sync::Mutex};
 
 use crate::{
     encryption::{
         encrypted_len, FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE, INDEX_LEN,
     },
     enums::encryption_error::EncryptionError,
-    session::user_storage::BlobFile,
+    storage::user_storage::BlobFile,
 };
 
 /// Encrypts plaintext into a file of fixed-size encrypted chunks.

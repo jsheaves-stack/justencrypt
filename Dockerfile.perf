@@ -61,7 +61,7 @@ RUN chmod +x /perf-test/entrypoint.sh
 # The entrypoint generates a throwaway secret key unless one is passed in.
 ENV JUSTENCRYPT_ADDRESS="0.0.0.0" \
     JUSTENCRYPT_PORT="8000" \
-    ROCKET_LOG_LEVEL="off"
+    JUSTENCRYPT_HTTP_LOG_LEVEL="Off"
 
 # Results directory
 RUN mkdir -p /results

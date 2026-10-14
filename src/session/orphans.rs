@@ -1,10 +1,9 @@
 use std::{io, sync::Arc};
 
-use rocket::tokio;
+use tokio;
 
 use crate::{
-    enums::db_error::DbError,
-    session::{user_session::UserSession, user_storage::StoredKind},
+    enums::db_error::DbError, session::user_session::UserSession, storage::user_storage::StoredKind,
 };
 
 /// Removes stored files that no database row refers to: blobs whose file row
@@ -60,7 +59,7 @@ impl OrphanScanner {
 
 /// Deletes the user's unreferenced files and returns how many were removed.
 /// Only files the server named are considered (see
-/// [`UserContext::list_stored_files`](crate::session::user_context::UserContext::list_stored_files));
+/// [`UserContext::list_stored_files`](crate::storage::user_context::UserContext::list_stored_files));
 /// the user's database files and anything else are never touched.
 pub async fn remove_orphaned_files(session: &UserSession) -> Result<usize, DbError> {
     let context = &session.context;
@@ -74,7 +73,7 @@ pub async fn remove_orphaned_files(session: &UserSession) -> Result<usize, DbErr
     // in between lose its new `.part` file.
     let candidates = context.list_stored_files().await?;
 
-    let (files, uploads) = session.referenced_blob_names().await?;
+    let (files, uploads) = context.referenced_blob_names().await?;
 
     let mut removed = 0;
 

@@ -19,12 +19,14 @@ RUN cargo test --workspace --target x86_64-unknown-linux-musl --release
 
 FROM prepare AS build
 WORKDIR /usr/src/justencrypt
+ARG JUSTENCRYPT_VERSION
 RUN cargo build --release --target x86_64-unknown-linux-musl
 RUN chmod +x /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt
 
 FROM prepare AS test_and_build
 WORKDIR /usr/src/justencrypt
 RUN cargo test --workspace --target x86_64-unknown-linux-musl --release
+ARG JUSTENCRYPT_VERSION
 RUN cargo build --release --target x86_64-unknown-linux-musl
 RUN chmod +x /usr/src/justencrypt/target/x86_64-unknown-linux-musl/release/justencrypt
 

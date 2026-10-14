@@ -4,20 +4,12 @@ use std::{
     time::Duration,
 };
 
-use rocket::{
-    async_test,
-    http::{ContentType, Status},
-    local::asynchronous::Client,
-    routes,
-};
 use uuid::Uuid;
 
 use super::*;
 use crate::{
-    routes::{file::put_file, session::create_session},
     session::{orphans::remove_orphaned_files, policy::SessionPolicy},
     util::sharded_path::sharded_path,
-    AppState,
 };
 
 // Creates `path` and its directories.
@@ -32,22 +24,12 @@ fn sharded(base: PathBuf, name: &str) -> PathBuf {
     sharded_path(base, name)
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_remove_orphaned_files_removes_only_unreferenced_files() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/file", routes![put_file]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("valid rocket instance");
-    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
-    let session = client
-        .rocket()
-        .state::<AppState>()
-        .unwrap()
-        .sessions
-        .get_by_id(&session_id)
-        .await
-        .unwrap();
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (session_id, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
+    let session = client.app().sessions.get_by_id(&session_id).await.unwrap();
 
     let response = client
         .put("/file/kept.txt")
@@ -55,19 +37,22 @@ async fn test_remove_orphaned_files_removes_only_unreferenced_files() {
         .body("content")
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     let user = test_user.path.clone();
     let cache = user.join(".cache");
     let referenced = session
+        .context
         .get_encoded_file_name("kept.txt".into())
         .await
         .unwrap();
 
     let in_progress = Uuid::new_v4().to_string();
     session
-        .add_active_upload_db(
+        .context
+        .add_active_upload(
             in_progress.clone(),
+            session.session_id.clone(),
             in_progress.clone(),
             "upload.bin".into(),
         )
@@ -107,31 +92,27 @@ async fn test_remove_orphaned_files_removes_only_unreferenced_files() {
 }
 
 // Logs in, then gives the background scan a moment to finish.
-async fn log_in_and_wait(client: &Client, username: &str) {
+async fn log_in_and_wait(client: &TestClient, username: &str) {
     let response = client
         .post("/session")
-        .header(ContentType::JSON)
+        .header("Content-Type", "application/json")
         .body(serde_json::json!({ "username": username, "password": "test_password" }).to_string())
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
-    rocket::tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_every_login_scans_for_orphans_only_when_enabled() {
     for enabled in [false, true] {
-        let (rocket, test_user) =
-            setup_rocket_with_options(SessionPolicy::default(), enabled, 1).await;
-        let rocket = rocket.mount("/session", routes![create_session]);
-        let client = Client::tracked(rocket)
-            .await
-            .expect("valid rocket instance");
+        let (app, test_user) = setup_app_with_options(SessionPolicy::default(), enabled, 1).await;
+        let client = TestClient::new(app);
 
         // Sets up the account.
-        let _ = create_test_session(client.rocket(), test_user.name.clone()).await;
+        let _ = create_test_session(client.app(), test_user.name.clone()).await;
 
         let first = stored_file(&sharded(
             test_user.path.clone(),

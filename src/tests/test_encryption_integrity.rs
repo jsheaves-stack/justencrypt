@@ -7,17 +7,13 @@ use std::{
     time::Duration,
 };
 
-use rocket::{
-    async_test,
-    tokio::{
-        self,
-        io::{duplex, AsyncWriteExt},
-        sync::{mpsc, Mutex},
-        time::timeout,
-    },
-};
 use secrecy::SecretString;
 use tempfile::tempdir;
+use tokio::{
+    io::{duplex, AsyncWriteExt},
+    sync::{mpsc, Mutex},
+    time::timeout,
+};
 
 use super::migrated_db;
 use crate::{
@@ -29,7 +25,7 @@ use crate::{
         ENCRYPTED_CHUNK_SIZE,
     },
     enums::{db_error::DbError, encryption_error::EncryptionError},
-    session::user_context::UserContext,
+    storage::user_context::UserContext,
     tests::storage_context,
 };
 
@@ -94,7 +90,7 @@ async fn decrypt_range(
     )
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_decrypt_range_returns_exactly_the_requested_bytes() {
     let dir = tempdir().unwrap();
     let data = plaintext(3 * CHUNK_SIZE + 100);
@@ -126,7 +122,7 @@ async fn test_decrypt_range_returns_exactly_the_requested_bytes() {
 
 // A file that ends early at a chunk boundary used to be streamed short with
 // `Ok(())` and nothing logged.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_decrypt_range_reports_a_truncated_file() {
     let dir = tempdir().unwrap();
     let data = plaintext(3 * CHUNK_SIZE);
@@ -154,7 +150,7 @@ async fn test_decrypt_range_reports_a_truncated_file() {
 }
 
 // A client that goes away mid-download is not an error.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_decrypt_range_stops_quietly_when_the_receiver_is_gone() {
     let dir = tempdir().unwrap();
     let data = plaintext(4 * CHUNK_SIZE);
@@ -172,7 +168,7 @@ async fn test_decrypt_range_stops_quietly_when_the_receiver_is_gone() {
 
 // A client that stays connected but stops reading would otherwise keep the
 // download, its open file and its key around forever.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_decrypt_range_gives_up_when_the_receiver_stops_reading() {
     let dir = tempdir().unwrap();
     let data = plaintext(4 * CHUNK_SIZE);
@@ -216,7 +212,7 @@ fn test_sync_reader_reads_the_whole_file() {
 }
 
 // The stored format version used to be ignored.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_unknown_encryption_versions_are_rejected() {
     let dir = tempdir().unwrap();
     let (context, path, metadata) = encrypted_file(dir.path(), &plaintext(10)).await;
@@ -294,7 +290,7 @@ fn test_user_databases_use_secure_delete() {
 
 // Chunk uploads used to hold the encryptor exclusively while reading their
 // whole body, so a slow client stalled every other chunk of the upload.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_chunks_of_one_upload_are_written_concurrently() {
     let dir = tempdir().unwrap();
     let context = storage_context(dir.path());

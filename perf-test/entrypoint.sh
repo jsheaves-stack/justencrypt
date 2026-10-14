@@ -15,7 +15,7 @@ mkdir -p user_data /results
 # Release builds require a secret key, and accounts are created through the
 # admin API, which needs an admin key. Generate throwaway ones unless the
 # caller provided them.
-export JUSTENCRYPT_ROCKET_SECRET_KEY="${JUSTENCRYPT_ROCKET_SECRET_KEY:-$(head -c 32 /dev/urandom | base64)}"
+export JUSTENCRYPT_SECRET_KEY="${JUSTENCRYPT_SECRET_KEY:-$(head -c 32 /dev/urandom | base64)}"
 export JUSTENCRYPT_ADMIN_API_KEY="${JUSTENCRYPT_ADMIN_API_KEY:-$(head -c 32 /dev/urandom | base64)}"
 
 # Generate random data based on user-requested max size

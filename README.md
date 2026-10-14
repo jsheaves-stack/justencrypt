@@ -10,7 +10,7 @@
 [license-badge]: https://img.shields.io/badge/License-MIT-blue.svg
 [license-link]: https://opensource.org/licenses/MIT
 
-JustEncrypt is a self-hostable, high-performance file encryption service accessible via a RESTful API. It's built with Rust and the Rocket web framework, with a strong emphasis on security and privacy.
+JustEncrypt is a self-hostable, high-performance file encryption service accessible via a RESTful API. It's built with Rust and the axum web framework, with a strong emphasis on security and privacy.
 
 ## Features
 
@@ -25,7 +25,7 @@ JustEncrypt is a self-hostable, high-performance file encryption service accessi
 ## Technologies
 
 - **Language:** [Rust](https://www.rust-lang.org/)
-- **Web Framework:** [Rocket](https://rocket.rs/)
+- **Web Framework:** [axum](https://github.com/tokio-rs/axum), on [Tokio](https://tokio.rs/)
 - **Database:** [SQLite](https://www.sqlite.org/index.html) with [SQLCipher](https://www.zetetic.net/sqlcipher/) for database encryption.
 - **Encryption:** [Orion](https://docs.rs/orion/latest/orion/) for cryptographic operations.
 - **Serialization:** [Serde](https://serde.rs/)
@@ -54,7 +54,7 @@ cd justencrypt
 cp env/justencrypt.env .env
 ```
 
-Generate your own secret key with `openssl rand -base64 32` and set it as `JUSTENCRYPT_ROCKET_SECRET_KEY`; release builds refuse to start without one. Set `JUSTENCRYPT_ADMIN_API_KEY` too, since accounts are created through the admin API. For development over plain HTTP, set `JUSTENCRYPT_SECURE_COOKIES=false` so the session cookie isn't marked HTTPS-only.
+Generate your own secret key with `openssl rand -base64 32` and set it as `JUSTENCRYPT_SECRET_KEY`; release builds refuse to start without one. Set `JUSTENCRYPT_ADMIN_API_KEY` too, since accounts are created through the admin API. For development over plain HTTP, set `JUSTENCRYPT_SECURE_COOKIES=false` so the session cookie isn't marked HTTPS-only.
 
 ### 3. Build and Run
 
@@ -64,7 +64,7 @@ You can run the application using `cargo`:
 cargo run --release
 ```
 
-The server will start on the address and port specified in your configuration (default: `http://0.0.0.0:8000`).
+The server will start on the address and port specified in your configuration (default: `http://0.0.0.0:8000`). It speaks plain HTTP (HTTP/1.1, and HTTP/2 for clients that ask for it directly); see [Running Behind a Reverse Proxy](#running-behind-a-reverse-proxy) for HTTPS.
 
 ### 4. Create a User
 
@@ -87,13 +87,12 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 
 | Variable Name                                 | Description | Default |
 |-----------------------------------------------|-------------|---------|
-| `JUSTENCRYPT_ADDRESS`                         | The IP address Rocket will bind to. | `0.0.0.0` |
-| `JUSTENCRYPT_PORT`                            | The port Rocket will listen on. | `8000` |
+| `JUSTENCRYPT_ADDRESS`                         | The IP address the server listens on. | `0.0.0.0` |
+| `JUSTENCRYPT_PORT`                            | The port the server listens on. | `8000` |
 | `JUSTENCRYPT_WORKERS`                         | Number of worker threads for handling requests. | `16` |
 | `JUSTENCRYPT_MAX_BLOCKING_THREADS`            | Number of threads for work that blocks: database queries, file reads and writes, and image decoding. Shared by every user. | `512` |
-| `JUSTENCRYPT_KEEP_ALIVE`                      | Keep-alive timeout in seconds. | `5` |
 | `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` | The minimum zxcvbn password score (`0`-`4`) required when creating an account. | `4` |
-| `JUSTENCRYPT_ROCKET_LOG_LEVEL`                | Logging level for Rocket (`Off`, `Debug`, `Normal`, `Critical`). | `Critical` |
+| `JUSTENCRYPT_HTTP_LOG_LEVEL`                  | Logging level for the HTTP server and its libraries, including one line per request at `Info` (`Off`, `Trace`, `Debug`, `Info`, `Warn`, `Error`). | `Error` |
 | `JUSTENCRYPT_LOG_LEVEL`                       | Logging level for the application (`Off`, `Trace`, `Debug`, `Info`, `Warn`, `Error`). | `Warn` |
 | `JUSTENCRYPT_USER_DATA_PATH`                  | The path to store user data. | `./user_data` |
 | `JUSTENCRYPT_MIN_DB_CONNECTIONS_PER_USER`     | Minimum number of idle SQLite connections per user. | `0` |
@@ -117,25 +116,17 @@ All variables are read once at startup (`src/config/mod.rs`). An empty value cou
 | `JUSTENCRYPT_THUMBNAIL_CONCURRENCY`           | Maximum number of thumbnails generated at once. | 70% of `JUSTENCRYPT_WORKERS` |
 | `JUSTENCRYPT_THUMBNAIL_MAX_DECODE_MEMORY`     | Maximum memory one image may need to decode for a thumbnail (e.g. `256MiB`); larger images, or ones wider or taller than 16384 pixels, get a `422`. Decoding uses at most this times `JUSTENCRYPT_THUMBNAIL_CONCURRENCY`. | `256MiB` |
 | `JUSTENCRYPT_SESSION_REAPER_INTERVAL_SECONDS` | How often a background job removes expired sessions and stale uploads. `0` disables it; expired sessions are then still rejected on their next request and cleared out on every login. | `0` |
-| `JUSTENCRYPT_ROCKET_SECRET_KEY`               | **Required in release builds.** A 256-bit base64 key for securing cookies. Generate one with `openssl rand -base64 32`. Debug builds without one use a random key for each launch. | (none) |
-| `JUSTENCRYPT_TLS_KEY_PATH`                    | Path to the TLS key file for HTTPS. | (none) |
-| `JUSTENCRYPT_TLS_CERT_PATH`                   | Path to the TLS cert file for HTTPS. | (none) |
+| `JUSTENCRYPT_SECRET_KEY`                      | **Required in release builds.** The key the session cookies are encrypted with: 256 or 512 bits, as base64 or hex. Generate one with `openssl rand -base64 32`. Debug builds without one use a random key for each launch. | (none) |
 | `JUSTENCRYPT_ALLOW_ORIGIN`                    | The one origin (e.g. `https://app.example.com`, no trailing slash) whose pages may call the API from a browser, with cookies. Other origins get no CORS headers. `*` is rejected. | (none) |
 | `JUSTENCRYPT_SECURE_COOKIES`                  | Whether session cookies require HTTPS. Set to false for local dev. | `true` |
 | `JUSTENCRYPT_ADMIN_API_KEY`                   | API key to enable and access administrative routes, including creating user accounts. | (none) |
-| `JUSTENCRYPT_LIMITS_FORM`                     | Maximum size for form submissions. | `10MiB` |
-| `JUSTENCRYPT_LIMITS_DATA_FORM`                | Maximum size for data-form submissions. | `10MiB` |
 | `JUSTENCRYPT_LIMITS_FILE`                     | Maximum file size, for both single and chunked uploads. Larger uploads are rejected with `413`. | `64GiB` |
-| `JUSTENCRYPT_LIMITS_FILE_CHUNK`               | Maximum body size of a single chunked-upload request (`PUT /file/upload/chunk/...`). | `32MiB` |
+| `JUSTENCRYPT_LIMITS_FILE_CHUNK`               | Maximum body size of a single chunked-upload request (`PUT /upload/chunk/...`). | `32MiB` |
 | `JUSTENCRYPT_LIMITS_JSON`                     | Maximum JSON body size (login, account creation and `PATCH` requests). | `10MiB` |
-| `JUSTENCRYPT_LIMITS_MSGPACK`                  | Maximum MessagePack payload size. | `1MiB` |
-| `JUSTENCRYPT_LIMITS_FILE_JPG`                 | Maximum size for JPG files. | `10GiB` |
-| `JUSTENCRYPT_LIMITS_BYTES`                    | Maximum size for raw byte payloads. | `10MiB` |
-| `JUSTENCRYPT_LIMITS_STRING`                   | Maximum size for string payloads. | `10MiB` |
 
 ## API Endpoints
 
-The full API, including request and response formats and every status code, is described in [`openapi.yaml`](openapi.yaml). Apart from `GET /`, `POST /session`, preflight `OPTIONS` requests and the admin routes, every route needs the `sid` session cookie set by `POST /session`. Any of those routes can answer `429` when the user's own requests in progress kept it waiting for longer than `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`; it can be retried later.
+The full API, including request and response formats and every status code, is described in [`openapi.yaml`](openapi.yaml). Requests with a JSON body must send `Content-Type: application/json`; others get `415`. Every error response has an [RFC 9457 Problem Details](https://www.rfc-editor.org/rfc/rfc9457) body (`application/problem+json`) whose `detail` says what went wrong. Apart from `GET /`, `POST /session`, preflight `OPTIONS` requests and the admin routes, every route needs the `sid` session cookie set by `POST /session`. Any of those routes can answer `429` when the user's own requests in progress kept it waiting for longer than `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`; it can be retried later.
 
 ### Info (`/`)
 - `GET /`: Get server information.
@@ -149,15 +140,17 @@ The full API, including request and response formats and every status code, is d
 - `PUT /<file_path..>`: Upload a file (simple upload).
 - `DELETE /<file_path..>`: Delete a file.
 - `PATCH /<file_path..>`: Rename or move a file.
-- `POST /upload/initiate/<file_path..>`: Initiate a chunked upload.
-- `PUT /upload/chunk/<upload_id>?<offset>`: Upload a chunk of a file.
-- `POST /upload/finalize/<upload_id>?<total_size>`: Finalize a chunked upload.
 
-A chunked upload starts with `initiate`, which returns an `upload_id`. The file is then sent in 64 KiB chunks: each `chunk` request carries one or more consecutive chunks starting at `offset` (a multiple of 65536), and requests may be sent in any order or in parallel. `finalize` checks that the chunks add up to exactly `total_size` bytes and stores the file. Because these routes share the `/file` prefix, files can't be stored under `upload/initiate/`, `upload/chunk/` or `upload/finalize/`.
+### Chunked Upload (`/upload`)
+- `POST /initiate/<file_path..>`: Initiate a chunked upload.
+- `PUT /chunk/<upload_id>?offset=<offset>`: Upload a chunk of a file.
+- `POST /finalize/<upload_id>?total_size=<total_size>`: Finalize a chunked upload.
+
+A chunked upload starts with `initiate`, which returns an `upload_id`. The file is then sent in 64 KiB chunks: each `chunk` request carries one or more consecutive chunks starting at `offset` (a multiple of 65536), and requests may be sent in any order or in parallel. `finalize` checks that the chunks add up to exactly `total_size` bytes and stores the file.
 
 ### Folder (`/folder`)
 - `GET /<folder_path..>`: List the contents of a folder.
-- `GET /<folder_path..>?download`: Download a folder and everything in it as an uncompressed TAR archive, streamed as it is built.
+- `GET /<folder_path..>?download`: Download a folder and everything in it as an uncompressed TAR archive, streamed as it is built. Any `download` parameter selects the archive, with or without a value.
 - `PUT /<folder_path..>`: Create a new folder.
 - `DELETE /<folder_path..>`: Delete a folder.
 - `PATCH /<folder_path..>`: Rename or move a folder.
@@ -206,9 +199,27 @@ docker run -d -p 8000:8000 \
   --name justencrypt justencrypt
 ```
 
-The image only contains the server binary, so it runs without any capabilities. User data is written to `/user_data` inside the container, so it is lost when the container is removed. If you set `JUSTENCRYPT_TLS_CERT_PATH` and `JUSTENCRYPT_TLS_KEY_PATH`, mount the certificate and key into the container as well.
+The image only contains the server binary, so it runs without any capabilities. User data is written to `/user_data` inside the container, so it is lost when the container is removed. The container serves plain HTTP; put a reverse proxy in front of it for HTTPS.
 
 Building the image runs the test suite in release mode before building the binary.
+
+### Versioning
+
+The server reports its version in `GET /` and logs it at startup. It is the `version` in `Cargo.toml`, unless the `JUSTENCRYPT_VERSION` environment variable is set when the binary is compiled; the Dockerfile takes it as a build argument (`docker build --build-arg JUSTENCRYPT_VERSION=...`).
+
+The OneDev pipeline (`.onedev-buildspec.yml`) versions each build `<Cargo.toml version>-<UTC date>.<n>`, for example `0.1.0-20261014.2`, where `n` is 1 for the first image of the day and counts up from there. `ci/build-version.sh` works out `n` from the tags already in the container registry. Every build pushes the image tagged with its version; builds of `main` also move `latest`. To start a new version, change `version` in `Cargo.toml`.
+
+### Running Behind a Reverse Proxy
+
+The server doesn't handle TLS itself; a reverse proxy in front of it terminates HTTPS and renews the certificate. With [Caddy](https://caddyserver.com/), which gets a certificate from Let's Encrypt automatically, the whole configuration is:
+
+```
+files.example.com {
+    reverse_proxy localhost:8000
+}
+```
+
+Keep the server's port reachable only by the proxy (bind it with `JUSTENCRYPT_ADDRESS=127.0.0.1`, or keep it on a private Docker network), so requests can't bypass HTTPS. Keep `JUSTENCRYPT_SECURE_COOKIES=true`: browsers talk to the proxy over HTTPS, so the session cookie is still sent.
 
 ## Testing
 
@@ -228,7 +239,7 @@ cargo +nightly fmt
 
 - **A forgotten password can't be recovered.** A user's file keys live in their database, which is encrypted with their password. Without the password, their files can't be decrypted by anyone, including an administrator.
 - **Back up the user data directory** (`JUSTENCRYPT_USER_DATA_PATH`). Losing a user's `.db` file loses the keys to all of their files, even if the encrypted files themselves survive.
-- **Use HTTPS.** Run behind a reverse proxy that terminates TLS, or set `JUSTENCRYPT_TLS_CERT_PATH` and `JUSTENCRYPT_TLS_KEY_PATH`, and keep `JUSTENCRYPT_SECURE_COOKIES=true`. Passwords and files travel in the requests.
+- **Use HTTPS.** Run behind a reverse proxy that terminates TLS (see [Running Behind a Reverse Proxy](#running-behind-a-reverse-proxy)), and keep `JUSTENCRYPT_SECURE_COOKIES=true`. Passwords and files travel in the requests.
 - **Keep the secret key and the admin key secret.** The secret key protects the session cookies. Anyone with the admin key can create accounts and end sessions, so use a long random value.
 - **Sessions live in memory.** Restarting the server logs everyone out and discards unfinished chunked uploads.
 

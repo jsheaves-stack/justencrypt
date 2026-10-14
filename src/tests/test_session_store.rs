@@ -10,11 +10,8 @@ use std::{
 
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::{
-    async_test,
-    tokio::{self, runtime::Builder, sync::Mutex, time::timeout},
-};
 use secrecy::ExposeSecret;
+use tokio::{runtime::Builder, sync::Mutex, time::timeout};
 use uuid::Uuid;
 
 use crate::{
@@ -23,9 +20,9 @@ use crate::{
         policy::SessionPolicy,
         reaper::{reap_once, SessionReaper},
         store::{token_digest, SessionStore},
-        user_context::UserContext,
         user_session::{new_session_token, UserSession},
     },
+    storage::user_context::UserContext,
     util::time::unix_now_secs,
 };
 
@@ -62,7 +59,7 @@ fn policy(idle_secs: u64, lifetime_secs: u64, max_per_user: usize) -> SessionPol
     }
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_insert_then_lookup_by_token_and_id() {
     let store = SessionStore::default();
     let session = detached_session("alice");
@@ -78,7 +75,7 @@ async fn test_insert_then_lookup_by_token_and_id() {
     assert!(store.get_by_id("nope").await.is_none());
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_remove_by_token_clears_both_lookups() {
     let store = SessionStore::default();
     let session = detached_session("alice");
@@ -92,7 +89,7 @@ async fn test_remove_by_token_clears_both_lookups() {
     assert!(store.remove_by_token("tok-a").await.is_none());
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_remove_by_id_clears_both_lookups() {
     let store = SessionStore::default();
     let session = detached_session("alice");
@@ -106,7 +103,7 @@ async fn test_remove_by_id_clears_both_lookups() {
     assert!(store.remove_by_id(&session.session_id).await.is_none());
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_reinserting_a_token_replaces_the_old_session_completely() {
     let store = SessionStore::default();
     let old = detached_session("alice");
@@ -121,7 +118,7 @@ async fn test_reinserting_a_token_replaces_the_old_session_completely() {
     assert_eq!(store.snapshot().await.len(), 1);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_reinserting_a_session_under_a_new_token_drops_the_old_token() {
     let store = SessionStore::default();
     let session = detached_session("alice");
@@ -134,7 +131,7 @@ async fn test_reinserting_a_session_under_a_new_token_drops_the_old_token() {
     assert_eq!(store.snapshot().await.len(), 1);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_snapshot_and_context_for_user() {
     let store = SessionStore::default();
     store.insert("tok-a", detached_session("alice")).await;
@@ -156,7 +153,8 @@ async fn test_snapshot_and_context_for_user() {
 // H1 regression: concurrent readers must keep making progress while other
 // tasks insert and remove sessions. Under the old two-map layout the
 // equivalent workload deadlocked permanently. This needs real parallelism, so
-// it builds its own 8-worker runtime instead of using `async_test`.
+// it builds its own 8-worker runtime instead of using the single-worker test
+// runtime.
 #[test]
 fn test_concurrent_reads_and_removals_do_not_deadlock() {
     let runtime = Builder::new_multi_thread()
@@ -221,7 +219,7 @@ fn test_concurrent_reads_and_removals_do_not_deadlock() {
     });
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_insert_over_the_per_user_limit_evicts_the_oldest_sessions() {
     let store = SessionStore::new(policy(3600, 86400, 2));
     let oldest = aged_session("alice", 300, 0);
@@ -245,7 +243,7 @@ async fn test_insert_over_the_per_user_limit_evicts_the_oldest_sessions() {
     assert!(store.get("bob").await.is_some());
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_remove_expired_removes_idle_and_too_old_sessions_only() {
     let store = SessionStore::new(policy(60, 3600, 10));
     let fresh = aged_session("alice", 10, 10);
@@ -275,7 +273,7 @@ async fn test_remove_expired_removes_idle_and_too_old_sessions_only() {
     assert!(store.get("at-the-limit").await.is_some());
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_touch_refreshes_last_seen() {
     let session = aged_session("alice", 100, 100);
     let expiry = policy(60, 3600, 10);
@@ -287,7 +285,7 @@ async fn test_touch_refreshes_last_seen() {
     assert!(!session.is_expired(unix_now_secs(), &expiry));
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_reap_once_removes_expired_sessions() {
     let store = SessionStore::new(policy(60, 3600, 10));
     let live = aged_session("alice", 10, 10);
@@ -321,7 +319,7 @@ fn test_session_tokens_are_256_bit_base64url() {
 }
 
 // M12: logins for the same user wait for each other; other users don't.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_login_lock_serialises_logins_per_user() {
     let store = SessionStore::default();
     let alice = store.lock_login("alice").await;
@@ -351,7 +349,7 @@ async fn test_login_lock_serialises_logins_per_user() {
 
 // A7: the store used raw session tokens as its keys, so anything that exposed
 // its memory exposed working session cookies. It keeps only their digests.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_store_keeps_token_digests_not_tokens() {
     let store = SessionStore::default();
     let session = detached_session("alice");

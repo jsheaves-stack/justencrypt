@@ -1,7 +1,7 @@
 // Database work runs on the server's blocking threads, which every user
-// shares (Rocket's test runtime has 32). Requests waiting for one user's
-// database connections must not hold any, or one user flooding the server
-// would leave every other user's requests waiting behind theirs.
+// shares. Requests waiting for one user's database connections must not hold
+// any, or one user flooding the server would leave every other user's
+// requests waiting behind theirs.
 
 use std::{
     env,
@@ -10,26 +10,11 @@ use std::{
     time::Duration,
 };
 
-use rocket::{
-    async_test,
-    futures::future::join_all,
-    http::{ContentType, Cookie, Status},
-    local::asynchronous::{Client, LocalResponse},
-    routes,
-    tokio::{
-        self,
-        time::{sleep, timeout},
-    },
-};
+use futures_util::future::join_all;
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 use super::*;
-use crate::routes::{
-    file::put_file,
-    folder::{download_folder, get_folder},
-    session::{create_session, destroy_session},
-    thumbnail::get_thumbnail,
-};
 
 /// More requests than the test runtime has blocking threads.
 const FLOOD: usize = 40;
@@ -39,27 +24,27 @@ const FLOOD: usize = 40;
 async fn two_users(
     max_connections: u32,
     configure: impl FnOnce(&mut AppConfig),
-) -> (Client, Cookie<'static>, Cookie<'static>, TestUser, TestUser) {
-    let (rocket, user_a) = setup_rocket_with_config(|config| {
+) -> (
+    TestClient,
+    Cookie<'static>,
+    Cookie<'static>,
+    TestUser,
+    TestUser,
+) {
+    let (app, user_a) = setup_app_with_config(|config| {
         config.db.max_connections = NonZeroU32::new(max_connections).unwrap();
         configure(config);
     })
     .await;
-    let rocket = rocket
-        .mount("/file", routes![put_file])
-        .mount("/folder", routes![get_folder, download_folder])
-        .mount("/thumbnail", routes![get_thumbnail]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
-    let (_, cookie_a) = create_test_session(client.rocket(), user_a.name.clone()).await;
+    let client = TestClient::new(app);
+    let (_, cookie_a) = create_test_session(client.app(), user_a.name.clone()).await;
 
     let name_b = Uuid::new_v4().to_string();
     let user_b = TestUser {
         path: env::temp_dir().join(&name_b),
         name: name_b,
     };
-    let (_, cookie_b) = create_test_session(client.rocket(), user_b.name.clone()).await;
+    let (_, cookie_b) = create_test_session(client.app(), user_b.name.clone()).await;
 
     let mut image = Vec::new();
 
@@ -79,14 +64,14 @@ async fn two_users(
                 .dispatch()
                 .await;
 
-            assert_eq!(response.status(), Status::Created);
+            assert_eq!(response.status(), StatusCode::CREATED);
         }
     }
 
     (client, cookie_a, cookie_b, user_a, user_b)
 }
 
-async fn download_big<'c>(client: &'c Client, cookie: &Cookie<'static>) -> LocalResponse<'c> {
+async fn download_big(client: &TestClient, cookie: &Cookie<'static>) -> TestResponse {
     client
         .get("/folder/big?download")
         .private_cookie(cookie.clone())
@@ -97,7 +82,7 @@ async fn download_big<'c>(client: &'c Client, cookie: &Cookie<'static>) -> Local
 /// Runs `flood` while user B lists their root folder, which must answer
 /// promptly: before the flood is over, and within a few seconds.
 async fn assert_b_is_unaffected(
-    client: &Client,
+    client: &TestClient,
     cookie_b: &Cookie<'static>,
     flood: impl std::future::Future,
 ) {
@@ -122,19 +107,19 @@ async fn assert_b_is_unaffected(
         status = b_lists_a_folder => status,
     };
 
-    assert_eq!(status, Status::Ok);
+    assert_eq!(status, StatusCode::OK);
 }
 
 // A's only connection is held by a running download, so each of A's folder
 // listings has to wait for it.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_requests_waiting_for_a_connection_do_not_starve_other_users() {
     let (client, cookie_a, cookie_b, _user_a, _user_b) = two_users(1, |_| {}).await;
 
     // Not read, so it keeps running and holds the connection.
     let download = download_big(&client, &cookie_a).await;
 
-    assert_eq!(download.status(), Status::Ok);
+    assert_eq!(download.status(), StatusCode::OK);
 
     let listings = join_all((0..FLOOD).map(|_| {
         client
@@ -148,7 +133,7 @@ async fn test_requests_waiting_for_a_connection_do_not_starve_other_users() {
 
 // Each folder download holds a connection for as long as it runs, and none of
 // these are read, so they keep running.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_many_folder_downloads_do_not_starve_other_users() {
     let (client, cookie_a, cookie_b, _user_a, _user_b) = two_users(2, |_| {}).await;
 
@@ -159,7 +144,7 @@ async fn test_many_folder_downloads_do_not_starve_other_users() {
 
 // Folder downloads may only take half of a user's connections, so the rest
 // stay free for the user's other requests.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_folder_downloads_leave_connections_for_the_users_other_requests() {
     let (client, cookie_a, _cookie_b, _user_a, _user_b) = two_users(2, |_| {}).await;
 
@@ -187,12 +172,12 @@ async fn test_folder_downloads_leave_connections_for_the_users_other_requests() 
         status = a_lists_a_folder => status,
     };
 
-    assert_eq!(status, Status::Ok);
+    assert_eq!(status, StatusCode::OK);
 }
 
 // A download waiting for one of its own user's slots must not hold one of the
 // server-wide permits meanwhile, or other users would be turned away.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_a_download_waiting_on_its_user_leaves_server_permits_to_others() {
     let (client, cookie_a, cookie_b, _user_a, _user_b) = two_users(2, |config| {
         config.max_active_downloads = NonZeroUsize::new(2);
@@ -203,7 +188,7 @@ async fn test_a_download_waiting_on_its_user_leaves_server_permits_to_others() {
     // Holds A's only download slot and one of the two server-wide permits.
     let running = download_big(&client, &cookie_a).await;
 
-    assert_eq!(running.status(), Status::Ok);
+    assert_eq!(running.status(), StatusCode::OK);
 
     // A's second download waits for A's slot; B starts one meanwhile.
     let (waiting, other_user) = tokio::join!(download_big(&client, &cookie_a), async {
@@ -212,28 +197,22 @@ async fn test_a_download_waiting_on_its_user_leaves_server_permits_to_others() {
         download_big(&client, &cookie_b).await
     });
 
-    assert_eq!(other_user.status(), Status::Ok);
-    assert_eq!(waiting.status(), Status::TooManyRequests);
+    assert_eq!(other_user.status(), StatusCode::OK);
+    assert_eq!(waiting.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 // Logging out and back in must not give a user a fresh set of permits while
 // work from before, here a download still running, holds the old ones.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_logging_in_again_keeps_the_users_limits() {
-    let (rocket, user) = setup_rocket_with_config(|config| {
+    let (app, user) = setup_app_with_config(|config| {
         config.db.max_connections = NonZeroU32::new(2).unwrap();
         config.db.connection_timeout_seconds = NonZeroU64::new(1).unwrap();
     })
     .await;
-    let rocket = rocket
-        .mount("/file", routes![put_file])
-        .mount("/folder", routes![download_folder])
-        .mount("/session", routes![create_session, destroy_session]);
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let client = TestClient::new(app);
     let password = SecretString::from_str("test_password").unwrap();
-    let state = client.rocket().state::<AppState>().unwrap();
+    let state = client.app();
 
     create_account_storage(&user.name, &password, &state.config)
         .await
@@ -243,7 +222,7 @@ async fn test_logging_in_again_keeps_the_users_limits() {
     let log_in = || async {
         client
             .post("/session")
-            .header(ContentType::JSON)
+            .header("Content-Type", "application/json")
             .body(format!(
                 r#"{{"username": "{}", "password": "test_password"}}"#,
                 user.name
@@ -253,7 +232,7 @@ async fn test_logging_in_again_keeps_the_users_limits() {
             .status()
     };
 
-    assert_eq!(log_in().await, Status::Created);
+    assert_eq!(log_in().await, StatusCode::CREATED);
 
     let response = client
         .put("/file/big/big.bin")
@@ -261,28 +240,28 @@ async fn test_logging_in_again_keeps_the_users_limits() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // Not read, so it keeps running and holds the user's only download slot
     // after the session that started it is gone.
     let running = client.get("/folder/big?download").dispatch().await;
 
-    assert_eq!(running.status(), Status::Ok);
+    assert_eq!(running.status(), StatusCode::OK);
     assert_eq!(
         client.delete("/session").dispatch().await.status(),
-        Status::NoContent
+        StatusCode::NO_CONTENT
     );
-    assert_eq!(log_in().await, Status::Created);
+    assert_eq!(log_in().await, StatusCode::CREATED);
 
     let second = client.get("/folder/big?download").dispatch().await;
 
-    assert_eq!(second.status(), Status::TooManyRequests);
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 // A thumbnail waiting on its own user must not hold the server-wide
 // thumbnail permit meanwhile (the tests' server allows one at a time), or
 // other users' thumbnails would wait behind it.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_a_thumbnail_waiting_on_its_user_leaves_server_permits_to_others() {
     let (client, cookie_a, cookie_b, _user_a, _user_b) = two_users(1, |config| {
         config.db.connection_timeout_seconds = NonZeroU64::new(3).unwrap();
@@ -292,7 +271,7 @@ async fn test_a_thumbnail_waiting_on_its_user_leaves_server_permits_to_others() 
     // Not read, so it keeps running and holds A's only connection.
     let running = download_big(&client, &cookie_a).await;
 
-    assert_eq!(running.status(), Status::Ok);
+    assert_eq!(running.status(), StatusCode::OK);
 
     // A's thumbnail waits up to 3s for that connection; B asks for one
     // meanwhile.
@@ -317,12 +296,12 @@ async fn test_a_thumbnail_waiting_on_its_user_leaves_server_permits_to_others() 
         }
     );
 
-    assert_eq!(other_user, Status::Ok);
+    assert_eq!(other_user, StatusCode::OK);
 }
 
 // A request kept waiting by the user's own work in progress is told to try
 // again later (429), not that the server failed (500).
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_a_request_waiting_too_long_on_its_own_user_gets_429() {
     let (client, cookie_a, _cookie_b, _user_a, _user_b) = two_users(1, |config| {
         config.db.connection_timeout_seconds = NonZeroU64::new(1).unwrap();
@@ -332,7 +311,7 @@ async fn test_a_request_waiting_too_long_on_its_own_user_gets_429() {
     // Not read, so it keeps running and holds A's only connection.
     let running = download_big(&client, &cookie_a).await;
 
-    assert_eq!(running.status(), Status::Ok);
+    assert_eq!(running.status(), StatusCode::OK);
 
     let response = client
         .get("/folder/big")
@@ -340,5 +319,5 @@ async fn test_a_request_waiting_too_long_on_its_own_user_gets_429() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::TooManyRequests);
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 }

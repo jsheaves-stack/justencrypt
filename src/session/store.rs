@@ -3,12 +3,11 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-use rocket::tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
-use crate::session::{
-    policy::SessionPolicy,
-    user_context::{UserContext, WeakUserContext},
-    user_session::UserSession,
+use crate::{
+    session::{policy::SessionPolicy, user_session::UserSession},
+    storage::user_context::{UserContext, WeakUserContext},
 };
 
 /// The set of live user sessions.

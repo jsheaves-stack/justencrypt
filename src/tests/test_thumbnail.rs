@@ -1,32 +1,16 @@
 use std::{fs, io::Cursor};
 
-use rocket::{
-    async_test,
-    data::ToByteUnit,
-    http::{ContentType, Status},
-    local::asynchronous::Client,
-    routes,
-};
+use ubyte::ToByteUnit;
 
 use super::*;
-use crate::{
-    routes::{
-        file::{delete_file, put_file},
-        thumbnail::{get_thumbnail, thumbnail_options},
-    },
-    session::policy::SessionPolicy,
-    util::sharded_path::sharded_path,
-};
+use crate::{session::policy::SessionPolicy, util::sharded_path::sharded_path};
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_get_thumbnail_success() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
-        .mount("/file", routes![put_file]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     // 1. Upload a real image
     let file_path = "test_image.jpg";
@@ -45,7 +29,7 @@ async fn test_get_thumbnail_success() {
         .body(&img_data)
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // 2. Get thumbnail
     let response = client
@@ -54,7 +38,7 @@ async fn test_get_thumbnail_success() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_bytes().await.unwrap();
     assert!(!body.is_empty());
 
@@ -65,20 +49,17 @@ async fn test_get_thumbnail_success() {
         .dispatch()
         .await;
 
-    assert_eq!(response_cache_hit.status(), Status::Ok);
+    assert_eq!(response_cache_hit.status(), StatusCode::OK);
     let body_hit = response_cache_hit.into_bytes().await.unwrap();
     assert_eq!(body, body_hit);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_thumbnail_true_cache_resiliency() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
-        .mount("/file", routes![put_file]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let file_path = "resiliency_image.jpg";
     let mut img_data = Vec::new();
@@ -94,7 +75,7 @@ async fn test_thumbnail_true_cache_resiliency() {
         .body(&img_data)
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // Initial thumbnail request (populates cache)
     let response = client
@@ -102,7 +83,7 @@ async fn test_thumbnail_true_cache_resiliency() {
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
     let orig_body = response.into_bytes().await.unwrap();
 
     // Now manually delete the user's .cache directory to simulate cache clearing
@@ -119,20 +100,17 @@ async fn test_thumbnail_true_cache_resiliency() {
         .private_cookie(cookie)
         .dispatch()
         .await;
-    assert_eq!(response_regen.status(), Status::Ok);
+    assert_eq!(response_regen.status(), StatusCode::OK);
     let regen_body = response_regen.into_bytes().await.unwrap();
     assert_eq!(orig_body, regen_body);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_thumbnail_deletion_cleanup() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail, thumbnail_options])
-        .mount("/file", routes![put_file, delete_file]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let client = TestClient::new(app);
+    let (session_id, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let file_path = "to_delete.jpg";
     let mut img_data = Vec::new();
@@ -148,7 +126,7 @@ async fn test_thumbnail_deletion_cleanup() {
         .body(&img_data)
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // Populate thumbnail cache
     let response = client
@@ -156,12 +134,13 @@ async fn test_thumbnail_deletion_cleanup() {
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
 
     // Verify cache file exists in .cache
-    let state = client.rocket().state::<AppState>().unwrap();
+    let state = client.app();
     let session = state.sessions.get_by_id(&session_id).await.unwrap();
     let encoded_name = session
+        .context
         .get_encoded_file_name(file_path.into())
         .await
         .unwrap();
@@ -176,19 +155,18 @@ async fn test_thumbnail_deletion_cleanup() {
         .private_cookie(cookie)
         .dispatch()
         .await;
-    assert_eq!(del_response.status(), Status::NoContent);
+    assert_eq!(del_response.status(), StatusCode::NO_CONTENT);
 
     // Assert thumbnail file was cleaned up
     assert!(!sharded_thumb.exists());
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_get_thumbnail_not_found() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount("/thumbnail", routes![get_thumbnail, thumbnail_options]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let response = client
         .get("/thumbnail/does_not_exist.jpg")
@@ -196,10 +174,10 @@ async fn test_get_thumbnail_not_found() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::NotFound);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-async fn upload_image(client: &Client, cookie: &rocket::http::Cookie<'static>, path: &str) {
+async fn upload_image(client: &TestClient, cookie: &Cookie<'static>, path: &str) {
     let mut img_data = Vec::new();
     image::DynamicImage::new_rgb8(40, 30)
         .write_to(&mut Cursor::new(&mut img_data), image::ImageFormat::Png)
@@ -212,7 +190,7 @@ async fn upload_image(client: &Client, cookie: &rocket::http::Cookie<'static>, p
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 fn cached_thumbnails(user_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -231,14 +209,11 @@ fn assert_is_thumbnail(body: &[u8]) {
 }
 
 // M9: a damaged cache entry used to make that thumbnail return 500 forever.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_corrupt_cached_thumbnail_is_regenerated() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail])
-        .mount("/file", routes![put_file]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
     upload_image(&client, &cookie, "pic.png").await;
 
     let first = client
@@ -246,7 +221,7 @@ async fn test_corrupt_cached_thumbnail_is_regenerated() {
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(first.status(), Status::Ok);
+    assert_eq!(first.status(), StatusCode::OK);
     let first = first.into_bytes().await.unwrap();
 
     let cached = cached_thumbnails(&test_user.path);
@@ -260,7 +235,7 @@ async fn test_corrupt_cached_thumbnail_is_regenerated() {
             .dispatch()
             .await;
 
-        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.into_bytes().await.unwrap(), first);
     }
 
@@ -268,14 +243,11 @@ async fn test_corrupt_cached_thumbnail_is_regenerated() {
     assert_ne!(fs::read(&cached[0]).unwrap(), b"not an encrypted thumbnail");
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_concurrent_thumbnail_requests_all_succeed() {
-    let (rocket, test_user) = setup_rocket_with_options(SessionPolicy::default(), false, 8).await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail])
-        .mount("/file", routes![put_file]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app_with_options(SessionPolicy::default(), false, 8).await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
     upload_image(&client, &cookie, "busy.png").await;
 
     let request = || async {
@@ -288,7 +260,7 @@ async fn test_concurrent_thumbnail_requests_all_succeed() {
 
         (status, response.into_bytes().await.unwrap_or_default())
     };
-    let results = rocket::tokio::join!(
+    let results = tokio::join!(
         request(),
         request(),
         request(),
@@ -303,7 +275,7 @@ async fn test_concurrent_thumbnail_requests_all_succeed() {
     ];
 
     for (status, body) in &results {
-        assert_eq!(*status, Status::Ok);
+        assert_eq!(*status, StatusCode::OK);
         assert_is_thumbnail(body);
         assert_eq!(body, &results[0].1);
     }
@@ -316,16 +288,11 @@ async fn test_concurrent_thumbnail_requests_all_succeed() {
         .private_cookie(cookie)
         .dispatch()
         .await;
-    assert_eq!(again.status(), Status::Ok);
+    assert_eq!(again.status(), StatusCode::OK);
     assert_eq!(again.into_bytes().await.unwrap(), results[0].1);
 }
 
-async fn upload_bytes(
-    client: &Client,
-    cookie: &rocket::http::Cookie<'static>,
-    path: &str,
-    body: &[u8],
-) {
+async fn upload_bytes(client: &TestClient, cookie: &Cookie<'static>, path: &str, body: &[u8]) {
     let response = client
         .put(format!("/file/{}", path))
         .private_cookie(cookie.clone())
@@ -333,14 +300,10 @@ async fn upload_bytes(
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
-async fn thumbnail_status(
-    client: &Client,
-    cookie: &rocket::http::Cookie<'static>,
-    path: &str,
-) -> Status {
+async fn thumbnail_status(client: &TestClient, cookie: &Cookie<'static>, path: &str) -> StatusCode {
     client
         .get(format!("/thumbnail/{}", path))
         .private_cookie(cookie.clone())
@@ -399,55 +362,46 @@ fn decompression_bomb_png() -> Vec<u8> {
 
 // M13: decoding had no dimension limit and a 512 MiB memory limit, so a few
 // such images at once could exhaust the server's memory.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_thumbnail_rejects_huge_image_dimensions() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail])
-        .mount("/file", routes![put_file]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     upload_bytes(&client, &cookie, "bomb.png", &decompression_bomb_png()).await;
 
     assert_eq!(
         thumbnail_status(&client, &cookie, "bomb.png").await,
-        Status::UnprocessableEntity
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     assert!(cached_thumbnails(&test_user.path).is_empty());
 }
 
 // M13: the decode memory limit comes from the config.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_thumbnail_respects_configured_decode_memory_limit() {
-    let (rocket, test_user) = setup_rocket_with_config(|config| {
+    let (app, test_user) = setup_app_with_config(|config| {
         config.thumbnail.max_decode_memory = 1.kibibytes();
     })
     .await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail])
-        .mount("/file", routes![put_file]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     // 40x30 RGB needs 3600 bytes.
     upload_image(&client, &cookie, "small.png").await;
 
     assert_eq!(
         thumbnail_status(&client, &cookie, "small.png").await,
-        Status::UnprocessableEntity
+        StatusCode::UNPROCESSABLE_ENTITY
     );
 }
 
 // M13: the decoder used to be chosen from the file name alone.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_thumbnail_rejects_content_that_does_not_match_the_extension() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail])
-        .mount("/file", routes![put_file]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let mut png_data = Vec::new();
     image::DynamicImage::new_rgb8(10, 10)
@@ -459,23 +413,20 @@ async fn test_thumbnail_rejects_content_that_does_not_match_the_extension() {
 
     assert_eq!(
         thumbnail_status(&client, &cookie, "actually_png.jpg").await,
-        Status::UnsupportedMediaType
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
     );
     assert_eq!(
         thumbnail_status(&client, &cookie, "not_an_image.png").await,
-        Status::UnsupportedMediaType
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
     );
 }
 
 // M13: thumbnails were sent as `application/octet-stream`.
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_thumbnail_has_image_content_type() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount("/thumbnail", routes![get_thumbnail])
-        .mount("/file", routes![put_file]);
-    let client = Client::tracked(rocket).await.expect("valid rocket");
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (app, test_user) = setup_app().await;
+    let client = TestClient::new(app);
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     upload_image(&client, &cookie, "typed.png").await;
 
@@ -487,7 +438,7 @@ async fn test_thumbnail_has_image_content_type() {
             .dispatch()
             .await;
 
-        assert_eq!(response.status(), Status::Ok);
-        assert_eq!(response.content_type(), Some(ContentType::PNG));
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.content_type(), Some("image/png"));
     }
 }

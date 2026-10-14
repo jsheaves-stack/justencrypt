@@ -10,7 +10,7 @@ use std::{
 
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rocket::tokio::{
+use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
     task::{self, JoinHandle},
     time,

@@ -1,28 +1,13 @@
-use rocket::{async_test, http::Status, local::asynchronous::Client, routes};
-
 use super::*;
-use crate::{
-    db::sqlite::FolderContent,
-    routes::{
-        file::put_file,
-        folder::{create_folder, delete_folder, folder_options, get_folder},
-    },
-    AppState,
-};
+use crate::web::routes::folder::FolderEntry;
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_create_folder() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount(
-        "/folder",
-        routes![create_folder, get_folder, delete_folder, folder_options],
-    );
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let client = TestClient::new(app);
 
-    let (session_id, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (session_id, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let folder_path = "test_folder";
 
@@ -32,12 +17,13 @@ async fn test_create_folder() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
-    let state = client.rocket().state::<AppState>().unwrap();
+    let state = client.app();
     let session = state.sessions.get_by_id(&session_id).await.unwrap();
 
     let folder_id = session
+        .context
         .get_folder_id(folder_path.into())
         .await
         .unwrap()
@@ -46,19 +32,13 @@ async fn test_create_folder() {
     assert_eq!(2, folder_id);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_get_folder() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket.mount(
-        "/folder",
-        routes![create_folder, get_folder, delete_folder, folder_options],
-    );
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let client = TestClient::new(app);
 
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let folder_path = "test_folder";
 
@@ -68,7 +48,7 @@ async fn test_get_folder() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     let response = client
         .get(format!("/folder/{}", folder_path))
@@ -76,19 +56,13 @@ async fn test_get_folder() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_create_folder_no_auth() {
-    let (rocket, _test_user) = setup_rocket().await;
-    let rocket = rocket.mount(
-        "/folder",
-        routes![create_folder, get_folder, delete_folder, folder_options],
-    );
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let (app, _test_user) = setup_app().await;
+    let client = TestClient::new(app);
 
     let folder_path = "test_folder";
 
@@ -97,24 +71,16 @@ async fn test_create_folder_no_auth() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Unauthorized);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_get_folder_file_metadata() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount(
-            "/folder",
-            routes![create_folder, get_folder, delete_folder, folder_options],
-        )
-        .mount("/file", routes![put_file]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let client = TestClient::new(app);
 
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let folder_path = "meta_folder";
     let file_name = "test_meta.txt";
@@ -126,7 +92,7 @@ async fn test_get_folder_file_metadata() {
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // Create file inside folder
     let response = client
@@ -135,7 +101,7 @@ async fn test_get_folder_file_metadata() {
         .body(file_content)
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // Get folder contents
     let response = client
@@ -144,14 +110,14 @@ async fn test_get_folder_file_metadata() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
 
-    let entries: Vec<FolderContent> = response.into_json().await.unwrap();
+    let entries: Vec<FolderEntry> = response.into_json().await.unwrap();
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];
 
-    if let FolderContent::File(file) = entry {
+    if let FolderEntry::File(file) = entry {
         assert_eq!(file.file_name, file_name);
         assert_eq!(file.file_size, Some(file_content.len() as u64));
         assert!(file.created_date.is_some());
@@ -161,21 +127,13 @@ async fn test_get_folder_file_metadata() {
     }
 }
 
-#[async_test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_get_folder_with_subfolder_size() {
-    let (rocket, test_user) = setup_rocket().await;
-    let rocket = rocket
-        .mount(
-            "/folder",
-            routes![create_folder, get_folder, delete_folder, folder_options],
-        )
-        .mount("/file", routes![put_file]);
+    let (app, test_user) = setup_app().await;
 
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to create client");
+    let client = TestClient::new(app);
 
-    let (_, cookie) = create_test_session(client.rocket(), test_user.name.clone()).await;
+    let (_, cookie) = create_test_session(client.app(), test_user.name.clone()).await;
 
     let main_folder = "main_folder_for_size";
     let sub_folder = "sub_folder_for_size";
@@ -188,7 +146,7 @@ async fn test_get_folder_with_subfolder_size() {
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // Create sub folder
     let response = client
@@ -196,7 +154,7 @@ async fn test_get_folder_with_subfolder_size() {
         .private_cookie(cookie.clone())
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // Create file inside sub folder
     let response = client
@@ -208,7 +166,7 @@ async fn test_get_folder_with_subfolder_size() {
         .body(file_content)
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Created);
+    assert_eq!(response.status(), StatusCode::CREATED);
 
     // Get main folder contents
     let response = client
@@ -217,14 +175,14 @@ async fn test_get_folder_with_subfolder_size() {
         .dispatch()
         .await;
 
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), StatusCode::OK);
 
-    let entries: Vec<FolderContent> = response.into_json().await.unwrap();
+    let entries: Vec<FolderEntry> = response.into_json().await.unwrap();
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];
 
-    if let FolderContent::Folder(folder) = entry {
+    if let FolderEntry::Folder(folder) = entry {
         assert_eq!(folder.file_name, sub_folder);
         assert_eq!(folder.file_size, Some(file_content.len() as u64));
         assert_eq!(folder.file_count, 1);

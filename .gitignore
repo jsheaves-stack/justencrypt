@@ -18,3 +18,4 @@ dist
 perf-results/
 
 .planning/
+/build-info

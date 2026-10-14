@@ -5,11 +5,15 @@ info:
   description: |
     API specification for the JustEncrypt file encryption service.
 
-    **Error bodies.** Errors returned by a route have a short plain-text message as the body and no `Content-Type` header. Errors raised before a route runs use Rocket's default HTML error page instead: a missing or expired session (`401`), no matching route (`404`, which includes a request to `POST /session` or `POST /admin/users` without `Content-Type: application/json`), a malformed JSON body (`400`), and a missing or mistyped JSON field or query parameter (`422`).
+    **Error bodies.** Every error response has an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details body (`application/problem+json`, schema `Problem`): `type` is always `about:blank`, `title` is the status's reason phrase, `status` repeats the status code, and `detail` says what went wrong. Besides the errors each route lists, any route can answer: no matching route (`404`), a method the path doesn't support (`405`, with the supported methods in `Allow`), a malformed JSON body (`400`), a missing or mistyped JSON field or query parameter (`422`), and a JSON body over `JUSTENCRYPT_LIMITS_JSON` (`413`).
+
+    **JSON requests.** Every request with a JSON body must send `Content-Type: application/json`; without it the request is refused with `415`.
 
     **Timestamps.** Folder and file dates are UTC, formatted as `YYYY-MM-DD HH:MM:SS` with no time-zone marker.
 
-    **Response headers.** Every response carries `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and no `Server` header. CORS headers are sent only to the origin configured in `JUSTENCRYPT_ALLOW_ORIGIN`, which may then send cookies.
+    **Response headers.** Every response carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Permissions-Policy: interest-cohort=()` and `Strict-Transport-Security: max-age=31536000`, and no `Server` header.
+
+    **HTTPS.** The server speaks plain HTTP and is meant to run behind a reverse proxy that terminates TLS. CORS headers are sent only to the origin configured in `JUSTENCRYPT_ALLOW_ORIGIN`, which may then send cookies.
 
     **Admin routes.** The `/admin` routes exist only when `JUSTENCRYPT_ADMIN_API_KEY` is set; otherwise they answer `404`.
 
@@ -29,6 +33,28 @@ components:
       in: header
       name: X-Admin-Api-Key
   schemas:
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details, the body of every error response.
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          example: about:blank
+        title:
+          type: string
+          description: The status code's reason phrase.
+          example: Not Found
+        status:
+          type: integer
+          example: 404
+        detail:
+          type: string
+          description: What went wrong.
+          example: Not found
     ServerInfo:
       type: object
       properties:
@@ -225,12 +251,28 @@ paths:
           description: 'Session created successfully, cookie provided in headers. The `sid` cookie has a `Max-Age` equal to the session''s maximum lifetime (`JUSTENCRYPT_SESSION_MAX_LIFETIME_SECONDS`). If the user already has the maximum number of sessions (`JUSTENCRYPT_MAX_SESSIONS_PER_USER`), their oldest session is ended.'
         '400':
           description: 'The body isn''t valid JSON, or the username or password is malformed: usernames are 1-64 bytes with no `/`, `\`, `.` or control characters, passwords are 1-1024 bytes. Says nothing about whether the account exists.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: 'Login failed. The same status and body are returned for a wrong password, an unknown user, and an account that was never set up.'
-        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
           description: 'The request has no `Content-Type: application/json` header.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           description: A required field is missing or has the wrong type.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     delete:
       summary: Destroy the active session
       description: Invalidates the active session identified by the sid cookie, removes that session's unfinished uploads, and expires the sid cookie (sent even when the session was already gone).
@@ -239,6 +281,10 @@ paths:
           description: Session successfully destroyed.
         '401':
           description: Unauthorized (missing or invalid session ID).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     options:
       summary: Pre-flight check
       security: []
@@ -248,7 +294,7 @@ paths:
   /file/{file_path}:
     put:
       summary: Upload and encrypt a file (Single-shot)
-      description: Uploads a file stream, encrypts it on the fly, and stores it in the sharded filesystem, replacing any file already at that path. Missing parent folders are created. For large files, use the chunked upload endpoints. Paths under `upload/initiate/`, `upload/chunk/` and `upload/finalize/` are taken by the chunked upload routes, so a file can't be stored there.
+      description: Uploads a file stream, encrypts it on the fly, and stores it in the sharded filesystem, replacing any file already at that path. Missing parent folders are created. For large files, use the chunked upload endpoints under `/upload`.
       parameters:
         - in: path
           name: file_path
@@ -268,12 +314,28 @@ paths:
           description: File uploaded and encrypted successfully (also when it replaced an existing file).
         '400':
           description: 'The path has no file name (`Missing file name`), or a file or folder name in it is invalid: names must be 1-255 bytes, not `.` or `..`, and contain no `/`, `\`, or control characters. Nothing is stored.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '413':
           description: The body is larger than the maximum file size (`JUSTENCRYPT_LIMITS_FILE`). Nothing is stored.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to encrypt or store file).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     get:
       summary: Download and decrypt a file
       description: Streams and decrypts the file on the fly based on the logical file path. Supports Range requests for partial content. If the stored file turns out to be shorter than its recorded size, or the client reads nothing for `JUSTENCRYPT_DOWNLOAD_STALL_TIMEOUT_SECONDS`, the response is cut short (the connection is closed before `Content-Length` bytes arrive) and the server logs it.
@@ -326,8 +388,16 @@ paths:
                 format: binary
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: File not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '416':
           description: Range not satisfiable (starts at or past the end of the file, or `bytes=-0`). Every range of an empty file is unsatisfiable.
           headers:
@@ -335,8 +405,16 @@ paths:
               schema:
                 type: string
               description: The file's size, as `bytes */<total_size>`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to process or decrypt data).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     patch:
       summary: Move or rename a file
       description: Renames a file, moves it to a different logical folder, or both. The change is all-or-nothing, and destination folders are only created if it succeeds.
@@ -358,16 +436,46 @@ paths:
           description: File moved or renamed successfully (also when nothing actually changes).
         '400':
           description: The body isn't valid JSON, a name is invalid, or neither field is given (`Nothing to change`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: The file doesn't exist. Nothing is changed or created.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '409':
           description: A file with the target name already exists in the target folder. Nothing is changed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
+          description: 'The request has no `Content-Type: application/json` header.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           description: The request body has an unknown field, or a field has the wrong type.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to move or rename file).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     delete:
       summary: Delete a file
       description: Permanently deletes the file metadata and physical encrypted chunks from the server.
@@ -383,10 +491,22 @@ paths:
           description: File successfully deleted.
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: File not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to remove physical file or database entry).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     options:
       summary: Pre-flight check
       security: []
@@ -399,7 +519,7 @@ paths:
       responses:
         '204':
           description: CORS pre-flight response
-  /file/upload/initiate/{file_path}:
+  /upload/initiate/{file_path}:
     post:
       summary: Initialize a chunked upload
       description: Starts a new chunked upload session for a file. Returns an upload_id to be used in subsequent chunk uploads and finalization. File and folder names in the path are checked here and again at finalization. An upload idle for `JUSTENCRYPT_UPLOAD_TTL_SECONDS` (default 86400) is removed.
@@ -419,13 +539,35 @@ paths:
                 $ref: '#/components/schemas/InitUploadResponse'
         '400':
           description: 'A file or folder name in the path is invalid: names must be 1-255 bytes, not `.` or `..`, and contain no `/`, `\`, or control characters.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '429':
           description: The session already has `JUSTENCRYPT_MAX_ACTIVE_UPLOADS` uploads in progress.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to initialize encryption).
-  /file/upload/chunk/{upload_id}:
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+    options:
+      summary: Pre-flight check
+      security: []
+      responses:
+        '204':
+          description: CORS pre-flight response
+  /upload/chunk/{upload_id}:
     put:
       summary: Upload a file chunk
       description: Uploads one or more consecutive 64KB chunks of the file, starting at the specified offset. Every chunk except the last chunk of the file must be exactly 64KB. A single request may carry at most `JUSTENCRYPT_LIMITS_FILE_CHUNK` bytes (default 32MiB), and data may not extend past the maximum file size. Re-uploading a chunk replaces it.
@@ -455,17 +597,47 @@ paths:
           description: Chunk uploaded successfully.
         '400':
           description: The offset is not a multiple of 65536.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: Upload session not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '413':
           description: The body is larger than the per-request chunk limit, or the data would extend past the maximum file size. Chunks written before the limit was reached are kept.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           description: '`offset` is not a non-negative integer.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to encrypt or store chunk).
-  /file/upload/finalize/{upload_id}:
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+    options:
+      summary: Pre-flight check
+      security: []
+      responses:
+        '204':
+          description: CORS pre-flight response
+  /upload/finalize/{upload_id}:
     post:
       summary: Finalize a chunked upload
       description: Completes the chunked upload process. Verifies that the uploaded chunks make up exactly `total_size` bytes and adds the file to the user's storage. If verification fails, the upload stays active so the client can upload the missing data and finalize again.
@@ -492,16 +664,46 @@ paths:
             - `Missing chunks: [0, 1, ...]`, listing at most 100 chunk indexes, followed by `(and N more)` if more are missing.
             - `Chunk N is incomplete: expected 65536 bytes, got M`, for a short chunk before the last one.
             - `total_size does not match uploaded data`, when the last chunk's length or the number of chunks doesn't fit.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: Upload session not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '413':
           description: '`total_size` is larger than the maximum file size (`JUSTENCRYPT_LIMITS_FILE`).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           description: '`total_size` is not a non-negative integer.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to finalize or store file metadata).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+    options:
+      summary: Pre-flight check
+      security: []
+      responses:
+        '204':
+          description: CORS pre-flight response
   /admin/users:
     post:
       summary: Create a user account (Admin)
@@ -529,14 +731,34 @@ paths:
           description: Account created.
         '400':
           description: The body isn't valid JSON, the username is malformed, or the password is malformed or too weak.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Missing or invalid admin API key.
-        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
           description: 'The request has no `Content-Type: application/json` header.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '409':
           description: An account with this username already exists.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           description: A required field is missing or has the wrong type.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     options:
       summary: Pre-flight check
       security: []
@@ -560,6 +782,10 @@ paths:
                   $ref: '#/components/schemas/ActiveSessionInfo'
         '401':
           description: Invalid or missing admin API key.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     options:
       summary: Pre-flight check
       security: []
@@ -584,6 +810,10 @@ paths:
           description: Session terminated successfully.
         '401':
           description: Invalid or missing admin API key, or session not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     options:
       summary: Pre-flight check
       security: []
@@ -612,10 +842,22 @@ paths:
           description: The folder exists (created now or already there).
         '400':
           description: 'A folder name in the path is invalid: names must be 1-255 bytes, not `.` or `..`, and contain no `/`, `\`, or control characters. Nothing is created.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     get:
       summary: List or download a folder
       description: |
@@ -637,7 +879,7 @@ paths:
           allowEmptyValue: true
           schema:
             type: string
-          description: Present without a value (`?download`) to download the folder as a TAR archive instead of listing it.
+          description: Present, with or without a value (`?download`, `?download=1`), to download the folder as a TAR archive instead of listing it.
       responses:
         '200':
           description: The folder's contents as a JSON array or, with `download`, as a TAR archive.
@@ -662,14 +904,34 @@ paths:
                 format: binary
         '400':
           description: Bad request (e.g., invalid path).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: Folder not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '429':
           description: 'With `download`: the server is already running `JUSTENCRYPT_MAX_ACTIVE_DOWNLOADS` folder downloads (when set), or the user''s own folder downloads (up to half of `JUSTENCRYPT_MAX_DB_CONNECTIONS_PER_USER`) stayed busy for `JUSTENCRYPT_DB_CONNECTION_TIMEOUT_SECONDS`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to read folder contents).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     delete:
       summary: Delete a folder recursively
       description: Recursively deletes the folder, sub-folders, and all encrypted files and thumbnails inside it. The database changes are all-or-nothing; the encrypted data is removed after they commit. The root folder can't be deleted.
@@ -685,12 +947,28 @@ paths:
           description: Complete recursive deletion successful.
         '400':
           description: The path is the root folder (`Cannot delete the root folder`), or is otherwise invalid. Nothing is deleted.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: Folder not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to remove files/folders).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     patch:
       summary: Rename or move a folder
       description: Renames a folder, moves it to a different parent folder path, or both. The change is all-or-nothing, and destination folders are only created if it succeeds. The root folder can't be renamed or moved, and a folder can't be moved into itself or its subfolders.
@@ -722,16 +1000,46 @@ paths:
           description: Folder successfully renamed/moved (also when nothing actually changes).
         '400':
           description: The body isn't valid JSON, a name is invalid, neither field is given, or the change targets the root folder or moves a folder into its own subtree.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: The folder doesn't exist. Nothing is changed or created.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '409':
           description: A folder with the target name already exists in the target folder. Nothing is changed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
+          description: 'The request has no `Content-Type: application/json` header.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           description: The request body has an unknown field, or a field has the wrong type.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     options:
       summary: Pre-flight check
       security: []
@@ -781,14 +1089,34 @@ paths:
                 format: binary
         '401':
           description: Unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           description: Original image file not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '415':
           description: Unsupported media type (the extension isn't a supported image format, or the file's content isn't in the format its extension names).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           description: The image is too large to process (wider or taller than 16384 pixels, or needs more memory to decode than JUSTENCRYPT_THUMBNAIL_MAX_DECODE_MEMORY).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '500':
           description: Internal server error (Failed to generate or process thumbnail).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
     options:
       summary: Pre-flight check
       security: []

@@ -8,7 +8,6 @@ use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     config::DbConfig,
@@ -578,15 +577,12 @@ pub fn get_folder_name(db: &Connection, folder_id: i32) -> Result<String, DbErro
 }
 
 /// One entry of a folder listing.
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "type")]
 pub enum FolderContent {
     File(File),
     Folder(Folder),
 }
 
 /// A file in a folder listing.
-#[derive(Deserialize, Serialize)]
 pub struct File {
     pub file_extension: Option<String>,
     pub file_name: String,
@@ -596,7 +592,6 @@ pub struct File {
 }
 
 /// A folder in a folder listing, with the totals of everything below it.
-#[derive(Deserialize, Serialize)]
 pub struct Folder {
     pub file_name: String,
     pub file_size: Option<u64>,

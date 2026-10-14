@@ -5,3 +5,4 @@ perf-results
 .git
 .vscode
 *.md
+build-info

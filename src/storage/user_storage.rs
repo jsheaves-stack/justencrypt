@@ -13,7 +13,7 @@ use std::{
 use uuid::Uuid;
 
 use crate::{
-    enums::blocking_error::BlockingError, session::user_context::UserContext,
+    enums::blocking_error::BlockingError, storage::user_context::UserContext,
     util::sharded_path::sharded_path,
 };
 

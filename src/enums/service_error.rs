@@ -8,9 +8,9 @@ use crate::enums::{
     encryption_error::EncryptionError,
 };
 
-/// Why a request failed. Each one maps to a status code in `web::responders`.
+/// Why an operation failed. The web layer maps each one to a status code.
 #[derive(Error, Debug)]
-pub enum RequestError {
+pub enum ServiceError {
     #[error("Failed to find session id")]
     MissingSessionId,
 
@@ -36,16 +36,16 @@ pub enum RequestError {
     NotFound,
 
     #[error("Unauthorized")]
-    Unauthorized,
+    InvalidCredentials,
 
     #[error("Bad request: {0}")]
-    BadRequest(String),
+    InvalidInput(String),
 
     #[error("Range not satisfiable")]
     RangeNotSatisfiable { total_size: u64 },
 
     #[error("Internal server error")]
-    InternalServerError,
+    Internal,
 
     #[error("Too many active uploads")]
     TooManyActiveUploads,
@@ -58,7 +58,7 @@ pub enum RequestError {
     Busy,
 
     #[error("Payload too large")]
-    PayloadTooLarge,
+    TooLarge,
 
     #[error("Account already exists")]
     AccountAlreadyExists,
@@ -67,60 +67,60 @@ pub enum RequestError {
     Conflict(String),
 }
 
-impl From<DbError> for RequestError {
+impl From<DbError> for ServiceError {
     fn from(error: DbError) -> Self {
         match error {
-            DbError::NotFound => RequestError::NotFound,
-            DbError::Busy => RequestError::Busy,
-            DbError::UserDoesNotExist => RequestError::Unauthorized,
-            DbError::InvalidInput(msg) => RequestError::BadRequest(msg),
-            DbError::Conflict(msg) => RequestError::Conflict(msg),
-            DbError::MissingFileName => RequestError::BadRequest("Missing file name".into()),
-            DbError::InvalidPath => RequestError::BadRequest("Invalid path".into()),
-            _ => RequestError::InternalServerError,
+            DbError::NotFound => ServiceError::NotFound,
+            DbError::Busy => ServiceError::Busy,
+            DbError::UserDoesNotExist => ServiceError::InvalidCredentials,
+            DbError::InvalidInput(msg) => ServiceError::InvalidInput(msg),
+            DbError::Conflict(msg) => ServiceError::Conflict(msg),
+            DbError::MissingFileName => ServiceError::InvalidInput("Missing file name".into()),
+            DbError::InvalidPath => ServiceError::InvalidInput("Invalid path".into()),
+            _ => ServiceError::Internal,
         }
     }
 }
 
-impl From<EncryptionError> for RequestError {
+impl From<EncryptionError> for ServiceError {
     fn from(error: EncryptionError) -> Self {
         match error {
-            EncryptionError::TooLarge => RequestError::PayloadTooLarge,
-            EncryptionError::InvalidOffset(msg) => RequestError::BadRequest(msg),
-            EncryptionError::Io(e) if is_busy(&e) => RequestError::Busy,
+            EncryptionError::TooLarge => ServiceError::TooLarge,
+            EncryptionError::InvalidOffset(msg) => ServiceError::InvalidInput(msg),
+            EncryptionError::Io(e) if is_busy(&e) => ServiceError::Busy,
             e => {
                 error!("Encryption error: {}", e);
 
-                RequestError::FailedToProcessData
+                ServiceError::FailedToProcessData
             },
         }
     }
 }
 
-impl From<BlockingError> for RequestError {
+impl From<BlockingError> for ServiceError {
     fn from(error: BlockingError) -> Self {
         match error {
             BlockingError::Busy => {
                 warn!("{}", error);
 
-                RequestError::Busy
+                ServiceError::Busy
             },
             BlockingError::Failed(_) => {
                 error!("{}", error);
 
-                RequestError::InternalServerError
+                ServiceError::Internal
             },
         }
     }
 }
 
 /// For a failed file operation the caller has already logged.
-impl From<io::Error> for RequestError {
+impl From<io::Error> for ServiceError {
     fn from(error: io::Error) -> Self {
         if is_busy(&error) {
-            RequestError::Busy
+            ServiceError::Busy
         } else {
-            RequestError::FailedToProcessData
+            ServiceError::FailedToProcessData
         }
     }
 }

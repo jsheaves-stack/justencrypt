@@ -1,12 +1,12 @@
 use std::{mem, time::Duration};
 
 use orion::aead;
-use rocket::tokio::{sync::mpsc::Sender, time};
+use tokio::{sync::mpsc::Sender, time};
 
 use crate::{
     encryption::{FileEncryptionMetadata, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE, INDEX_LEN},
     enums::encryption_error::EncryptionError,
-    session::user_storage::BlobFile,
+    storage::user_storage::BlobFile,
 };
 
 /// Decrypts a file of encrypted chunks, checking that every chunk is intact

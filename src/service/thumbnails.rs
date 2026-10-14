@@ -1,22 +1,23 @@
+//! Thumbnails of a user's images, cached encrypted next to their files.
+
 use std::{
     io::{self, BufReader, Cursor},
     path::{Path, PathBuf},
 };
 
 use image::{ImageError, ImageFormat, ImageReader, Limits};
-use rocket::{
-    http::ContentType,
-    tokio::{io::AsyncReadExt, sync::Semaphore},
-};
+use tokio::{io::AsyncReadExt, sync::Semaphore};
 
 use crate::{
+    app::App,
     config::ThumbnailConfig,
     encryption::{
         chunk_decryptor::ChunkDecryptor, chunk_encryptor::ChunkEncryptor,
         sync_chunk_decryptor::SyncChunkDecryptReader, FileEncryptionMetadata,
     },
-    enums::{encryption_error::EncryptionError, request_error::RequestError},
-    session::{user_context::UserContext, user_session::UserSession, user_storage::BlobFile},
+    enums::{encryption_error::EncryptionError, service_error::ServiceError},
+    session::user_session::UserSession,
+    storage::{user_context::UserContext, user_storage::BlobFile},
 };
 
 const THUMBNAIL_SIZE: u32 = 150;
@@ -24,55 +25,58 @@ const THUMBNAIL_SIZE: u32 = 150;
 /// Largest width or height of an image that gets a thumbnail.
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 
-/// The image format for a file, judged by its extension, if thumbnails are
-/// supported for it.
-pub fn image_format_for(file_path: &Path) -> Option<ImageFormat> {
-    let content_type = ContentType::from_extension(
-        file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default(),
-    )?;
+/// A thumbnail and its media type, which is the same as its image's.
+pub struct Thumbnail {
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
 
-    match content_type {
-        _ if content_type == ContentType::JPEG => Some(ImageFormat::Jpeg),
-        _ if content_type == ContentType::PNG => Some(ImageFormat::Png),
-        _ if content_type == ContentType::GIF => Some(ImageFormat::Gif),
-        _ if content_type == ContentType::WEBP => Some(ImageFormat::WebP),
-        _ if content_type == ContentType::AVIF => Some(ImageFormat::Avif),
+/// The image format for a file, judged by its extension (in any case), if
+/// thumbnails are supported for it.
+pub fn image_format_for(file_path: &Path) -> Option<ImageFormat> {
+    let extension = file_path.extension()?.to_str()?.to_ascii_lowercase();
+
+    match extension.as_str() {
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "png" => Some(ImageFormat::Png),
+        "gif" => Some(ImageFormat::Gif),
+        "webp" => Some(ImageFormat::WebP),
+        "avif" => Some(ImageFormat::Avif),
         _ => None,
     }
 }
 
-/// Returns the thumbnail of the image at `file_path` and its content type,
-/// from the encrypted cache if it has a good copy, otherwise by generating it.
-/// The thumbnail has the same format as the image.
+/// Returns the thumbnail of the image at `file_path`, from the encrypted cache
+/// if it has a good copy, otherwise by generating it. The thumbnail has the
+/// same format as the image. Fails with `UnsupportedFileType` for a file whose
+/// extension isn't a supported image format.
 ///
 /// A cache entry that fails to decrypt (for example, one damaged by a crash)
 /// is deleted and regenerated. Writing the cache is best-effort: if it fails,
 /// the freshly generated thumbnail is still returned.
-pub async fn get_or_create_thumbnail(
+pub async fn get(
+    app: &App,
     session: &UserSession,
     file_path: PathBuf,
-    format: ImageFormat,
-    config: &ThumbnailConfig,
-    server_permits: &Semaphore,
-) -> Result<(ContentType, Vec<u8>), RequestError> {
-    let content_type =
-        ContentType::parse_flexible(format.to_mime_type()).unwrap_or(ContentType::Binary);
-    let (encoded_file_name, file_metadata) = session.get_file_decryption_data(file_path).await?;
+) -> Result<Thumbnail, ServiceError> {
+    let format = image_format_for(&file_path).ok_or(ServiceError::UnsupportedFileType)?;
+    let mime = format.to_mime_type();
+    let config = &app.config.thumbnail;
+    let server_permits = &app.thumbnail_semaphore;
+    let (encoded_file_name, file_metadata) =
+        session.context.get_file_decryption_data(file_path).await?;
     let thumbnail_metadata = file_metadata
         .derive_thumbnail_metadata(encoded_file_name.as_bytes())
         .map_err(|e| {
             error!("Failed to derive thumbnail metadata: {}", e);
 
-            RequestError::FailedToProcessData
+            ServiceError::FailedToProcessData
         })?;
     let context = &session.context;
 
     match context.open_thumbnail(&encoded_file_name).await {
         Ok(file) => match read_cached(file, thumbnail_metadata.clone()).await {
-            Ok(thumbnail) => return Ok((content_type, thumbnail)),
+            Ok(bytes) => return Ok(Thumbnail { mime, bytes }),
             Err(e) => {
                 warn!(
                     "Cached thumbnail for {} is unreadable ({}); regenerating it",
@@ -93,7 +97,7 @@ pub async fn get_or_create_thumbnail(
         ),
     }
 
-    let thumbnail = generate(
+    let bytes = generate(
         context,
         server_permits,
         encoded_file_name.clone(),
@@ -107,7 +111,7 @@ pub async fn get_or_create_thumbnail(
         context,
         &encoded_file_name,
         thumbnail_metadata,
-        &mut Cursor::new(&thumbnail),
+        &mut Cursor::new(&bytes),
     )
     .await
     {
@@ -117,7 +121,7 @@ pub async fn get_or_create_thumbnail(
         );
     }
 
-    Ok((content_type, thumbnail))
+    Ok(Thumbnail { mime, bytes })
 }
 
 /// The image decoder's limits: the largest dimensions, and memory per `config`.
@@ -180,14 +184,14 @@ async fn generate(
     metadata: FileEncryptionMetadata,
     format: ImageFormat,
     limits: Limits,
-) -> Result<Vec<u8>, RequestError> {
+) -> Result<Vec<u8>, ServiceError> {
     // The user's turn comes first, so a request waiting on its own user never
     // holds one of the server-wide permits other users need.
     let slot = context.reserve_blocking().await?;
     let _server_permit = server_permits
         .acquire()
         .await
-        .map_err(|_| RequestError::FailedToProcessData)?;
+        .map_err(|_| ServiceError::FailedToProcessData)?;
     let context = context.clone();
 
     slot.run(move || {
@@ -197,7 +201,7 @@ async fn generate(
             .map_err(|e| {
                 error!("Failed to open the image for its thumbnail: {}", e);
 
-                RequestError::FailedToProcessData
+                ServiceError::FailedToProcessData
             })?;
 
         let mut reader = ImageReader::new(BufReader::new(decrypt_reader))
@@ -205,7 +209,7 @@ async fn generate(
             .map_err(|e| {
                 error!("Failed to read image header: {}", e);
 
-                RequestError::FailedToProcessData
+                ServiceError::FailedToProcessData
             })?;
 
         if reader.format() != Some(format) {
@@ -215,7 +219,7 @@ async fn generate(
                 format
             );
 
-            return Err(RequestError::UnsupportedFileType);
+            return Err(ServiceError::UnsupportedFileType);
         }
 
         reader.limits(limits);
@@ -224,12 +228,12 @@ async fn generate(
             ImageError::Limits(e) => {
                 debug!("Image exceeds the decode limits: {}", e);
 
-                RequestError::ImageTooLarge
+                ServiceError::ImageTooLarge
             },
             e => {
                 error!("Image load error: {}", e);
 
-                RequestError::FailedToProcessData
+                ServiceError::FailedToProcessData
             },
         })?;
 
@@ -239,7 +243,7 @@ async fn generate(
             .map_err(|e| {
                 error!("Image write error: {}", e);
 
-                RequestError::FailedToProcessData
+                ServiceError::FailedToProcessData
             })?;
 
         Ok(buf.into_inner())
