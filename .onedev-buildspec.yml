@@ -17,15 +17,36 @@ jobs:
     uploadStrategy: UPLOAD_IF_NOT_HIT
     condition: SUCCESSFUL
     optional: false
+  - !CommandStep
+    name: Version
+    runInContainer: true
+    image: alpine:3.20
+    interpreter: !DefaultInterpreter
+      commands: |
+        apk add --no-cache curl
+        REGISTRY_URL='@server_url@' \
+        IMAGE='@server@/@project_path@/@project_name@' \
+        REGISTRY_USER='@job_token@' \
+        REGISTRY_PASSWORD='@secret:publish_token@' \
+        BRANCH='@branch@' \
+        sh ci/build-version.sh
+    useTTY: true
+    condition: SUCCESSFUL
+    optional: false
+  - !SetBuildVersionStep
+    name: Set Version
+    buildVersion: '@file:build-info/version@'
+    condition: SUCCESSFUL
+    optional: false
   - !BuildImageStep
     name: Docker
     output: !RegistryOutput
-      tags: '@server@/@project_path@/@project_name@:latest'
+      tags: '@file:build-info/image-tags@'
     registryLogins:
     - registryUrl: '@server_url@'
       userName: '@job_token@'
       passwordSecret: publish_token
-    moreOptions: --target release
+    moreOptions: --target release --build-arg JUSTENCRYPT_VERSION=@build_version@
     condition: SUCCESSFUL
     optional: false
   triggers:

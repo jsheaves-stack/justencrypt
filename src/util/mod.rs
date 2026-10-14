@@ -3,3 +3,4 @@ pub mod names;
 pub mod sharded_path;
 pub mod tar;
 pub mod time;
+pub mod version;

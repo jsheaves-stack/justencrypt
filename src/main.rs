@@ -38,6 +38,8 @@ fn main() {
 
     trace!("Loaded .env file and initialized logger.");
 
+    info!("justencrypt {}", util::version::VERSION);
+
     // The runtime is built here, rather than by a framework macro, so the
     // configured worker and blocking thread counts apply to it.
     let runtime = match tokio::runtime::Builder::new_multi_thread()

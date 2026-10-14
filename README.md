@@ -203,6 +203,12 @@ The image only contains the server binary, so it runs without any capabilities. 
 
 Building the image runs the test suite in release mode before building the binary.
 
+### Versioning
+
+The server reports its version in `GET /` and logs it at startup. It is the `version` in `Cargo.toml`, unless the `JUSTENCRYPT_VERSION` environment variable is set when the binary is compiled; the Dockerfile takes it as a build argument (`docker build --build-arg JUSTENCRYPT_VERSION=...`).
+
+The OneDev pipeline (`.onedev-buildspec.yml`) versions each build `<Cargo.toml version>-<UTC date>.<n>`, for example `0.1.0-20261014.2`, where `n` is 1 for the first image of the day and counts up from there. `ci/build-version.sh` works out `n` from the tags already in the container registry. Every build pushes the image tagged with its version; builds of `main` also move `latest`. To start a new version, change `version` in `Cargo.toml`.
+
 ### Running Behind a Reverse Proxy
 
 The server doesn't handle TLS itself; a reverse proxy in front of it terminates HTTPS and renews the certificate. With [Caddy](https://caddyserver.com/), which gets a certificate from Let's Encrypt automatically, the whole configuration is:
