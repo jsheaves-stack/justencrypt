@@ -19,15 +19,18 @@ jobs:
     optional: false
   - !CommandStep
     name: Version
-    runInContainer: false
+    runInContainer: true
+    image: alpine:3.20
     interpreter: !DefaultInterpreter
       commands: |
+        apk add --no-cache curl
         REGISTRY_URL='@server_url@' \
         IMAGE='@server@/@project_path@/@project_name@' \
         REGISTRY_USER='@job_token@' \
         REGISTRY_PASSWORD='@secret:publish_token@' \
         BRANCH='@branch@' \
         sh ci/build-version.sh
+    useTTY: true
     condition: SUCCESSFUL
     optional: false
   - !SetBuildVersionStep
