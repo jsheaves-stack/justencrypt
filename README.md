@@ -34,7 +34,7 @@ JustEncrypt is a self-hostable, high-performance file encryption service accessi
 
 - [Rust](https://www.rust-lang.org/tools/install) 1.87 or later, with Cargo. (The code uses APIs stabilised in 1.87; older versions are not tested.)
 - A C compiler, `make` and `perl`: SQLCipher and OpenSSL are compiled from source as part of the build, so neither needs to be installed.
-- Linux or another Unix: the server writes file chunks with Unix positional writes and does not build on Windows.
+- Linux, macOS or Windows. On Windows, use the MSVC toolchain (Visual Studio Build Tools with the C++ workload) and [Strawberry Perl](https://strawberryperl.com/) for the C compiler and `perl`.
 - For static builds: the `x86_64-unknown-linux-musl` Rust target and the musl C toolchain.
 
 ## Getting Started
@@ -77,7 +77,7 @@ curl -X POST http://localhost:8000/admin/users \
   -d '{"username": "alice", "password": "<a strong password>"}'
 ```
 
-This returns `201` and creates `user_data/alice/` with the user's encrypted database. With the default `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` of `4`, the password must be very strong by [zxcvbn](https://github.com/dropbox/zxcvbn)'s measure; a weak one gets `400`. Usernames are 1-64 bytes with no `/`, `\`, `.` or control characters; passwords are 1-1024 bytes and must meet `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE`. The user can then log in with `POST /session`.
+This returns `201` and creates `user_data/alice/` with the user's encrypted database. With the default `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE` of `4`, the password must be very strong by [zxcvbn](https://github.com/dropbox/zxcvbn)'s measure; a weak one gets `400`. Usernames are 1-64 bytes with no `/`, `\`, `.`, `:`, `*`, `?`, `"`, `<`, `>`, `|` or control characters, no trailing space, and not a Windows device name such as `CON` or `NUL`; passwords are 1-1024 bytes and must meet `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE`. The user can then log in with `POST /session`.
 
 ## Configuration
 

@@ -5,7 +5,6 @@
 use std::{
     fs::{self, File, OpenOptions},
     io,
-    os::unix::fs::FileExt,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -237,7 +236,7 @@ impl BlobFile {
             let mut filled = 0;
 
             while filled < buf.len() {
-                match file.read_at(&mut buf[filled..], position + filled as u64) {
+                match read_once_at(file, &mut buf[filled..], position + filled as u64) {
                     Ok(0) => break,
                     Ok(n) => filled += n,
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -252,7 +251,7 @@ impl BlobFile {
 
     /// Writes all of `bytes` at `position`.
     pub async fn write_at(&self, bytes: Vec<u8>, position: u64) -> io::Result<()> {
-        self.run(move |file| file.write_all_at(&bytes, position))
+        self.run(move |file| write_all_at(file, &bytes, position))
             .await
     }
 
@@ -310,12 +309,60 @@ impl ThumbnailTemp {
     }
 }
 
+/// Reads once into `buf` from `position`, giving the number of bytes read; 0
+/// means the file ends there.
+#[cfg(unix)]
+fn read_once_at(file: &File, buf: &mut [u8], position: u64) -> io::Result<usize> {
+    std::os::unix::fs::FileExt::read_at(file, buf, position)
+}
+
+/// Reads once into `buf` from `position`, giving the number of bytes read; 0
+/// means the file ends there. This moves the file's cursor, which nothing
+/// here uses.
+#[cfg(windows)]
+fn read_once_at(file: &File, buf: &mut [u8], position: u64) -> io::Result<usize> {
+    std::os::windows::fs::FileExt::seek_read(file, buf, position)
+}
+
+/// Writes all of `bytes` at `position`.
+#[cfg(unix)]
+fn write_all_at(file: &File, bytes: &[u8], position: u64) -> io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, bytes, position)
+}
+
+/// Writes all of `bytes` at `position`. This moves the file's cursor, which
+/// nothing here uses.
+#[cfg(windows)]
+fn write_all_at(file: &File, mut bytes: &[u8], mut position: u64) -> io::Result<()> {
+    while !bytes.is_empty() {
+        match std::os::windows::fs::FileExt::seek_write(file, bytes, position) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n) => {
+                bytes = &bytes[n..];
+                position += n as u64;
+            },
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(())
+}
+
 /// Waits until the directory containing `path` is on disk.
+#[cfg(unix)]
 fn sync_parent_dir(path: &Path) -> io::Result<()> {
     match path.parent() {
         Some(dir) => File::open(dir)?.sync_all(),
         None => Ok(()),
     }
+}
+
+/// Does nothing: Windows can't open a directory as a file to sync it, and
+/// NTFS journals renames and creations itself.
+#[cfg(windows)]
+fn sync_parent_dir(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// Deletes the file at `path`, then each parent directory that is left empty,

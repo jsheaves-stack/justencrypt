@@ -250,7 +250,7 @@ paths:
         '201':
           description: 'Session created successfully, cookie provided in headers. The `sid` cookie has a `Max-Age` equal to the session''s maximum lifetime (`JUSTENCRYPT_SESSION_MAX_LIFETIME_SECONDS`). If the user already has the maximum number of sessions (`JUSTENCRYPT_MAX_SESSIONS_PER_USER`), their oldest session is ended.'
         '400':
-          description: 'The body isn''t valid JSON, or the username or password is malformed: usernames are 1-64 bytes with no `/`, `\`, `.` or control characters, passwords are 1-1024 bytes. Says nothing about whether the account exists.'
+          description: 'The body isn''t valid JSON, or the username or password is malformed: usernames are 1-64 bytes with no `/`, `\`, `.`, `:`, `*`, `?`, `"`, `<`, `>`, `|` or control characters, no trailing space, and not a Windows device name such as `CON` or `NUL`; passwords are 1-1024 bytes. Says nothing about whether the account exists.'
           content:
             application/problem+json:
               schema:
@@ -722,7 +722,7 @@ paths:
               properties:
                 username:
                   type: string
-                  description: 1-64 bytes; no `/`, `\`, `.` or control characters.
+                  description: '1-64 bytes; no `/`, `\`, `.`, `:`, `*`, `?`, `"`, `<`, `>`, `|` or control characters, no trailing space, and not a Windows device name such as `CON` or `NUL`.'
                 password:
                   type: string
                   description: 1-1024 bytes; must meet `JUSTENCRYPT_MINIMUM_PASSWORD_SECURITY_SCORE`.

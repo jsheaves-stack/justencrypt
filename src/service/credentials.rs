@@ -13,7 +13,7 @@ pub const MAX_PASSWORD_BYTES: usize = 1024;
 pub fn validate_credentials(username: &str, password: &str) -> Result<(), ServiceError> {
     if !is_valid_username(username) {
         return Err(ServiceError::InvalidInput(format!(
-            "Username must be 1-{} bytes and must not contain '/', '\\', '.' or control characters",
+            "Username must be 1-{} bytes, must not contain '/', '\\', '.', ':', '*', '?', '\"', '<', '>', '|' or control characters, must not end with a space, and must not be a device name such as CON or NUL",
             MAX_USERNAME_BYTES
         )));
     }

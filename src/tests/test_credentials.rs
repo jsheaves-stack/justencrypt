@@ -8,6 +8,10 @@ fn test_valid_usernames() {
         "a-b",
         "UPPER",
         "\u{e9}l\u{e8}ve",
+        " leading",
+        "a b",
+        "console",
+        "COM10",
         &"a".repeat(64),
     ] {
         assert!(
@@ -32,6 +36,22 @@ fn test_invalid_usernames() {
         "a\u{0}b",
         "a\nb",
         "a\tb",
+        "C:",
+        "a:b",
+        "a*b",
+        "a?b",
+        "a\"b",
+        "a<b",
+        "a>b",
+        "a|b",
+        "trailing ",
+        "CON",
+        "nul",
+        "Aux",
+        "com1",
+        "LPT9",
+        "COM\u{b9}",
+        "conin$",
         &"a".repeat(65),
     ] {
         assert!(
