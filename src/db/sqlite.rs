@@ -111,7 +111,7 @@ pub fn create_user_db_connection(
                 if mode.to_lowercase() != "wal" {
                     warn!("Attempted to set WAL journal_mode, but current mode is: {}. This might impact concurrency.", mode);
                 } else {
-                    info!("SQLite journal_mode set to WAL.");
+                    trace!("SQLite journal_mode set to WAL.");
                 }
             }
             Err(e) => {
